@@ -16,6 +16,8 @@ npm start
 
 `npm run check` runs documentation validation, type checking, server tests, offline audit tests, platform/credential tests, frontend formatting and frontend compilation. These tests use deterministic local fixtures and do not call a paid model provider.
 
+After building, run `node test/browser/offline-drafts.mjs` to check that separate browser tabs retain unsent drafts through a disconnect and reopen. This uses an isolated local database and no models. Install Playwright Chromium first, or set `PLAYWRIGHT_EXECUTABLE_PATH` to a system browser.
+
 For development, run `npm run dev`. It starts the API on port 4318 and Vite on 4317. Use a dedicated `TEAM_DATA_DIR` for experiments so that you keep your normal workspace separate.
 
 ## Desktop packages
