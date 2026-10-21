@@ -6,14 +6,14 @@ Get packages and `SHA256SUMS.txt` from the same [GitHub release](https://github.
 
 ## Windows x64
 
-Download `TeamSwarm-0.4.0-Windows-x64.exe`. Run the installer, choose an installation directory if needed, then open **TeamSwarm** from the Start menu. The default installation is per user.
+Download `TeamSwarm-0.4.1-Windows-x64.exe`. Run the installer, choose an installation directory if needed, then open **TeamSwarm** from the Start menu. The default installation is per user.
 
 The Windows installer is unsigned. Windows displays the publisher as unknown. Check the download source and checksum before choosing to run the file.
 
 Verify the file in PowerShell:
 
 ```powershell
-Get-FileHash .\TeamSwarm-0.4.0-Windows-x64.exe -Algorithm SHA256
+Get-FileHash .\TeamSwarm-0.4.1-Windows-x64.exe -Algorithm SHA256
 ```
 
 Compare the result with the matching line in `SHA256SUMS.txt`.

@@ -26,3 +26,5 @@ jobs:
       - run: npm run check
       - run: npm run build
       - run: npm run test:smoke
+      - run: node teamswarm/node_modules/playwright/cli.js install chromium
+      - run: node test/browser/offline-drafts.mjs

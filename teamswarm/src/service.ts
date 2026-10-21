@@ -1,3 +1,8 @@
+import {
+  PreferencesOutbox,
+  mergePatch,
+  type PreferencesPatch,
+} from "./preferences-outbox";
 import { useSyncExternalStore } from "react";
 import type {
   Workspace,
@@ -67,7 +72,7 @@ type State = {
   initialized: boolean;
 };
 const cacheKey = "teamswarm.workspace";
-const outboxKey = "teamswarm.preferences.pending";
+const preferencesOutbox = new PreferencesOutbox(inputStorage);
 const requestKey = "teamswarm.messages.pending";
 const harnessIds: Record<string, string> = {
   Codex: "codex",
@@ -77,7 +82,6 @@ const harnessIds: Record<string, string> = {
   "DeepSeek Harness": "deepseek-harness",
   OpenCode: "opencode",
 };
-type PreferencesPatch = Record<string, unknown>;
 function diffPreferences(old: Workspace, next: Workspace): PreferencesPatch {
   const patch: PreferencesPatch = {};
   for (const field of [
@@ -146,25 +150,6 @@ function diffPreferences(old: Workspace, next: Workspace): PreferencesPatch {
       .filter((d) => d.read)
       .map((d) => d.id);
   return patch;
-}
-function mergePatch(left: PreferencesPatch, right: PreferencesPatch) {
-  const result = { ...left, ...right };
-  if (left.drafts || right.drafts)
-    result.drafts = {
-      ...((left.drafts as object) ?? {}),
-      ...((right.drafts as object) ?? {}),
-    };
-  for (const field of ["teams", "chats", "positions"]) {
-    const a = (left[field] ?? {}) as Record<string, object>,
-      b = (right[field] ?? {}) as Record<string, object>;
-    if (Object.keys(a).length || Object.keys(b).length) {
-      const values = { ...a };
-      for (const [id, value] of Object.entries(b))
-        values[id] = { ...values[id], ...value };
-      result[field] = values;
-    }
-  }
-  return result;
 }
 function applyPreferences(
   workspace: Workspace,
@@ -312,6 +297,15 @@ class ProductClient {
       }),
     );
   }
+  private async readWorkspace() {
+    for (;;) {
+      const receipt = preferencesOutbox.receiptVersion();
+      const workspace = await api<Workspace>("/product");
+      const pending = preferencesOutbox.snapshot().patch;
+      if (receipt === preferencesOutbox.receiptVersion())
+        return { workspace, pending };
+    }
+  }
   async start() {
     if (this.starting) return this.starting;
     this.starting = (async () => {
@@ -331,7 +325,7 @@ class ProductClient {
             );
           history.replaceState(null, "", location.pathname + location.search);
         }
-        let workspace = await api<Workspace>("/product");
+        let { workspace, pending } = await this.readWorkspace();
         const raw = inputStorage.getItem(cacheKey);
         if (raw) {
           const previous = JSON.parse(raw) as Workspace;
@@ -356,12 +350,11 @@ class ProductClient {
                 clientRequestId: migrationId,
                 workspace: previous,
               });
-              workspace = await api<Workspace>("/product");
+              ({ workspace, pending } = await this.readWorkspace());
             }
           }
         }
-        const saved = inputStorage.getItem(outboxKey);
-        if (saved) this.pending = JSON.parse(saved);
+        this.pending = pending;
         workspace = applyPreferences(workspace, this.pending);
         this.cache(workspace);
         this.emit({
@@ -391,15 +384,25 @@ class ProductClient {
     if (this.refreshing) return this.refreshing;
     this.refreshing = (async () => {
       try {
-        let snapshot = await api<Workspace>("/product");
-        if ((snapshot.service?.revision ?? 0) < this.acknowledgedRevision)
-          snapshot = await api<Workspace>("/product");
-        if ((snapshot.service?.revision ?? 0) < this.acknowledgedRevision) {
+        let snapshot = await this.readWorkspace();
+        if (
+          (snapshot.workspace.service?.revision ?? 0) <
+          this.acknowledgedRevision
+        )
+          snapshot = await this.readWorkspace();
+        if (
+          (snapshot.workspace.service?.revision ?? 0) <
+          this.acknowledgedRevision
+        ) {
           setTimeout(() => void this.refresh(), 50);
           return;
         }
+        this.pending = snapshot.pending;
         const workspace = this.withHistory(
-          applyPreferences(snapshot, mergePatch(this.inFlight, this.pending)),
+          applyPreferences(
+            snapshot.workspace,
+            mergePatch(this.inFlight, this.pending),
+          ),
         );
         this.cache(workspace);
         this.emit({ workspace, error: "", connectionError: false });
@@ -437,11 +440,8 @@ class ProductClient {
     const next = change(old);
     const patch = diffPreferences(old, next);
     try {
+      preferencesOutbox.append(patch);
       this.pending = mergePatch(this.pending, patch);
-      inputStorage.setItem(
-        outboxKey,
-        JSON.stringify(mergePatch(this.inFlight, this.pending)),
-      );
       this.cache(next);
       this.emit({
         workspace: next,
@@ -457,40 +457,47 @@ class ProductClient {
   }
   async flush() {
     if (this.flushing) return this.flushing;
-    if (!Object.keys(this.pending).length) return;
-    this.flushing = (async () => {
+    const send = async () => {
       try {
-        while (Object.keys(this.pending).length) {
-          const patch = this.pending;
+        for (;;) {
+          const saved = preferencesOutbox.snapshot();
+          if (!Object.keys(saved.patch).length) {
+            preferencesOutbox.acknowledge(saved.entries);
+            this.pending = {};
+            break;
+          }
           this.pending = {};
-          this.inFlight = patch;
+          this.inFlight = saved.patch;
           try {
             const receipt = await api<{ revision: number }>(
               "/product/preferences",
-              patch,
+              saved.patch,
               "PATCH",
             );
             this.acknowledgedRevision = Math.max(
               this.acknowledgedRevision,
               receipt.revision,
             );
-          } catch (error) {
-            this.pending = mergePatch(patch, this.pending);
-            throw error;
+            preferencesOutbox.acknowledge(saved.entries);
           } finally {
             this.inFlight = {};
+            this.pending = preferencesOutbox.snapshot().patch;
           }
-          inputStorage.setItem(outboxKey, JSON.stringify(this.pending));
         }
         this.emit({ saving: false });
       } catch (error) {
-        inputStorage.setItem(outboxKey, JSON.stringify(this.pending));
         this.emit({ saving: false, error: (error as Error).message });
         throw error;
-      } finally {
-        this.flushing = undefined;
       }
-    })();
+    };
+    // Serialize browser senders, including tabs recovering after a disconnect.
+    this.flushing = (async () => {
+      if (navigator.locks)
+        await navigator.locks.request("teamswarm.preferences.flush", send);
+      else await send();
+    })().finally(() => {
+      this.flushing = undefined;
+    });
     return this.flushing;
   }
   async command<T>(url: string, body?: unknown, method?: string) {

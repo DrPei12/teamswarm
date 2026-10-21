@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- Preserve unsent drafts across browser tabs while offline and after reopening.
+- Keep saved drafts visible when delayed refresh or initial-load responses arrive.
+
 ## 0.4.0
 
 - Local workspace with persistent team conversations, work threads, project history and versioned deliverables.
