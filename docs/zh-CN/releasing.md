@@ -10,7 +10,7 @@
 
 ## CI
 
-`ci.yml` 在 Windows 检查推送与拉取请求。`desktop.yml` 在选定的原生环境构建安装包。`windows-installer.yml` 从 Release 附件下载安装器，测试全新安装、应用启动、保留数据升级与卸载，`candidate_tag` 与 `previous_tag` 分别指定两个版本。工作流采用只读仓库权限。
+`ci.yml` 在 Windows 检查推送与拉取请求。`desktop.yml` 在选定的原生环境构建安装包。`windows-installer.yml` 测试全新安装、应用启动、保留数据升级与卸载。`previous_tag` 指定升级前的版本；`candidate_tag` 留空时构建当前检出并生成通过验收的 `windows-installer-package` 附件，填写已有 Release 标签时验收该安装器。工作流采用只读仓库权限。
 
 ## macOS 签名
 

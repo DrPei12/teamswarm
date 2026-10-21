@@ -4,7 +4,8 @@ on:
     inputs:
       candidate_tag:
         type: string
-        required: true
+        required: false
+        default: ''
       previous_tag:
         type: string
         required: true
@@ -27,14 +28,26 @@ jobs:
         with:
           node-version: 24.22.0
           cache: npm
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
       - run: npm ci --no-audit --no-fund
-      - name: Download installers
+      - name: Build installer
+        if: inputs.candidate_tag == ''
+        run: npm run desktop:build
+      - name: Prepare installers
         shell: pwsh
         run: |
           $candidate = Join-Path $env:RUNNER_TEMP 'candidate'
           $previous = Join-Path $env:RUNNER_TEMP 'previous'
-          gh release download $env:CANDIDATE_TAG --pattern '*Windows-x64.exe' --pattern 'release-manifest.json' --dir $candidate
-          if ($LASTEXITCODE) { throw 'Candidate download failed' }
+          if ($env:CANDIDATE_TAG) {
+            gh release download $env:CANDIDATE_TAG --pattern '*Windows-x64.exe' --pattern 'release-manifest.json' --dir $candidate
+            if ($LASTEXITCODE) { throw 'Candidate download failed' }
+          } else {
+            New-Item -ItemType Directory -Path $candidate | Out-Null
+            Copy-Item 'release/win32-x64/*Windows-x64.exe' -Destination $candidate
+            Copy-Item 'release/win32-x64/release-manifest.json' -Destination $candidate
+          }
           gh release download $env:PREVIOUS_TAG --pattern '*Windows-x64.exe' --dir $previous
           if ($LASTEXITCODE) { throw 'Previous version download failed' }
       - name: Install, upgrade and uninstall
@@ -51,3 +64,13 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
           path: ${{ runner.temp }}/TeamSwarm Installer/report.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: success() && inputs.candidate_tag == ''
+        with:
+          name: windows-installer-package
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            release/win32-x64/TeamSwarm-*.exe
+            release/win32-x64/release-manifest.json
+            release/win32-x64/SHA256SUMS.txt

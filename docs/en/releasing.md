@@ -10,7 +10,7 @@
 
 ## CI
 
-`ci.yml` checks pushes and pull requests on Windows. `desktop.yml` builds packages on a selected native runner. `windows-installer.yml` downloads installers from release assets and tests clean installation, application startup, upgrade with preserved data, and uninstallation. Its `candidate_tag` and `previous_tag` inputs select the two versions. Workflows use read-only repository permissions.
+`ci.yml` checks pushes and pull requests on Windows. `desktop.yml` builds packages on a selected native runner. `windows-installer.yml` tests clean installation, application startup, upgrade with preserved data, and uninstallation. Set `previous_tag` to the installed version to upgrade from. Leave `candidate_tag` empty to build the current checkout and produce the verified `windows-installer-package` artifact, or set it to an existing release tag to test that installer. Workflows use read-only repository permissions.
 
 ## macOS signing
 
