@@ -16,7 +16,7 @@ npm start
 
 `npm run check` 执行文档校验、类型检查、服务测试、离线审计测试、平台与凭据测试、前端格式检查及编译。普通测试使用确定性本地样例，不调用付费模型。
 
-构建后运行 `node test/browser/offline-drafts.mjs`，检查不同浏览器标签页的未发送草稿在断连、关闭和重开后仍被保留。测试使用隔离本地数据库，不调用模型。先安装 Playwright Chromium，或通过 `PLAYWRIGHT_EXECUTABLE_PATH` 指定系统浏览器。
+构建后运行 `node test/browser/offline-drafts.mjs`，检查不同浏览器标签页的未发送草稿在断连、关闭、重开及服务器响应延迟时仍被保留。测试使用隔离本地数据库，不调用模型。先安装 Playwright Chromium，或通过 `PLAYWRIGHT_EXECUTABLE_PATH` 指定系统浏览器。
 
 开发运行 `npm run dev`：API 使用 4318，Vite 使用 4317。通过独立 `TEAM_DATA_DIR` 保留日常工作空间。
 

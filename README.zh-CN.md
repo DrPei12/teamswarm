@@ -24,7 +24,7 @@ TeamSwarm 面向本地单用户的代码与文本项目。所选 Harness 使用�
 
 | 平台 | 安装形式 | 支持状态 |
 |---|---|---|
-| Windows x64 | `.exe` | 0.4.0 下载包 |
+| Windows x64 | `.exe` | 0.4.1 下载包 |
 | Linux x64 | `.deb`、`.AppImage` | 从源码构建 |
 | macOS Apple Silicon | `.dmg`、`.zip` | 从源码构建 |
 

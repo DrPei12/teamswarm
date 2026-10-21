@@ -9,6 +9,7 @@ type Entry = {
 };
 const legacyKey = "teamswarm.preferences.pending";
 const prefix = legacyKey + ".entry.";
+const receiptKey = legacyKey + ".receipt";
 
 // Each tab writes immutable field revisions, replacing only its own older entry.
 // A receipt cannot delete another tab's edit, even if it arrives during cleanup.
@@ -89,7 +90,12 @@ export class PreferencesOutbox {
       ),
     };
   }
+  receiptVersion() {
+    return this.storage.key ? this.storage.getItem(receiptKey) : null;
+  }
   acknowledge(entries: Entry[]) {
+    if (this.storage.key && entries.length)
+      this.storage.setItem(receiptKey, crypto.randomUUID());
     for (const entry of entries)
       if (this.storage.getItem(entry.key) === entry.value)
         this.storage.removeItem(entry.key);

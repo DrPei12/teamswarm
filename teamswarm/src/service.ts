@@ -297,6 +297,15 @@ class ProductClient {
       }),
     );
   }
+  private async readWorkspace() {
+    for (;;) {
+      const receipt = preferencesOutbox.receiptVersion();
+      const workspace = await api<Workspace>("/product");
+      const pending = preferencesOutbox.snapshot().patch;
+      if (receipt === preferencesOutbox.receiptVersion())
+        return { workspace, pending };
+    }
+  }
   async start() {
     if (this.starting) return this.starting;
     this.starting = (async () => {
@@ -316,7 +325,7 @@ class ProductClient {
             );
           history.replaceState(null, "", location.pathname + location.search);
         }
-        let workspace = await api<Workspace>("/product");
+        let { workspace, pending } = await this.readWorkspace();
         const raw = inputStorage.getItem(cacheKey);
         if (raw) {
           const previous = JSON.parse(raw) as Workspace;
@@ -341,11 +350,11 @@ class ProductClient {
                 clientRequestId: migrationId,
                 workspace: previous,
               });
-              workspace = await api<Workspace>("/product");
+              ({ workspace, pending } = await this.readWorkspace());
             }
           }
         }
-        this.pending = preferencesOutbox.snapshot().patch;
+        this.pending = pending;
         workspace = applyPreferences(workspace, this.pending);
         this.cache(workspace);
         this.emit({
@@ -375,16 +384,25 @@ class ProductClient {
     if (this.refreshing) return this.refreshing;
     this.refreshing = (async () => {
       try {
-        let snapshot = await api<Workspace>("/product");
-        if ((snapshot.service?.revision ?? 0) < this.acknowledgedRevision)
-          snapshot = await api<Workspace>("/product");
-        if ((snapshot.service?.revision ?? 0) < this.acknowledgedRevision) {
+        let snapshot = await this.readWorkspace();
+        if (
+          (snapshot.workspace.service?.revision ?? 0) <
+          this.acknowledgedRevision
+        )
+          snapshot = await this.readWorkspace();
+        if (
+          (snapshot.workspace.service?.revision ?? 0) <
+          this.acknowledgedRevision
+        ) {
           setTimeout(() => void this.refresh(), 50);
           return;
         }
-        this.pending = preferencesOutbox.snapshot().patch;
+        this.pending = snapshot.pending;
         const workspace = this.withHistory(
-          applyPreferences(snapshot, mergePatch(this.inFlight, this.pending)),
+          applyPreferences(
+            snapshot.workspace,
+            mergePatch(this.inFlight, this.pending),
+          ),
         );
         this.cache(workspace);
         this.emit({ workspace, error: "", connectionError: false });
