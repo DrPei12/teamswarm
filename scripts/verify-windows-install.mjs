@@ -81,7 +81,7 @@ function install(file) {
   assert.equal(path.dirname(uninstallPath), installDir);
   for (const shortcut of shortcuts) {
     assert(fs.existsSync(shortcut));
-    const target = ps(`$s=New-Object -ComObject WScript.Shell; $s.CreateShortcut($env:TEST_SHORTCUT).TargetPath`, { TEST_SHORTCUT: shortcut });
+    const target = ps(`$s=New-Object -ComObject Shell.Application; $s.NameSpace([IO.Path]::GetDirectoryName($env:TEST_SHORTCUT)).ParseName([IO.Path]::GetFileName($env:TEST_SHORTCUT)).GetLink.Path`, { TEST_SHORTCUT: shortcut });
     assert.equal(path.resolve(target), executable);
   }
 }
