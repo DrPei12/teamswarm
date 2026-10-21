@@ -1,0 +1,8 @@
+[
+  {"id":"T-01","title":"Write installation guide","status":"done"},
+  {"id":"T-02","title":"Check keyboard navigation","status":"open"},
+  {"id":"T-03","title":"Review example data","status":"done"},
+  {"id":"T-04","title":"Prepare Linux package","status":"open"},
+  {"id":"T-05","title":"Obtain test hardware","status":"blocked"},
+  {"id":"T-06","title":"Record product walkthrough","status":"open"}
+]

@@ -1,0 +1,25 @@
+import type { Attempt } from "./types.js";
+
+/** Decision guidance, not a model ranking or a task-to-Harness routing table. */
+export const resourcePlanningGuidance = `Organize members and execution resources around the actual task. Harnesses and saved resources are reusable configurations, not exclusive seats: multiple independent members may use the same Harness, model, account connection or resource concurrently. Their sessions remain separate. Choose member count, division of work, Harness, model and effort together using task difficulty, needed tools, quality/latency goals, user preferences, existing context and coordination cost. Reuse a member when its retained understanding helps; add members when independent responsibilities or useful parallelism justify them. There is no required Harness diversity, fixed vendor ranking, fixed complexity-to-Harness mapping, or requirement to increase member count or tests for a harder task. Respect explicit user constraints and observed capabilities. For cost decisions read resource descriptions and available execution observations; distinguish user preferences and qualitative estimates from measured usage or prices. Unknown price or quota stays unknown, and a subscription still consumes shared allowance. Do not invent a cheapest option. Record a concise task-specific selectionReason/reason when selecting resources, and explain material tradeoffs without exposing private reasoning. Use the Team concurrency limit as a scheduling ceiling, not a target member count or a per-Harness limit. Persist important user allocation preferences with their actual source message in the project requirements or sourced Host notes so later turns can apply them.`;
+
+/** Bounded native observations for a decision, preserving unknown cost and usage scope. */
+export function executionObservation(attempt: Attempt) {
+  const usage = attempt.usage;
+  const values = usage?.last && typeof usage.last === "object"
+    ? usage.last as Record<string, unknown> : usage;
+  const number = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+  const started = Date.parse(attempt.startedAt);
+  const finished = attempt.finishedAt ? Date.parse(attempt.finishedAt) : NaN;
+  return {
+    attemptId: attempt.id, memberId: attempt.memberId, status: attempt.status,
+    actual: attempt.actual, at: attempt.startedAt,
+    elapsedMs: Number.isFinite(finished - started) && finished >= started ? finished - started : null,
+    usage: {
+      scope: usage?.last ? "native_last" : usage?.cumulative === true ? "attempt_cumulative" : "reported",
+      inputTokens: number(values?.inputTokens), outputTokens: number(values?.outputTokens),
+      totalTokens: number(values?.totalTokens), reportedCost: number(values?.cost),
+      currency: typeof values?.currency === "string" ? values.currency : null,
+    },
+  };
+}

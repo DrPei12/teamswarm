@@ -1,0 +1,9 @@
+TeamSwarm
+Copyright 2026 TeamSwarm contributors
+
+TeamSwarm includes adaptations of Caho1/open-claude-ui design-system code,
+distributed under the MIT License. The original notice is included in
+teamswarm/licenses/open-claude-ui-MIT.txt.
+
+Third-party notices and bundled runtime licenses are listed in
+THIRD_PARTY_NOTICES.md and apps/desktop/licenses/.

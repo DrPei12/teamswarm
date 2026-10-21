@@ -1,0 +1,1 @@
+[{"sequence":1,"id":"h","type":"exchange.headers_delivered","data":{"messageIds":["m"]},"teamId":"fixture-team","runId":null,"workId":null,"attemptId":null,"createdAt":"2026-01-01T00:00:00Z"},{"sequence":2,"id":"r","type":"exchange.read","data":{"messageIds":["m","n"]},"teamId":"fixture-team","runId":null,"workId":null,"attemptId":null,"createdAt":"2026-01-01T00:00:00Z"}]

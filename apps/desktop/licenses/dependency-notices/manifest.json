@@ -1,0 +1,51 @@
+{
+  "@npmcli/agent@4.0.2": {
+    "file": "licenses/dependency-notices/@npmcli__agent-4.0.2.txt",
+    "sha256": "14545a0d7badd3fa94b1040513d9e12aa6689b7f2e9a5164cc85add92c2262c3",
+    "license": "ISC",
+    "source": "https://spdx.org/licenses/ISC.html",
+    "kind": "standard license text for published package declaration"
+  },
+  "@sigstore/verify@3.1.1": {
+    "file": "licenses/dependency-notices/@sigstore__verify-3.1.1.txt",
+    "sha256": "80e211c3f7fc544be4dcf8eaefab9b77e47179b2f15f8149d50aed5ee4c07d06",
+    "license": "Apache-2.0",
+    "source": "https://raw.githubusercontent.com/sigstore/sigstore-js/c1dc7d4778a450787fc72b083f2490ad02b714c6/LICENSE",
+    "kind": "upstream license at published git revision"
+  },
+  "err-code@2.0.3": {
+    "file": "licenses/dependency-notices/err-code-2.0.3.txt",
+    "sha256": "e62f1dc60a64e17c99af26ef8abb6eaebf5e986096bb5f60623b8c3b34b7bb7e",
+    "license": "MIT",
+    "source": "https://spdx.org/licenses/MIT.html",
+    "kind": "standard license text for published package declaration"
+  },
+  "imurmurhash@0.1.4": {
+    "file": "licenses/dependency-notices/imurmurhash-0.1.4.txt",
+    "sha256": "33aaf5e570b7d30ddd4f75c50f5b6e3ba593861cee0477d6682bc7b0eb6d220a",
+    "license": "MIT",
+    "source": "https://registry.npmjs.org/imurmurhash/-/imurmurhash-0.1.4.tgz (README.md)",
+    "kind": "complete license notice from published package"
+  },
+  "spdx-exceptions@2.5.0": {
+    "file": "licenses/dependency-notices/spdx-exceptions-2.5.0.txt",
+    "sha256": "d52efa3b9755a068d4d7ff6097fce943ba24522a0a137865e7881f4f27f9d9f4",
+    "license": "CC-BY-3.0",
+    "source": "https://spdx.org/licenses/CC-BY-3.0.html",
+    "kind": "standard license text for published package declaration"
+  },
+  "spdx-license-ids@3.0.23": {
+    "file": "licenses/dependency-notices/spdx-license-ids-3.0.23.txt",
+    "sha256": "8e2edb64564f97e56b0f6747dc2c8e1a10c4c5ff716a97590c70af34e264d05c",
+    "license": "CC0-1.0",
+    "source": "https://spdx.org/licenses/CC0-1.0.html",
+    "kind": "standard license text for published package declaration"
+  },
+  "react-remove-scroll-bar@2.3.8": {
+    "file": "licenses/dependency-notices/react-remove-scroll-bar-2.3.8.txt",
+    "sha256": "6287a69fbc49127788588332852dba2dd2b4188c846349175fe90dd211fba31c",
+    "license": "MIT",
+    "source": "https://raw.githubusercontent.com/theKashey/react-remove-scroll-bar/master/LICENSE",
+    "kind": "current upstream notice for declared MIT license"
+  }
+}

@@ -1,0 +1,53 @@
+name: Windows installer
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        type: string
+        required: true
+      previous_tag:
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  install:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+      PREVIOUS_TAG: ${{ inputs.previous_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 24.22.0
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Download installers
+        shell: pwsh
+        run: |
+          $candidate = Join-Path $env:RUNNER_TEMP 'candidate'
+          $previous = Join-Path $env:RUNNER_TEMP 'previous'
+          gh release download $env:CANDIDATE_TAG --pattern '*Windows-x64.exe' --pattern 'release-manifest.json' --dir $candidate
+          if ($LASTEXITCODE) { throw 'Candidate download failed' }
+          gh release download $env:PREVIOUS_TAG --pattern '*Windows-x64.exe' --dir $previous
+          if ($LASTEXITCODE) { throw 'Previous version download failed' }
+      - name: Install, upgrade and uninstall
+        shell: pwsh
+        run: |
+          $candidate = Get-Item (Join-Path $env:RUNNER_TEMP 'candidate/*Windows-x64.exe')
+          $previous = Get-Item (Join-Path $env:RUNNER_TEMP 'previous/*Windows-x64.exe')
+          node scripts/verify-windows-install.mjs --installer $candidate.FullName --previous-installer $previous.FullName --manifest (Join-Path $env:RUNNER_TEMP 'candidate/release-manifest.json') --root (Join-Path $env:RUNNER_TEMP 'TeamSwarm Installer')
+          if ($LASTEXITCODE) { throw 'Installer checks failed' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: windows-installer-result
+          retention-days: 7
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/TeamSwarm Installer/report.json

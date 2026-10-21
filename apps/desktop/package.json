@@ -1,0 +1,12 @@
+{
+  "name": "teamswarm-desktop",
+  "productName": "TeamSwarm",
+  "desktopName": "teamswarm.desktop",
+  "version": "0.4.0",
+  "description": "A workspace for your teams of agents",
+  "author": "TeamSwarm",
+  "private": true,
+  "main": "main.cjs",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/DrPei12/teamswarm"
+}

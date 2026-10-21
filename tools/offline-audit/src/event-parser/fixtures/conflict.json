@@ -1,0 +1,1 @@
+[{"sequence":1,"id":"conflict","type":"work.running","teamId":"fixture-team","runId":null,"workId":null,"attemptId":null,"data":{},"createdAt":"2026-01-01T00:00:00Z"},{"sequence":1,"id":"conflict","type":"work.failed","teamId":"fixture-team","runId":null,"workId":null,"attemptId":null,"data":{},"createdAt":"2026-01-01T00:00:00Z"}]

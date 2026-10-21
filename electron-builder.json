@@ -1,0 +1,136 @@
+{
+  "appId": "org.teamswarm.desktop",
+  "productName": "TeamSwarm",
+  "electronVersion": "44.6.0",
+  "directories": {
+    "app": "apps/desktop",
+    "output": "release"
+  },
+  "files": [
+    "main.cjs",
+    "credential-bridge.cjs",
+    "preload.cjs",
+    "package.json",
+    "icon.ico",
+    "icon.png"
+  ],
+  "extraResources": [
+    {
+      "from": ".codex-local/desktop-stage/TARGET/product",
+      "to": "product",
+      "filter": [
+        "**/*",
+        "!node_modules/**/*",
+        "!runtime/node_modules/**/*"
+      ]
+    },
+    {
+      "from": ".codex-local/desktop-stage/TARGET/product/node_modules",
+      "to": "product/node_modules",
+      "filter": [
+        "**/*"
+      ]
+    },
+    {
+      "from": ".codex-local/desktop-stage/TARGET/product/runtime/node_modules",
+      "to": "product/runtime/node_modules",
+      "filter": [
+        "**/*"
+      ]
+    }
+  ],
+  "asar": true,
+  "afterPack": "apps/desktop/verify-package.cjs",
+  "npmRebuild": false,
+  "win": {
+    "signExecutable": false,
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "icon": "apps/desktop/icon.ico",
+    "artifactName": "TeamSwarm-${version}-Windows-${arch}.${ext}"
+  },
+  "nsis": {
+    "differentialPackage": false,
+    "useZip": true,
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "TeamSwarm",
+    "runAfterFinish": false,
+    "deleteAppDataOnUninstall": false,
+    "installerLanguages": [
+      "en_US",
+      "zh_CN"
+    ],
+    "displayLanguageSelector": false
+  },
+  "publish": null,
+  "mac": {
+    "target": [
+      {
+        "target": "dmg",
+        "arch": [
+          "arm64"
+        ]
+      },
+      {
+        "target": "zip",
+        "arch": [
+          "arm64"
+        ]
+      }
+    ],
+    "category": "public.app-category.developer-tools",
+    "icon": "apps/desktop/icon.png",
+    "artifactName": "TeamSwarm-${version}-macOS-${arch}.${ext}",
+    "identity": null,
+    "hardenedRuntime": false
+  },
+  "linux": {
+    "syncDesktopName": true,
+    "target": [
+      {
+        "target": "AppImage",
+        "arch": [
+          "x64"
+        ]
+      },
+      {
+        "target": "deb",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "category": "Development",
+    "icon": "apps/desktop/icon.png",
+    "artifactName": "TeamSwarm-${version}-Linux-x64.${ext}",
+    "maintainer": "TeamSwarm contributors",
+    "desktop": {
+      "entry": {
+        "Name": "TeamSwarm",
+        "Comment": "A workspace for teams of coding agents"
+      }
+    }
+  },
+  "deb": {
+    "depends": [
+      "libgtk-3-0",
+      "libnss3",
+      "libxss1",
+      "libxtst6",
+      "libatspi2.0-0",
+      "xdg-utils",
+      "libsecret-1-0",
+      "libgbm1"
+    ]
+  }
+}

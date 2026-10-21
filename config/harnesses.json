@@ -1,0 +1,26 @@
+{
+  "grok": {
+    "package": "@xai-official/grok",
+    "version": "1.0.62"
+  },
+  "codex": {
+    "package": "@openai/codex",
+    "version": "0.163.0"
+  },
+  "claude-code": {
+    "package": "@anthropic-ai/claude-code",
+    "version": "2.1.274"
+  },
+  "pi": {
+    "package": "@earendil-works/pi-coding-agent",
+    "version": "1.3.0"
+  },
+  "deepseek-harness": {
+    "package": "@deepseek-ai/dsh",
+    "version": "0.2.0-rc.2"
+  },
+  "opencode": {
+    "package": "opencode-ai",
+    "version": "1.18.35"
+  }
+}

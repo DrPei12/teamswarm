@@ -1,0 +1,48 @@
+{
+  "name": "teamswarm-product",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "teamswarm",
+    "apps/server",
+    "packages/contracts"
+  ],
+  "scripts": {
+    "build": "node scripts/build-product.mjs",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:server": "npm run test --workspace @team/server",
+    "start": "node scripts/start-product.mjs",
+    "dev": "node scripts/start-product.mjs --dev",
+    "check": "npm run check:docs && npm run typecheck && npm run test:server && npm run test:audit && npm run test:platform && npm run check --workspace teamswarm",
+    "desktop:prepare": "node scripts/prepare-desktop.mjs",
+    "desktop:build": "node scripts/build-desktop.mjs",
+    "desktop:unpacked": "node scripts/build-desktop.mjs --dir",
+    "test:audit": "node --test tools/offline-audit/tests/*.test.mjs tools/offline-audit/src/*/*.test.mjs",
+    "check:docs": "node scripts/check-docs.mjs",
+    "harness:install": "node scripts/install-harnesses.mjs",
+    "harness:check": "node scripts/check-harness.mjs",
+    "test:platform": "node --test test/*.test.mjs",
+    "release:check": "node scripts/check-publication.mjs",
+    "test:smoke": "node scripts/smoke-service.mjs"
+  },
+  "devDependencies": {
+    "@openai/codex": "0.163.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/node": "^24.0.0",
+    "electron": "^44.6.0",
+    "electron-builder": "26.15.3",
+    "npm": "11.21.1",
+    "typescript": "^5.9.0"
+  },
+  "license": "Apache-2.0",
+  "description": "A local workspace for teams of coding agents.",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "homepage": "https://github.com/DrPei12/teamswarm",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DrPei12/teamswarm.git"
+  }
+}

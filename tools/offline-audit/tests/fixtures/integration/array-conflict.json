@@ -1,0 +1,1 @@
+[{"sequence":1,"id":"replay","type":"work.running","teamId":"a","runId":"r","workId":"w","data":{"x":{"one":1,"two":2},"list":[1,2]},"attemptId":null,"createdAt":"2026-01-01T00:00:00Z"},{"sequence":1,"id":"replay","type":"work.running","teamId":"a","runId":"r","workId":"w","data":{"x":{"two":2,"one":1},"list":[2,1]},"attemptId":null,"createdAt":"2026-01-01T00:00:00Z"}]
