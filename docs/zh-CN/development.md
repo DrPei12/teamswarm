@@ -6,6 +6,8 @@
 
 Windows 原生桌面构建使用较短的源码路径，例如 `C:\src\teamswarm`。固定版本的 electron-builder 通过 `scripts/run-electron-builder.cjs` 保留生成 NSIS 卸载器所需的 Windows 系统路径；升级构建依赖时一并检查该适配。
 
+构建代理使用 `roarr 3.0.0`，以字符串格式化处理固定消息和结构化上下文。npm 的局部版本覆盖使构建依赖树不再包含 `sprintf-js`。
+
 ```sh
 npm ci
 npm run check

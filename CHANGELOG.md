@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.2
+
+- Remove the vulnerable numeric formatter from desktop build dependencies.
+
 ## 0.4.1
 
 - Preserve unsent drafts across browser tabs while offline and after reopening.
