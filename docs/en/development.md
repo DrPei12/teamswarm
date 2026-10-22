@@ -6,6 +6,8 @@ Use Node.js 24 and the committed npm lockfile. Windows installer verification al
 
 On Windows, use a short checkout path such as `C:\src\teamswarm` for native desktop builds. The pinned electron-builder version uses `scripts/run-electron-builder.cjs` to preserve Windows system paths when generating its NSIS uninstaller; review that adapter when upgrading the build dependency.
 
+The build proxy uses `roarr 3.0.0` with string-only formatting for fixed messages and structured context. The scoped npm override keeps `sprintf-js` out of the build dependency tree.
+
 ```sh
 npm ci
 npm run check

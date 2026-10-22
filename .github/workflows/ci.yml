@@ -22,6 +22,7 @@ jobs:
           node-version: 24.22.0
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - run: npm audit --audit-level=moderate
       - run: npm run release:check
       - run: npm run check
       - run: npm run build

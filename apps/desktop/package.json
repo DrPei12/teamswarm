@@ -2,7 +2,7 @@
   "name": "teamswarm-desktop",
   "productName": "TeamSwarm",
   "desktopName": "teamswarm.desktop",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "A workspace for your teams of agents",
   "author": "TeamSwarm",
   "private": true,

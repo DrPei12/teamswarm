@@ -1,6 +1,6 @@
 {
   "name": "teamswarm-product",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -44,5 +44,10 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/DrPei12/teamswarm.git"
+  },
+  "overrides": {
+    "global-agent@3.0.0": {
+      "roarr": "3.0.0"
+    }
   }
 }
