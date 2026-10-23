@@ -188,6 +188,14 @@ export function configFields(config: ExecutionConfig): ResourceConfigField[] {
     { label: "API endpoint", value: config.baseUrl ?? "—" },
     { label: "Credential reference", value: config.credentialEnv ?? "—" },
     { label: "Effort", value: config.effort ?? "Default" },
+    ...(["pi", "opencode"].includes(config.harness)
+      ? [
+          {
+            label: "Maximum output tokens",
+            value: String(config.maxOutputTokens ?? 8192),
+          },
+        ]
+      : []),
     {
       label: "Access",
       value:

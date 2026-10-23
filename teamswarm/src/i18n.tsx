@@ -8,6 +8,7 @@ import {
 
 export type Language = "en" | "zh-CN";
 export const zhCN: Record<string, string> = {
+  "Maximum output tokens": "最大输出 token 数",
   "Loading earlier messages…": "正在加载更早的消息…",
   "Team capabilities": "团队能力与偏好",
   "Choose the tools your team can use": "选择团队可以使用的 Harness",
