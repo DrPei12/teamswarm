@@ -6,6 +6,7 @@ import { Resvg } from "@resvg/resvg-js";
 import { verifyBuild, digest } from "./release-identity.mjs";
 import { packageInventory } from "./package-inventory.mjs";
 import { desktopNode } from "./desktop-runtime.mjs";
+import { prepareNpm } from "./prepare-npm.mjs";
 import { desktopTarget } from "./desktop-platform.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -63,10 +64,7 @@ if (!npm) throw new Error("Use npm run desktop:prepare.");
 const result = spawnSync(process.execPath, [npm, "ci", "--omit=dev", "--ignore-scripts", "--no-bin-links", "--no-audit", "--no-fund"],
   { cwd: target, windowsHide: true, stdio: "inherit" });
 if (result.error || result.status !== 0) throw new Error("Service dependency installation failed.");
-const npmRoot = path.join(root, "node_modules/npm");
-if (JSON.parse(readFileSync(path.join(npmRoot, "package.json"), "utf8")).version !== runtime.npmVersion)
-  throw new Error("Packaged npm differs from the pinned runtime.");
-copy(npmRoot, path.join(target, "runtime/node_modules/npm"));
+await prepareNpm(root, path.join(target, "runtime/node_modules/npm"), npm);
 copy(path.join(root, "config/harnesses.json"), path.join(target, "config/harnesses.json"));
 if (platform.platform === "win32") {
   for (const command of ["npm", "npx"])

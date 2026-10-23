@@ -23,6 +23,7 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - run: npm audit --audit-level=moderate
+      - run: npm audit --prefix apps/desktop/npm-runtime --audit-level=moderate
       - run: npm run release:check
       - run: npm run check
       - run: npm run build

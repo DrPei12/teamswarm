@@ -45,3 +45,5 @@ Test installation, upgrade with preserved data, normal exit and recovery separat
 ## Add or change a harness
 
 Start with the interfaces in `apps/server/src/runtime/types.ts` and the adapters under `runtime/harness/`. Preserve session identity, native observations, permission boundaries and uncertain-stop behavior. Add protocol fixtures and real-process tests for the changed contract. Record live provider validation separately with the exact harness/model/version combination.
+
+Desktop npm uses the official CLI archive and the dependency lockfile in `apps/desktop/npm-runtime`. Audit that dependency tree with `npm audit --prefix apps/desktop/npm-runtime --audit-level=moderate`. Packaging checks the archive integrity and installs the locked runtime dependencies.

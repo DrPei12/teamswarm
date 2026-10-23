@@ -45,3 +45,5 @@ npm run desktop:build
 ## 修改 Harness
 
 先阅读 `apps/server/src/runtime/types.ts` 与 `runtime/harness/` 下适配器。保留会话身份、真实观察、权限边界和未确认停止状态。对变更协议加入样例与真实子进程测试；真实提供方检查单独记录具体 Harness、模型和版本。
+
+桌面 npm 使用官方 CLI 归档，以及 `apps/desktop/npm-runtime` 中的依赖锁文件。使用 `npm audit --prefix apps/desktop/npm-runtime --audit-level=moderate` 审计这套依赖。打包时校验归档完整性，并安装锁定的运行依赖。

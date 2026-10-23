@@ -16,5 +16,9 @@
       "sha256": "6a9724d9b50a5f22b4816cded441b5a8d9ddae546191a5e5b7efa5a5e2ee26d5",
       "member": "node-v24.22.0-darwin-arm64/bin/node"
     }
+  },
+  "npmArchive": {
+    "url": "https://registry.npmjs.org/npm/-/npm-11.21.1.tgz",
+    "integrity": "sha512-YTzL6QBEJXyHcTu0JiUc7RKMp+mzlJtl7rGLmERaXUQeFHIMc9atdr6G9M9C8vDWbv40epoTQAzNL2/PtZVDhQ=="
   }
 }
