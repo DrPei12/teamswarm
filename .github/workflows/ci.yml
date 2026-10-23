@@ -21,6 +21,7 @@ jobs:
         with:
           node-version: 24.22.0
           cache: npm
+      - run: python -B scripts/rebuild-npm-runtime.py --check
       - run: npm ci --no-audit --no-fund
       - run: npm audit --audit-level=moderate
       - run: npm run release:check
