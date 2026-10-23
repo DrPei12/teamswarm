@@ -59,6 +59,11 @@ export function resourceIssues(config: ExecutionConfig): CompatibilityIssue[] {
       (config.protocol && config.protocol !== "chat-completions"))
   )
     issues.push("unsupported_thinking_format");
+  if (
+    config.maxOutputTokens != null &&
+    !["pi", "opencode"].includes(config.harness)
+  )
+    issues.push("unsupported_output_budget");
   return issues;
 }
 
@@ -219,6 +224,7 @@ const configKeys = new Set([
   "access",
   "protocol",
   "thinkingFormat",
+  "maxOutputTokens",
 ]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>

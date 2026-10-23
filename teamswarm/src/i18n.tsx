@@ -718,6 +718,11 @@ export const zhCN: Record<string, string> = {
     "此 Harness 不支持显式推理强度",
   "Thinking format requires Pi chat completions":
     "思考格式仅在 Pi 的 Chat Completions 下可用",
+  "Maximum output tokens": "最大输出 token 数",
+  "Includes reasoning tokens. Leave empty to use 8192.":
+    "包含推理 token。留空使用 8192。",
+  "An output token budget requires Pi or OpenCode":
+    "输出 token 预算仅支持 Pi 或 OpenCode",
   "Pi Thinking format (qwen)": "Pi 思考格式（qwen）",
   "Member and task allocation": "成员与任务分配",
   "A member default seeds future work; a task selection pins one work and always wins.":

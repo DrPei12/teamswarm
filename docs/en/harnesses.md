@@ -52,3 +52,5 @@ In **Resources and allocation**, create named resources and assign member defaul
 Use read-only access for questions and inspection, and workspace-write access for changes. Switching harness, model, protocol or account can require a new native session. Project responsibilities, conversations and deliverable versions remain in TeamSwarm.
 
 Resource export/import transfers configuration and credential references. Configure the referenced secrets separately on the destination device.
+
+For Pi and OpenCode, **Maximum output tokens** sets the completion ceiling for each model response, including reasoning tokens. Leave it empty to retain the 8192-token default. Set a value supported by your provider; this setting does not change provider limits or pricing. A response that ends at the length limit remains failed and is not automatically retried. Other harnesses reject this override rather than silently ignoring it.

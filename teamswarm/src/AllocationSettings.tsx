@@ -56,6 +56,7 @@ const issueLabels: Record<string, string> = {
   unknown_harness: "Unknown harness",
   missing_configuration: "Missing model, endpoint or credential reference",
   unsupported_effort: "This harness does not support an explicit effort",
+  unsupported_output_budget: "An output token budget requires Pi or OpenCode",
   unsupported_thinking_format: "Thinking format requires Pi chat completions",
 };
 
@@ -448,6 +449,9 @@ function ResourceForm({
     config?.credentialEnv ?? "",
   );
   const [effort, setEffort] = useState(config?.effort ?? "");
+  const [maxOutputTokens, setMaxOutputTokens] = useState(
+    config?.maxOutputTokens?.toString() ?? "",
+  );
   const [access, setAccess] = useState<"read-only" | "workspace-write">(
     config?.access ?? "workspace-write",
   );
@@ -524,6 +528,9 @@ function ResourceForm({
               access,
               protocol: (protocol || null) as ExecutionConfig["protocol"],
               thinkingFormat: thinkingFormat ? "qwen" : null,
+              ...(["pi", "opencode"].includes(harness) && maxOutputTokens.trim()
+                ? { maxOutputTokens: Number(maxOutputTokens) }
+                : {}),
             },
           });
         } catch (error) {
@@ -778,6 +785,23 @@ function ResourceForm({
           </select>
         </label>
       </div>
+      {["pi", "opencode"].includes(harness) && (
+        <label>
+          {t("Maximum output tokens")}
+          <input
+            type="number"
+            min={1}
+            max={131072}
+            step={1}
+            value={maxOutputTokens}
+            placeholder="8192"
+            onChange={(event) => setMaxOutputTokens(event.target.value)}
+          />
+          <span className="field-help">
+            {t("Includes reasoning tokens. Leave empty to use 8192.")}
+          </span>
+        </label>
+      )}
       {harness === "pi" && (
         <label className="resource-checkbox">
           <input

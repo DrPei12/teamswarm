@@ -447,3 +447,28 @@ test("credential files load atomically and reject executable or ambiguous token 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("OpenCode receives the explicit output budget without changing its default", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "teamswarm-output-budget-"));
+  const saved = [process.env.TEAM_OPENCODE_BIN, process.env.TEAM_HARNESS_HOME, process.env.TEST_MODEL_KEY];
+  try {
+    const entry = path.join(root, "fixture.mjs");
+    writeFileSync(entry, `const c=JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);console.log(JSON.stringify({type:'fixture-budget',value:c.provider.teamswarm.models.fixture.limit.output}));console.log(JSON.stringify({type:'step_finish',part:{reason:'stop'}}));`);
+    process.env.TEAM_OPENCODE_BIN = entry;
+    process.env.TEAM_HARNESS_HOME = path.join(root, "native");
+    process.env.TEST_MODEL_KEY = "fixture-only";
+    for (const budget of [undefined, null, 32768]) {
+      const req = request(root);
+      req.config = { ...req.config, harness: "opencode", maxOutputTokens: budget };
+      let observed: number | undefined;
+      req.onEvent = (e) => { const event = e.data.event as any; if (event?.type === "fixture-budget") observed = event.value; };
+      assert.equal((await new NativeHarness("opencode").execute(req)).status, "completed");
+      assert.equal(observed, budget ?? 8192);
+    }
+  } finally {
+    ["TEAM_OPENCODE_BIN", "TEAM_HARNESS_HOME", "TEST_MODEL_KEY"].forEach((name, i) => {
+      if (saved[i] === undefined) delete process.env[name]; else process.env[name] = saved[i];
+    });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
