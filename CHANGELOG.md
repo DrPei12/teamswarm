@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.3
+
+- Update the bundled npm runtime to use ip-address 10.7.4.
+- Load Pi project instructions from the task workspace.
+- Configure Pi and OpenCode output limits and context windows in execution resources.
+- Preserve model limits and Pi reasoning effort when editing and exporting resources.
+- Apply OpenCode output limits above 32000 tokens and forward explicit Pi Chat Completions reasoning effort.
+
 ## 0.4.2
 
 - Remove the vulnerable numeric formatter from desktop build dependencies.

@@ -33,3 +33,4 @@ jobs:
       - run: npm run harness:install -- pi opencode
       - run: node test/browser/resource-configuration.mjs
       - run: node test/native/opencode-output-budget.mjs
+      - run: node test/native/pi-model-configuration.mjs
