@@ -13,6 +13,7 @@
 *.cmd text eol=crlf
 *.png binary
 *.ico binary
+*.tgz binary
 *.woff2 binary
 tools/offline-audit/tests/fixtures/** -text
 apps/desktop/licenses/** -text
