@@ -55,6 +55,7 @@ const issueLabels: Record<string, string> = {
   incompatible_protocol: "Protocol not supported by this harness",
   unknown_harness: "Unknown harness",
   missing_configuration: "Missing model, endpoint or credential reference",
+  unsupported_output_budget: "An output token budget requires Pi or OpenCode",
   unsupported_effort: "This harness does not support an explicit effort",
   unsupported_thinking_format: "Thinking format requires Pi chat completions",
 };
@@ -448,6 +449,9 @@ function ResourceForm({
     config?.credentialEnv ?? "",
   );
   const [effort, setEffort] = useState(config?.effort ?? "");
+  const [maxOutputTokens, setMaxOutputTokens] = useState(
+    config?.maxOutputTokens?.toString() ?? "",
+  );
   const [access, setAccess] = useState<"read-only" | "workspace-write">(
     config?.access ?? "workspace-write",
   );
@@ -524,6 +528,13 @@ function ResourceForm({
               access,
               protocol: (protocol || null) as ExecutionConfig["protocol"],
               thinkingFormat: thinkingFormat ? "qwen" : null,
+              ...(["pi", "opencode"].includes(harness)
+                ? {
+                    maxOutputTokens: maxOutputTokens.trim()
+                      ? Number(maxOutputTokens)
+                      : null,
+                  }
+                : {}),
             },
           });
         } catch (error) {
@@ -550,6 +561,7 @@ function ResourceForm({
             value={harness}
             onChange={(event) => {
               setHarness(event.target.value);
+              setMaxOutputTokens("");
               setModel("");
               setEffort("");
               setProvider("");
@@ -756,6 +768,20 @@ function ResourceForm({
             </small>
           </label>
         </>
+      )}
+      {["pi", "opencode"].includes(harness) && (
+        <label>
+          {t("Maximum output tokens")}
+          <input
+            type="number"
+            min={1}
+            max={131072}
+            step={1}
+            value={maxOutputTokens}
+            onChange={(event) => setMaxOutputTokens(event.target.value)}
+            placeholder="8192"
+          />
+        </label>
       )}
       {saveError && (
         <p className="form-error" role="alert">

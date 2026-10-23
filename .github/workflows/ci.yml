@@ -30,3 +30,6 @@ jobs:
       - run: npm run test:smoke
       - run: node teamswarm/node_modules/playwright/cli.js install chromium
       - run: node test/browser/offline-drafts.mjs
+      - run: npm run harness:install -- pi opencode
+      - run: node test/browser/resource-configuration.mjs
+      - run: node test/native/opencode-output-budget.mjs

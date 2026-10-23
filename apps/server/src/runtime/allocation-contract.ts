@@ -35,6 +35,8 @@ export function checkExecutionCompatibility(c: ExecutionConfig): CompatibilityIs
   if (c.harness !== "codex" && !(subscription && c.harness === "claude-code") && c.effort != null) issues.push("unsupported_effort");
   if (c.thinkingFormat && (c.harness !== "pi" || (c.protocol && c.protocol !== "chat-completions")))
     issues.push("unsupported_thinking_format");
+  if (c.maxOutputTokens != null && !["pi", "opencode"].includes(c.harness))
+    issues.push("unsupported_output_budget");
   return issues;
 }
 

@@ -59,6 +59,11 @@ export function resourceIssues(config: ExecutionConfig): CompatibilityIssue[] {
       (config.protocol && config.protocol !== "chat-completions"))
   )
     issues.push("unsupported_thinking_format");
+  if (
+    config.maxOutputTokens != null &&
+    !["pi", "opencode"].includes(config.harness)
+  )
+    issues.push("unsupported_output_budget");
   return issues;
 }
 
@@ -171,6 +176,14 @@ export function configFields(config: ExecutionConfig): ResourceConfigField[] {
     { label: "API endpoint", value: config.baseUrl ?? "—" },
     { label: "Credential reference", value: config.credentialEnv ?? "—" },
     { label: "Effort", value: config.effort ?? "Default" },
+    ...(["pi", "opencode"].includes(config.harness)
+      ? [
+          {
+            label: "Maximum output tokens",
+            value: String(config.maxOutputTokens ?? 8192),
+          },
+        ]
+      : []),
     {
       label: "Access",
       value:
@@ -219,6 +232,7 @@ const configKeys = new Set([
   "access",
   "protocol",
   "thinkingFormat",
+  "maxOutputTokens",
 ]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
