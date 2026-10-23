@@ -288,7 +288,11 @@ export class HostContext {
         "Current required context exceeds hostContextMaxBytes; no requirement was silently truncated. Increase the configured budget or narrow current definitions.",
       );
     for (const message of eligible.slice(-8).reverse()) {
-      // Current work already includes the latest user request in full.
+      // The source request is already present in work.instructions. Keep the
+      // existing history window, but do not serialize that exact message twice.
+      // Equal text from other turns and follow-up instructions remain distinct.
+      if (message.id === run.sourceMessageId && message.content === work.instructions)
+        continue;
       const item = {
         id: message.id,
         role: message.role,

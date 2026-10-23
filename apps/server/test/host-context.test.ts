@@ -296,8 +296,8 @@ test("bounded long history, exact frame identity, searchable originals and recov
       first.attemptId!,
     );
     assert.ok(frame.inputBytes < 24000);
-    assert.equal(frame.input.history.length, 8);
-    assert.equal(frame.input.historyAccess.omittedMessages, 995);
+    assert.equal(frame.input.history.length, 7);
+    assert.equal(frame.input.historyAccess.omittedMessages, 996);
     assert.equal(
       frame.inputBytes,
       Buffer.byteLength(app.harness.requests.at(-1)!.input),
@@ -570,6 +570,27 @@ test("failed requests remain discoverable without production work and repeated t
       ),
       false,
     );
+  } finally {
+    await app.close();
+  }
+});
+
+test("Host history does not repeat the source request already carried by its work", async () => {
+  const app = await setup();
+  try {
+    const text = "Preserve the existing synthetic report and finish its verification.";
+    const first = await app.send(text);
+    const firstInput = JSON.parse(app.harness.requests.at(-1)!.input);
+    assert.equal(firstInput.work.instructions, text);
+    assert.equal(firstInput.history.some((m: any) => m.id === firstInput.sourceMessageId), false);
+    const second = await app.send(text);
+    const secondInput = JSON.parse(app.harness.requests.at(-1)!.input);
+    assert.equal(second.status, "submitted");
+    assert.equal(secondInput.work.instructions, text);
+    assert.equal(secondInput.history.some((m: any) => m.id === secondInput.sourceMessageId), false);
+    // Equal wording from an older user turn remains a distinct historical decision.
+    assert.ok(secondInput.history.some((m: any) => m.id === firstInput.sourceMessageId && m.content === text));
+    assert.equal(first.status, "submitted");
   } finally {
     await app.close();
   }
