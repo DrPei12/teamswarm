@@ -241,6 +241,7 @@ export class NativeHarness implements Harness {
         env.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
         env.OPENCODE_DISABLE_DEFAULT_PLUGINS = "true";
         env.OPENCODE_DISABLE_MODELS_FETCH = "true";
+        env.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX = String(c.maxOutputTokens ?? 8192);
         env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           share: "disabled",
