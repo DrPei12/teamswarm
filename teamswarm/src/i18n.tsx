@@ -8,6 +8,7 @@ import {
 
 export type Language = "en" | "zh-CN";
 export const zhCN: Record<string, string> = {
+  "Context window tokens": "上下文 token 数",
   "Maximum output tokens": "最大输出 token 数",
   "Loading earlier messages…": "正在加载更早的消息…",
   "Team capabilities": "团队能力与偏好",

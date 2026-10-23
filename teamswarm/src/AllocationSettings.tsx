@@ -454,6 +454,9 @@ function ResourceForm({
   const [maxOutputTokens, setMaxOutputTokens] = useState(
     config?.maxOutputTokens?.toString() ?? "",
   );
+  const [contextWindowTokens, setContextWindowTokens] = useState(
+    config?.contextWindowTokens?.toString() ?? "",
+  );
   const [access, setAccess] = useState<"read-only" | "workspace-write">(
     config?.access ?? "workspace-write",
   );
@@ -532,6 +535,9 @@ function ResourceForm({
               thinkingFormat: thinkingFormat ? "qwen" : null,
               ...(["pi", "opencode"].includes(harness)
                 ? {
+                    contextWindowTokens: contextWindowTokens.trim()
+                      ? Number(contextWindowTokens)
+                      : null,
                     maxOutputTokens: maxOutputTokens.trim()
                       ? Number(maxOutputTokens)
                       : null,
@@ -564,6 +570,7 @@ function ResourceForm({
             onChange={(event) => {
               setHarness(event.target.value);
               setMaxOutputTokens("");
+              setContextWindowTokens("");
               setModel("");
               setEffort("");
               setProvider("");
@@ -772,18 +779,32 @@ function ResourceForm({
         </>
       )}
       {["pi", "opencode"].includes(harness) && (
-        <label>
-          {t("Maximum output tokens")}
-          <input
-            type="number"
-            min={1}
-            max={131072}
-            step={1}
-            value={maxOutputTokens}
-            onChange={(event) => setMaxOutputTokens(event.target.value)}
-            placeholder="8192"
-          />
-        </label>
+        <div className="form-pair">
+          <label>
+            {t("Context window tokens")}
+            <input
+              type="number"
+              min={1024}
+              max={2097152}
+              step={1}
+              value={contextWindowTokens}
+              onChange={(event) => setContextWindowTokens(event.target.value)}
+              placeholder="131072"
+            />
+          </label>
+          <label>
+            {t("Maximum output tokens")}
+            <input
+              type="number"
+              min={1}
+              max={131072}
+              step={1}
+              value={maxOutputTokens}
+              onChange={(event) => setMaxOutputTokens(event.target.value)}
+              placeholder="8192"
+            />
+          </label>
+        </div>
       )}
       {saveError && (
         <p className="form-error" role="alert">

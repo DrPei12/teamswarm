@@ -47,7 +47,7 @@ try {
   const resources = ["pi", "opencode"].map(harness => ({
     id: `budget-${harness}`, version: 1, name: `${harness} resource`, description: "",
     config: { harness, model: "fixture", provider: "Fixture", baseUrl: "https://example.test/v1",
-      credentialEnv: "TEAMSWARM_RESOURCE_TEST_KEY", access: "read-only", protocol: "chat-completions", maxOutputTokens: 65536 },
+      credentialEnv: "TEAMSWARM_RESOURCE_TEST_KEY", access: "read-only", protocol: "chat-completions", maxOutputTokens: 65536, contextWindowTokens: 1048576, effort: harness === "pi" ? "max" : null },
   }));
   await page.getByLabel("Paste a package to preview").fill(JSON.stringify({
     format: "teamswarm-execution-resources", version: 1, resources, selections: [],
@@ -75,36 +75,53 @@ try {
     const original = `${harness} resource`, renamed = `${harness} renamed`;
     let form = await edit(original);
     assert.equal(await form.getByLabel("Maximum output tokens", { exact: true }).inputValue(), "65536");
+    assert.equal(await form.getByLabel("Context window tokens", { exact: true }).inputValue(), "1048576");
+    assert.equal(await form.getByLabel("Effort", { exact: true }).inputValue(), harness === "pi" ? "max" : "");
     await form.getByLabel("Name", { exact: true }).fill(renamed);
     await save(form);
     assert.equal((await exported(renamed)).config.maxOutputTokens, 65536);
+    assert.equal((await exported(renamed)).config.contextWindowTokens, 1048576);
+    assert.equal((await exported(renamed)).config.effort, harness === "pi" ? "max" : null);
     form = await edit(renamed);
     const budget = form.getByLabel("Maximum output tokens", { exact: true });
     for (const value of ["0", "131073", "1.5"]) {
       await budget.fill(value);
       assert.equal(await budget.evaluate(element => element.checkValidity()), false, value);
     }
+    const window = form.getByLabel("Context window tokens", { exact: true });
+    for (const value of ["1023", "2097153", "1024.5"]) {
+      await window.fill(value);
+      assert.equal(await window.evaluate(element => element.checkValidity()), false, value);
+    }
+    await window.fill("2097152");
     await budget.fill("131072");
     await save(form);
     assert.equal((await exported(renamed)).config.maxOutputTokens, 131072);
+    assert.equal((await exported(renamed)).config.contextWindowTokens, 2097152);
     form = await edit(renamed);
     await form.getByLabel("Maximum output tokens", { exact: true }).fill("");
+    await form.getByLabel("Context window tokens", { exact: true }).fill("");
     await save(form);
     assert.equal((await exported(renamed)).config.maxOutputTokens, null);
+    assert.equal((await exported(renamed)).config.contextWindowTokens, null);
     form = await edit(renamed);
     await form.getByLabel("Maximum output tokens", { exact: true }).fill("32768");
+    await form.getByLabel("Context window tokens", { exact: true }).fill("1048576");
     await form.getByRole("combobox", { name: /^Harness/ }).selectOption("codex");
     assert.equal(await form.getByLabel("Maximum output tokens", { exact: true }).count(), 0);
     await save(form);
     assert.equal((await exported(renamed)).config.maxOutputTokens ?? null, null);
+    assert.equal((await exported(renamed)).config.contextWindowTokens ?? null, null);
   }
   await page.getByRole("button", { name: "Add resource", exact: true }).click();
   const form = page.locator(".resource-form");
   await form.getByRole("combobox", { name: /^Harness/ }).selectOption("pi");
   assert.equal(await form.getByLabel("Maximum output tokens", { exact: true }).inputValue(), "");
   assert.equal(await form.getByLabel("Maximum output tokens", { exact: true }).getAttribute("placeholder"), "8192");
+  assert.equal(await form.getByLabel("Context window tokens", { exact: true }).inputValue(), "");
+  assert.equal(await form.getByLabel("Context window tokens", { exact: true }).getAttribute("placeholder"), "131072");
   if (process.env.TEAMSWARM_UI_SCREENSHOT) {
-    await form.scrollIntoViewIfNeeded();
+    await form.getByLabel("Maximum output tokens", { exact: true }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: process.env.TEAMSWARM_UI_SCREENSHOT });
     await page.setViewportSize({ width: 800, height: 1000 });
     await page.screenshot({ path: process.env.TEAMSWARM_UI_SCREENSHOT.replace(/\.png$/, "-800.png") });

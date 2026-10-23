@@ -191,6 +191,10 @@ export function configFields(config: ExecutionConfig): ResourceConfigField[] {
     ...(["pi", "opencode"].includes(config.harness)
       ? [
           {
+            label: "Context window tokens",
+            value: String(config.contextWindowTokens ?? 131072),
+          },
+          {
             label: "Maximum output tokens",
             value: String(config.maxOutputTokens ?? 8192),
           },
