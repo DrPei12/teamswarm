@@ -18,7 +18,7 @@ export const ModelRuntime={create:async()=>({registerProvider(){},setRuntimeApiK
 export const SessionManager={create:()=>({getSessionId:()=> 'fixture-session',getSessionFile:()=>null})};
 export const SettingsManager={inMemory:x=>x};
 export const createExtensionRuntime=()=>({});
-export const loadProjectContextFiles=({cwd,agentDir})=>{console.log(JSON.stringify({type:'loader',cwd,agentDir}));return [{path:path.join(cwd,'AGENTS.md'),content:readFileSync(path.join(cwd,'AGENTS.md'),'utf8')}];};
+export const loadProjectContextFiles=({cwd,agentDir})=>{console.log(JSON.stringify({type:'loader',cwd,agentDir}));const file=path.join(cwd,'AGENTS.md');return [{path:file,content:readFileSync(file,'utf8')}];};
 export const createAgentSession=async(opts)=>{
  console.log(JSON.stringify({type:'context',files:opts.resourceLoader.getAgentsFiles().agentsFiles,prompt:opts.resourceLoader.getSystemPrompt(),extensions:opts.resourceLoader.getExtensions().extensions}));
  return {session:{subscribe(){},prompt:async()=>{},messages:[{role:'assistant',stopReason:'stop'}],getLastAssistantText:()=> 'synthetic complete',dispose(){}}};

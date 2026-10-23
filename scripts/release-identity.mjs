@@ -23,7 +23,7 @@ function sourceCommit(root) {
   } catch { return "source-archive"; }
 }
 export function sourceIdentity(root) {
-  const files = filesUnder(root, ["package.json", "package-lock.json", "electron-builder.json", "apps/server/src", "apps/server/tsconfig.json", "apps/server/package.json", "apps/desktop/main.cjs", "apps/desktop/preload.cjs", "apps/desktop/credential-bridge.cjs", "apps/desktop/package.json", "apps/desktop/verify-package.cjs", "apps/desktop/service-package-lock.json", "apps/desktop/licenses", "packages/contracts", "teamswarm/src", "teamswarm/public", "teamswarm/licenses", "README.md", "README.zh-CN.md", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "docs", "examples", ".github", "teamswarm/package.json", "teamswarm/tsconfig.json", "teamswarm/vite.config.ts", "teamswarm/index.html", "config", "scripts"]);
+  const files = filesUnder(root, ["package.json", "package-lock.json", "electron-builder.json", "apps/server/src", "apps/server/tsconfig.json", "apps/server/package.json", "apps/desktop/main.cjs", "apps/desktop/preload.cjs", "apps/desktop/credential-bridge.cjs", "apps/desktop/package.json", "apps/desktop/verify-package.cjs", "apps/desktop/service-package-lock.json", "apps/desktop/licenses", "packages/contracts", "teamswarm/src", "teamswarm/public", "teamswarm/licenses", "README.md", "README.zh-CN.md", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md", "docs", "examples", ".github", "teamswarm/package.json", "teamswarm/tsconfig.json", "teamswarm/vite.config.ts", "teamswarm/index.html", "config", "scripts", "vendor"]);
   return { version: JSON.parse(readFileSync(path.join(root, "package.json"))).version,
     commit: sourceCommit(root),
     sourceSha256: digest(JSON.stringify(files)), files };
