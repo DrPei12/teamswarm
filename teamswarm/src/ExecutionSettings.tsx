@@ -353,7 +353,6 @@ function ManualExecutionSettings({
         <AllocationSettings
           teamId={teamId}
           workspace={workspace}
-          assignmentsOnly
         />
       )}
       {tab === "settings" && settings && (
