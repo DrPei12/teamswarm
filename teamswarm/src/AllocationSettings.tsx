@@ -55,6 +55,8 @@ const issueLabels: Record<string, string> = {
   incompatible_protocol: "Protocol not supported by this harness",
   unknown_harness: "Unknown harness",
   missing_configuration: "Missing model, endpoint or credential reference",
+  unsupported_context_window:
+    "A context window override requires Pi or OpenCode",
   unsupported_output_budget: "An output token budget requires Pi or OpenCode",
   unsupported_effort: "This harness does not support an explicit effort",
   unsupported_thinking_format: "Thinking format requires Pi chat completions",

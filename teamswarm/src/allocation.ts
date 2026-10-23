@@ -50,7 +50,14 @@ export function resourceIssues(config: ExecutionConfig): CompatibilityIssue[] {
       !config.baseUrl &&
       !config.credentialEnv
     ) &&
-    config.effort != null
+    config.effort != null &&
+    !(
+      config.harness === "pi" &&
+      (!config.protocol || config.protocol === "chat-completions") &&
+      ["minimal", "low", "medium", "high", "xhigh", "max"].includes(
+        config.effort,
+      )
+    )
   )
     issues.push("unsupported_effort");
   if (
@@ -64,6 +71,11 @@ export function resourceIssues(config: ExecutionConfig): CompatibilityIssue[] {
     !["pi", "opencode"].includes(config.harness)
   )
     issues.push("unsupported_output_budget");
+  if (
+    config.contextWindowTokens != null &&
+    !["pi", "opencode"].includes(config.harness)
+  )
+    issues.push("unsupported_context_window");
   return issues;
 }
 
@@ -225,6 +237,7 @@ const configKeys = new Set([
   "protocol",
   "thinkingFormat",
   "maxOutputTokens",
+  "contextWindowTokens",
 ]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>

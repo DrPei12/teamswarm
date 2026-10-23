@@ -34,7 +34,7 @@ test("all six Harness combinations agree with existing connection resolution", (
 test("static configuration failures never imply runtime availability", () => {
   assert.deepEqual(checkExecutionCompatibility(config({ harness: "toString" })), ["unknown_harness"]);
   assert.ok(checkExecutionCompatibility(config({ credentialEnv: null })).includes("missing_configuration"));
-  assert.ok(checkExecutionCompatibility(config({ effort: "high" })).includes("unsupported_effort"));
+  assert.ok(checkExecutionCompatibility(config({ effort: "unknown-effort" })).includes("unsupported_effort"));
   assert.ok(checkExecutionCompatibility(config({ harness: "opencode", thinkingFormat: "qwen" })).includes("unsupported_thinking_format"));
   assert.deepEqual(checkExecutionCompatibility(config({ thinkingFormat: "qwen" })), []);
   assert.deepEqual(checkExecutionCompatibility(executionConfig.parse({})), []); // legacy native Codex login
@@ -137,4 +137,20 @@ test("output budget survives portable resources and only compatible harnesses ac
   const parsed = portableAllocationPackage.parse(JSON.parse(JSON.stringify(input)));
   assert.equal(parsed.resources[0].config.maxOutputTokens, 32768);
   assert.equal(canReuseNativeSession(config(), config({ maxOutputTokens: 32768 })), false);
+});
+
+
+test("explicit Pi reasoning levels and model context preserve resource boundaries", () => {
+  for (const effort of ["low", "high", "max"]) {
+    assert.deepEqual(checkExecutionCompatibility(config({ effort, contextWindowTokens: 1048576 })), []);
+    assert.ok(checkExecutionCompatibility(config({ effort, protocol: "responses" })).includes("unsupported_effort"));
+    assert.ok(checkExecutionCompatibility(config({ harness: "opencode", effort })).includes("unsupported_effort"));
+  }
+  assert.ok(checkExecutionCompatibility(config({ harness: "codex", contextWindowTokens: 1048576 })).includes("unsupported_context_window"));
+  for (const value of [0, 1023, 1.5, 2097153, "1048576"]) assert.equal(executionConfig.safeParse({ contextWindowTokens: value }).success, false);
+  const input = bundle(); input.resources[0].config = config({ effort: "max", contextWindowTokens: 1048576 });
+  const parsed = portableAllocationPackage.parse(JSON.parse(JSON.stringify(input)));
+  assert.equal(parsed.resources[0].config.contextWindowTokens, 1048576);
+  assert.equal(parsed.resources[0].config.effort, "max");
+  assert.equal(canReuseNativeSession(config(), parsed.resources[0].config), false);
 });

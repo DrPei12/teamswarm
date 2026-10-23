@@ -32,11 +32,13 @@ export function checkExecutionCompatibility(c: ExecutionConfig): CompatibilityIs
   const subscription = ["codex", "claude-code", "grok"].includes(c.harness) && !c.baseUrl && !c.credentialEnv;
   if (!subscription && (!c.model || !c.baseUrl || !c.credentialEnv))
     issues.push("missing_configuration");
-  if (c.harness !== "codex" && !(subscription && c.harness === "claude-code") && c.effort != null) issues.push("unsupported_effort");
+  if (c.harness !== "codex" && !(subscription && c.harness === "claude-code") && c.effort != null && !(c.harness === "pi" && (!c.protocol || c.protocol === "chat-completions") && ["minimal", "low", "medium", "high", "xhigh", "max"].includes(c.effort))) issues.push("unsupported_effort");
   if (c.thinkingFormat && (c.harness !== "pi" || (c.protocol && c.protocol !== "chat-completions")))
     issues.push("unsupported_thinking_format");
   if (c.maxOutputTokens != null && !["pi", "opencode"].includes(c.harness))
     issues.push("unsupported_output_budget");
+  if (c.contextWindowTokens != null && !["pi", "opencode"].includes(c.harness))
+    issues.push("unsupported_context_window");
   return issues;
 }
 

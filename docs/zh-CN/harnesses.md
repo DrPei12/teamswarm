@@ -52,3 +52,5 @@ npm run harness:check -- pi opencode
 便携配置导入导出只迁移配置及凭据引用，目标设备上的密钥需要单独配置。
 
 Pi 和 OpenCode 的资源 API 配置或导入资源包中，可选字段 `maxOutputTokens` 用于设置每次模型响应的输出上限，包含推理 token。省略或设为 null 保留默认值 8192。请使用服务商支持的值；此设置不会改变服务商限制或价格。因长度上限结束的响应仍记为失败，不会自动重试。其他 Harness 会拒绝此覆盖设置，而不是静默忽略。
+
+资源 API/导入配置还支持为 Pi/OpenCode 设置 `contextWindowTokens`（默认 131072）。它是本地模型元数据，并不会扩大服务商容量；应按实际模型与渠道限制配置，输入、推理和输出仍须符合服务商窗口。Pi chat-completions 资源可在服务商支持时将 `effort` 设为 `minimal`、`low`、`medium`、`high`、`xhigh` 或 `max`，对应透传 `reasoning_effort`；显式映射 `max` 避免 Pi 静默降档。省略 effort 保留旧行为，但不代表服务商关闭推理。其他 Pi 协议与 OpenCode 拒绝此推理强度覆盖。增大上下文窗口并不修复输出长度截断。

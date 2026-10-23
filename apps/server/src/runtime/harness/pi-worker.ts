@@ -32,17 +32,19 @@ try {
       {
         id: spec.config.model,
         name: spec.config.model,
-        reasoning: Boolean(spec.config.thinkingFormat),
-        ...(spec.config.thinkingFormat
+        reasoning: Boolean(spec.config.thinkingFormat || spec.config.effort),
+        ...(spec.config.effort ? { thinkingLevelMap: { [spec.config.effort]: spec.config.effort } } : {}),
+        ...((spec.config.thinkingFormat || spec.config.effort)
           ? {
               compat: {
-                thinkingFormat: spec.config.thinkingFormat,
+                ...(spec.config.thinkingFormat ? { thinkingFormat: spec.config.thinkingFormat } : {}),
+                ...(spec.config.effort ? { supportsReasoningEffort: true } : {}),
                 supportsDeveloperRole: false,
               },
             }
           : {}),
         input: ["text"],
-        contextWindow: 131072,
+        contextWindow: spec.config.contextWindowTokens ?? 131072,
         maxTokens: spec.config.maxOutputTokens ?? 8192,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
@@ -108,7 +110,7 @@ try {
     agentDir: spec.home,
     modelRuntime: runtime,
     model: runtime.getModel("teamswarm", spec.config.model),
-    thinkingLevel: "off",
+    thinkingLevel: spec.config.effort ?? "off",
     resourceLoader,
     sessionManager: manager,
     settingsManager: pi.SettingsManager.inMemory({

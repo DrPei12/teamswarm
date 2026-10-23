@@ -718,6 +718,8 @@ export const zhCN: Record<string, string> = {
     "此 Harness 不支持显式推理强度",
   "Thinking format requires Pi chat completions":
     "思考格式仅在 Pi 的 Chat Completions 下可用",
+  "A context window override requires Pi or OpenCode":
+    "上下文窗口覆盖仅支持 Pi 或 OpenCode",
   "An output token budget requires Pi or OpenCode":
     "输出 token 预算仅支持 Pi 或 OpenCode",
   "Pi Thinking format (qwen)": "Pi 思考格式（qwen）",

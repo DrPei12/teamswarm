@@ -14,6 +14,8 @@ export interface ExecutionConfig {
   thinkingFormat?: "qwen" | null;
   /** Explicit Pi/OpenCode completion ceiling, including provider reasoning tokens. */
   maxOutputTokens?: number | null;
+  /** Model context metadata for Pi/OpenCode; does not enlarge provider limits. */
+  contextWindowTokens?: number | null;
 }
 export interface RuntimeSettings {
   teamId: string;
