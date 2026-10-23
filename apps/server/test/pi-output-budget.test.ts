@@ -24,6 +24,7 @@ export const ModelRuntime={create:async()=>({registerProvider(_id,c){console.log
 export const SessionManager={create:()=>({getSessionId:()=> 'fixture-session',getSessionFile:()=>null})};
 export const SettingsManager={inMemory:x=>x};
 export const createExtensionRuntime=()=>({});
+export const loadProjectContextFiles=()=>[];
 export const createAgentSession=async(opts)=>{console.log(JSON.stringify({type:'thinking',level:opts.thinkingLevel}));return {session:{subscribe(){},prompt:async()=>console.log(JSON.stringify({type:'prompt'})),messages:[{role:'assistant',stopReason:'length'}],getLastAssistantText:()=>'',dispose(){}}}};
 `);
     for (const [budget, effort, context] of [[undefined, undefined, undefined], [null, null, null], [32768, "high", 1048576], [65536, "max", 1048576]] as const) {
