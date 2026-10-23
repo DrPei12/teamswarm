@@ -73,7 +73,12 @@ try {
     getSkills: () => ({ skills: [], diagnostics: [] }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
+    getAgentsFiles: () => ({
+      agentsFiles: pi.loadProjectContextFiles({
+        cwd: spec.workspace,
+        agentDir: spec.home,
+      }),
+    }),
     getSystemPrompt: () => spec.instructions,
     getSystemPromptSource: () => undefined,
     getAppendSystemPrompt: () => [],
