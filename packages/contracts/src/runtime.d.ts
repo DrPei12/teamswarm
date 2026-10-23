@@ -12,6 +12,8 @@ export interface ExecutionConfig {
   protocol?: "responses" | "chat-completions" | "anthropic-messages" | null;
   /** Explicit provider wire convention; currently supported by Pi chat completions. */
   thinkingFormat?: "qwen" | null;
+  /** Explicit Pi/OpenCode completion ceiling, including provider reasoning tokens. */
+  maxOutputTokens?: number | null;
 }
 export interface RuntimeSettings {
   teamId: string;

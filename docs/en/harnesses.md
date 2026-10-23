@@ -53,4 +53,6 @@ Use read-only access for questions and inspection, and workspace-write access fo
 
 Resource export/import transfers configuration and credential references. Configure the referenced secrets separately on the destination device.
 
+For Pi and OpenCode, **Maximum output tokens** in the resource editor (or `maxOutputTokens` in the resource API and imported packages) sets the completion ceiling for each model response, including reasoning tokens. Omit it or set it to null to retain the 8192-token default. Set a value supported by your provider; this setting does not change provider limits or pricing. A response that ends at the length limit remains failed and is not automatically retried. Other harnesses reject this override rather than silently ignoring it.
+
 Pi loads project instruction files through its native context loader, including applicable ancestor instructions and its session agent directory. TeamSwarm keeps its coordination prompt and does not enable extension code through this loader. Project instructions remain subject to the configured access boundaries.

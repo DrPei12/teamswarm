@@ -127,3 +127,14 @@ test("session config gate never reuses across Harness/model/access/protocol chan
   const deepseek = config({ harness: "deepseek-harness" });
   assert.equal(canReuseNativeSession(deepseek, deepseek), false);
 });
+
+test("output budget survives portable resources and only compatible harnesses accept it", () => {
+  for (const harness of ["pi", "opencode", "codex", "claude-code", "grok", "deepseek-harness"]) {
+    assert.equal(checkExecutionCompatibility(config({ harness, maxOutputTokens: 32768 })).includes("unsupported_output_budget"), !["pi", "opencode"].includes(harness));
+  }
+  const input = bundle();
+  input.resources[0].config.maxOutputTokens = 32768;
+  const parsed = portableAllocationPackage.parse(JSON.parse(JSON.stringify(input)));
+  assert.equal(parsed.resources[0].config.maxOutputTokens, 32768);
+  assert.equal(canReuseNativeSession(config(), config({ maxOutputTokens: 32768 })), false);
+});
