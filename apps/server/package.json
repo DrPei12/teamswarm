@@ -1,6 +1,6 @@
 {
   "name": "@team/server",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
     "test": "tsx --test --test-concurrency=2 test/*.test.ts"
   },
   "dependencies": {
-    "@team/contracts": "0.4.2",
+    "@team/contracts": "0.4.3",
     "express": "^5.1.0",
     "jsonc-parser": "3.3.1",
     "smol-toml": "1.9.0",

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -46,14 +46,21 @@ test('bundled IPv6 validation rejects long zone strings within a bounded subproc
   `, entry], { timeout: 5000, windowsHide: true });
 });
 
-test('bundled npm installs a local package offline and runs its script', { timeout: 30000 }, async () => {
+test('isolated npm and npx install and run a local package offline', { timeout: 60000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'teamswarm-npm-runtime-'));
   const fixture = join(root, 'fixture');
   const project = join(root, 'project');
   try {
+    const runtime = join(root, 'runtime');
+    await cp(dirname(npmManifest), runtime, { recursive: true });
+    const npmCli = join(runtime, 'bin/npm-cli.js');
+    const npxCli = join(runtime, 'bin/npx-cli.js');
+    assert.ok((await readFile(join(runtime, 'docs/output/commands/npm-install.html'), 'utf8')).includes('npm-install'));
+    assert.ok((await readFile(join(runtime, 'man/man1/npm-install.1'), 'utf8')).length > 0);
     await mkdir(fixture);
     await mkdir(project);
-    await writeFile(join(fixture, 'package.json'), JSON.stringify({ name: 'teamswarm-npm-fixture', version: '1.0.0', main: 'index.cjs' }));
+    await writeFile(join(fixture, 'package.json'), JSON.stringify({ name: 'teamswarm-npm-fixture', version: '1.0.0', main: 'index.cjs', bin: { 'teamswarm-npm-fixture': 'bin.cjs' } }));
+    await writeFile(join(fixture, 'bin.cjs'), '#!/usr/bin/env node\nconsole.log(42);\n');
     await writeFile(join(fixture, 'index.cjs'), 'module.exports = 42;\n');
     await writeFile(join(project, 'package.json'), JSON.stringify({ name: 'fixture-project', version: '1.0.0', private: true,
       scripts: { verify: 'node verify.cjs' } }));
@@ -62,8 +69,11 @@ test('bundled npm installs a local package offline and runs its script', { timeo
       env: { ...process.env, npm_config_cache: join(root, 'cache'), npm_config_update_notifier: 'false' } };
     const version = await run(process.execPath, [npmCli, '--version'], options);
     assert.equal(version.stdout.trim(), pinned.version);
+    assert.equal((await run(process.execPath, [npxCli, '--version'], options)).stdout.trim(), pinned.version);
+    assert.match((await run(process.execPath, [npmCli, 'help-search', 'install'], options)).stdout, /npm help install/);
     await run(process.execPath, [npmCli, 'install', fixture, '--offline', '--install-links', '--ignore-scripts', '--no-audit', '--no-fund'], options);
     await run(process.execPath, [npmCli, 'run', 'verify'], options);
+    assert.equal((await run(process.execPath, [npxCli, '--offline', '--no-install', 'teamswarm-npm-fixture'], options)).stdout.trim(), '42');
     const installed = JSON.parse(await readFile(join(project, 'node_modules/teamswarm-npm-fixture/package.json'), 'utf8'));
     assert.equal(installed.version, '1.0.0');
   } finally {

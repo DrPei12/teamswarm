@@ -453,17 +453,19 @@ test("OpenCode receives the explicit output budget without changing its default"
   const saved = [process.env.TEAM_OPENCODE_BIN, process.env.TEAM_HARNESS_HOME, process.env.TEST_MODEL_KEY];
   try {
     const entry = path.join(root, "fixture.mjs");
-    writeFileSync(entry, `const c=JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);console.log(JSON.stringify({type:'fixture-budget',value:c.provider.teamswarm.models.fixture.limit.output,requestLimit:Number(process.env.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX)}));console.log(JSON.stringify({type:'step_finish',part:{reason:'stop'}}));`);
+    writeFileSync(entry, `const c=JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);console.log(JSON.stringify({type:'fixture-budget',value:c.provider.teamswarm.models.fixture.limit.output,context:c.provider.teamswarm.models.fixture.limit.context,requestLimit:Number(process.env.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX)}));console.log(JSON.stringify({type:'step_finish',part:{reason:'stop'}}));`);
     process.env.TEAM_OPENCODE_BIN = entry;
     process.env.TEAM_HARNESS_HOME = path.join(root, "native");
     process.env.TEST_MODEL_KEY = "fixture-only";
-    for (const budget of [undefined, null, 1, 32768, 65536, 131072]) {
+    for (const [budget, context] of [[undefined, undefined], [null, null], [1, 1024], [32768, 1048576], [65536, 1048576], [131072, 2097152]] as const) {
       const req = request(root);
-      req.config = { ...req.config, harness: "opencode", maxOutputTokens: budget };
+      req.config = { ...req.config, harness: "opencode", maxOutputTokens: budget, contextWindowTokens: context };
       let observed: number | undefined;
-      req.onEvent = (e) => { const event = e.data.event as any; if (event?.type === "fixture-budget") { observed = event.value; assert.equal(event.requestLimit, budget ?? 8192); } };
+      let observedContext: number | undefined;
+      req.onEvent = (e) => { const event = e.data.event as any; if (event?.type === "fixture-budget") { observed = event.value; observedContext = event.context; assert.equal(event.requestLimit, budget ?? 8192); } };
       assert.equal((await new NativeHarness("opencode").execute(req)).status, "completed");
       assert.equal(observed, budget ?? 8192);
+      assert.equal(observedContext, context ?? 131072);
     }
   } finally {
     ["TEAM_OPENCODE_BIN", "TEAM_HARNESS_HOME", "TEST_MODEL_KEY"].forEach((name, i) => {

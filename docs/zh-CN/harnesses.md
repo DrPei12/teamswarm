@@ -54,3 +54,7 @@ npm run harness:check -- pi opencode
 Pi 和 OpenCode 资源编辑器中的「最大输出 token 数」（资源 API 和导入包中的 `maxOutputTokens`）用于设置每次模型响应的输出上限，包含推理 token。省略或设为 null 保留默认值 8192。请使用服务商支持的值；此设置不会改变服务商限制或价格。因长度上限结束的响应仍记为失败，不会自动重试。其他 Harness 会拒绝此覆盖设置，而不是静默忽略。
 
 Pi 通过原生上下文加载器读取项目指令文件，包括适用的祖先目录指令与会话 agent 目录。TeamSwarm 保留协调提示词，不因此启用扩展代码；项目指令仍受配置的访问边界约束。
+
+「上下文 token 数」（`contextWindowTokens`）设置 Pi 和 OpenCode 的本地模型上下文大小，默认值为 131072。请按所选模型与服务商支持的容量填写；输入、推理和输出共用该容量。
+
+Pi Chat Completions 的「推理强度」支持 `minimal`、`low`、`medium`、`high`、`xhigh` 或 `max`，以服务商实际支持的值为准。该值作为 `reasoning_effort` 发送；留空使用服务商默认行为。其他 Pi 协议与 OpenCode 的此项需留空。
