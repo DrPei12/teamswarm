@@ -8,6 +8,8 @@ Windows 原生桌面构建使用较短的源码路径，例如 `C:\src\teamswarm
 
 构建代理使用 `roarr 3.0.0`，以字符串格式化处理固定消息和结构化上下文。npm 的局部版本覆盖使构建依赖树不再包含 `sprintf-js`。
 
+内置 npm 为 `11.21.1-teamswarm.1`，基于 npm 11.21.1，将其中的 `ip-address` 替换为上游 10.7.4，以处理 GHSA-rxp7-6hxx-x8q5。`npm ci` 安装固定的归档文件，桌面打包使用同一份运行时。来源和复现方法见 [运行时依赖](../../vendor/README.md)。
+
 ```sh
 npm ci
 npm run check
