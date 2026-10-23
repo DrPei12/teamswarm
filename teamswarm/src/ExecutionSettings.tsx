@@ -350,10 +350,7 @@ function ManualExecutionSettings({
         </button>
       </div>
       {tab === "resources" && (
-        <AllocationSettings
-          teamId={teamId}
-          workspace={workspace}
-        />
+        <AllocationSettings teamId={teamId} workspace={workspace} />
       )}
       {tab === "settings" && settings && (
         <form
