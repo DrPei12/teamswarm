@@ -52,3 +52,5 @@ In **Resources and allocation**, create named resources and assign member defaul
 Use read-only access for questions and inspection, and workspace-write access for changes. Switching harness, model, protocol or account can require a new native session. Project responsibilities, conversations and deliverable versions remain in TeamSwarm.
 
 Resource export/import transfers configuration and credential references. Configure the referenced secrets separately on the destination device.
+
+Pi loads project instruction files through its native context loader, including applicable ancestor instructions and its session agent directory. TeamSwarm keeps its coordination prompt and does not enable extension code through this loader. Project instructions remain subject to the configured access boundaries.
