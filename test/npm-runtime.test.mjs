@@ -22,6 +22,8 @@ test('installed npm and its actual SOCKS dependency match the audited runtime', 
   const runtime = readJson(new URL('../config/desktop-runtime.json', import.meta.url));
   assert.equal(npmRequire('./package.json').version, pinned.version);
   assert.equal(runtime.npmVersion, pinned.version);
+  assert.equal(npmRequire('undici/package.json').version, pinned.undici.version);
+  assert.equal(lock.packages['node_modules/npm/node_modules/undici'].version, pinned.undici.version);
   const socksRequire = createRequire(npmRequire.resolve('socks'));
   assert.equal(socksRequire('ip-address/package.json').version, pinned.ipAddress.version);
   assert.equal(lock.packages['node_modules/npm/node_modules/ip-address'].version, pinned.ipAddress.version);
@@ -79,4 +81,26 @@ test('isolated npm and npx install and run a local package offline', { timeout: 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+
+test('bundled fetch rejects excessive content codings without terminating the process', async () => {
+  const entry = npmRequire.resolve('undici');
+  await run(process.execPath, ['-e', `
+    const assert = require('node:assert/strict');
+    const net = require('node:net');
+    const { fetch, Agent } = require(process.argv[1]);
+    const server = net.createServer(socket => socket.once('data', () => {
+      socket.end('HTTP/1.1 200 OK\\r\\nContent-Encoding: gzip, gzip, gzip, gzip, gzip, gzip\\r\\nContent-Length: 100\\r\\nConnection: close\\r\\n\\r\\n');
+    }));
+    server.listen(0, '127.0.0.1', async () => {
+      const dispatcher = new Agent();
+      try {
+        await assert.rejects(fetch('http://127.0.0.1:' + server.address().port, { dispatcher }));
+        await new Promise(resolve => setTimeout(resolve, 100));
+        console.log('rejected-safely');
+      } catch (error) { console.error(error); process.exitCode = 1; }
+      finally { await dispatcher.close(); server.close(); }
+    });
+  `, entry], { timeout: 8000, windowsHide: true });
 });

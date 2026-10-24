@@ -1,4 +1,4 @@
-"""Reproduce the pinned npm bundle with the upstream ip-address security fix."""
+"""Reproduce the pinned npm bundle with pinned upstream dependency security fixes."""
 import argparse
 import base64
 import gzip
@@ -39,33 +39,39 @@ def entries(data):
 
 def rebuild(config):
     original = entries(fetch(config["npm"]))
-    replacement = entries(fetch(config["ipAddress"]))
-    prefix = "package/node_modules/ip-address/"
     package = json.loads(original["package/package.json"][0])
-    old_ip = json.loads(original[prefix + "package.json"][0])
-    new_ip = json.loads(replacement["package/package.json"][0])
-    if package["version"] != config["npm"]["version"] or old_ip["version"] != "10.7.2":
+    if package["version"] != config["npm"]["version"]:
         raise ValueError("Unexpected upstream npm bundle")
-    if new_ip["version"] != config["ipAddress"]["version"]:
-        raise ValueError("Unexpected replacement package")
-    files = {name: value for name, value in original.items() if not name.startswith(prefix)}
-    for name, value in replacement.items():
-        files[prefix + name.removeprefix("package/")] = value
+    replacements = [("ipAddress", "ip-address", "10.7.2"), ("undici", "undici", "6.29.0")]
+    files = dict(original)
+    prefixes = []
+    for key, name, old_version in replacements:
+        prefix = "package/node_modules/" + name + "/"
+        prefixes.append(prefix)
+        replacement = entries(fetch(config[key]))
+        old = json.loads(original[prefix + "package.json"][0])
+        new = json.loads(replacement["package/package.json"][0])
+        if old["name"] != name or old["version"] != old_version:
+            raise ValueError("Unexpected bundled package: " + name)
+        if new["name"] != name or new["version"] != config[key]["version"]:
+            raise ValueError("Unexpected replacement package: " + name)
+        files = {path: value for path, value in files.items() if not path.startswith(prefix)}
+        for path, value in replacement.items():
+            files[prefix + path.removeprefix("package/")] = value
     package["version"] = config["version"]
     files["package/package.json"] = ((json.dumps(package, indent=2) + "\n").encode(), 0o644)
     files["package/TEAMSWARM-NOTICE.md"] = (
         ("# npm runtime distributed with TeamSwarm\n\n"
-         f"Based on npm {config['npm']['version']}; replaces bundled ip-address 10.7.2 "
-         f"with the unmodified upstream {config['ipAddress']['version']} package for "
-         "GHSA-rxp7-6hxx-x8q5. The npm version identifies this distribution.\n\n"
+         f"Based on npm {config['npm']['version']}, with unmodified upstream "
+         f"ip-address {config['ipAddress']['version']} and undici {config['undici']['version']}. "
+         "These replace bundled ip-address 10.7.2 and undici 6.29.0.\n\n"
          "npm source and these modifications are redistributable under Artistic-2.0. "
          "Bundled dependencies retain their licenses. Upstream notices are preserved.\n\n"
          "Sources and reproduction: https://github.com/DrPei12/teamswarm/tree/main/vendor\n"
-         f"npm: {config['npm']['url']}\n"
-         f"ip-address: {config['ipAddress']['url']}\n").encode(), 0o644)
-    # No unrelated upstream bytes may change.
+         + "".join(f"{key}: {config[key]['url']}\n" for key in ["npm", "ipAddress", "undici"])
+         ).encode(), 0o644)
     for name, value in original.items():
-        if name != "package/package.json" and not name.startswith(prefix):
+        if name != "package/package.json" and not any(name.startswith(prefix) for prefix in prefixes):
             assert files[name] == value
     output = io.BytesIO()
     with gzip.GzipFile(fileobj=output, mode="wb", filename="", mtime=0, compresslevel=9) as zipped:
