@@ -107,6 +107,7 @@ export class ProjectHistory {
         CREATE INDEX IF NOT EXISTS project_${table}_team ON project_${table}(team_id);`);
       store.db.exec(`
         CREATE TABLE IF NOT EXISTS project_conversations (conversation_id TEXT PRIMARY KEY REFERENCES conversations(id), team_id TEXT NOT NULL REFERENCES teams(id), branch_id TEXT NOT NULL REFERENCES project_branches(id));
+        CREATE TABLE IF NOT EXISTS project_main_conversations (team_id TEXT PRIMARY KEY REFERENCES teams(id), conversation_id TEXT NOT NULL REFERENCES conversations(id));
         CREATE TABLE IF NOT EXISTS project_context_receipts (attempt_id TEXT NOT NULL, node_id TEXT NOT NULL, team_id TEXT NOT NULL, version TEXT NOT NULL, delivered_at TEXT, read_at TEXT, acknowledged_at TEXT, PRIMARY KEY(attempt_id, node_id));
         CREATE UNIQUE INDEX IF NOT EXISTS project_main_branch ON project_branches(team_id) WHERE json_extract(data, '$.baseNodeId') IS NULL;
         CREATE TRIGGER IF NOT EXISTS project_nodes_immutable BEFORE UPDATE ON project_nodes BEGIN SELECT RAISE(ABORT, 'History nodes are immutable'); END;
@@ -200,6 +201,19 @@ export class ProjectHistory {
       .prepare("INSERT INTO project_conversations VALUES (?,?,?)")
       .run(conversationId, teamId, main.id);
     return main;
+  }
+  mainConversation(teamId: string): string {
+    const saved = this.store.db.prepare("SELECT conversation_id FROM project_main_conversations WHERE team_id=?").get(teamId);
+    if (saved) return String(saved.conversation_id);
+    return this.store.transaction(() => {
+      const main = this.ensure(teamId);
+      const rows = this.store.db.prepare("SELECT id FROM conversations WHERE team_id=? ORDER BY created_at,rowid").all(teamId);
+      const first = rows.find(row => this.forConversation(teamId, String(row.id)).id === main.id);
+      const conversationId = first ? String(first.id) : this.store.teams.createConversation(teamId, "Host", null)!.id;
+      this.forConversation(teamId, conversationId);
+      this.store.db.prepare("INSERT INTO project_main_conversations VALUES (?,?)").run(teamId, conversationId);
+      return conversationId;
+    });
   }
   /** Import browser-only branch records into independent workspaces; never replay messages. */
   importConversation(
@@ -356,6 +370,12 @@ export class ProjectHistory {
       },
     );
   }
+  recordInsight(teamId: string, branchId: string, title: string, source: Source) {
+    const branch = this.branch(teamId, branchId);
+    const parent = this.node(teamId, branch.headNodeId);
+    // Discussion records do not change the effective project definition or capture files.
+    return this.append(branch, parent.id, "insight", title, parent.documents, source);
+  }
   private append(
     branch: ProjectBranch,
     expectedHeadId: string,
@@ -449,6 +469,7 @@ export class ProjectHistory {
     branchId: string,
     input: DefinitionInput,
     source: Source,
+    kind: "definition" | "merge" = "definition",
   ): ProjectNode {
     return this.store.transaction(() => {
       const branch = this.branch(teamId, branchId);
@@ -524,7 +545,7 @@ export class ProjectHistory {
       const node = this.append(
         branch,
         input.expectedHeadId,
-        "definition",
+        kind,
         input.title,
         documents,
         {
@@ -703,16 +724,6 @@ export class ProjectHistory {
     artifactIds: string[],
     captureWorkspace: boolean,
   ) {
-    if (captureWorkspace)
-      return this.checkpoint(
-        teamId,
-        branchId,
-        expectedHeadId,
-        title,
-        source,
-        artifactIds,
-        "delivery",
-      );
     return this.store.transaction(() => {
       const branch = this.branch(teamId, branchId);
       return this.append(
@@ -722,7 +733,7 @@ export class ProjectHistory {
         title,
         this.node(teamId, expectedHeadId).documents,
         source,
-        null,
+        captureWorkspace ? this.captureDefinition(branch) : null,
         artifactIds,
       );
     });

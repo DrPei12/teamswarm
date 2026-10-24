@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0
+
+- Assign explicit file ownership and reject overlapping writes and stale edits.
+- Reuse delegated responsibilities and preserve unpublished files when continuing work.
+- Prepare native check environments on demand and require fresh evidence after review instructions change.
+- Adopt selected discussion-branch ideas into mainline documents with user authorization and recorded sources.
+- Separate team progress from completed deliverables and preserve history layout and reading position.
+- Preserve existing task permissions during upgrades and retain completed deliveries when a workspace snapshot is unavailable.
+- Avoid repeating the current Host request in recent context.
+- Update Electron and service/build dependencies, including the bundled npm runtime.
+
 ## 0.4.3
 
 - Update the bundled npm runtime to use ip-address 10.7.4.

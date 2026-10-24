@@ -258,7 +258,7 @@ test("attempt tool bridge rejects an unknown capability and propagates authorita
 });
 
 test("native terminal receipts survive adapter replacement; invalid bindings and unavailable configuration fail before execution", async () => {
-  const root = mkdtempSync(path.join(process.cwd(), ".test-harness-"));
+  const root = mkdtempSync(path.join(tmpdir(), ".test-harness-"));
   const saved = {
     bin: process.env.TEAM_CLAUDE_CODE_BIN,
     home: process.env.TEAM_HARNESS_HOME,
@@ -340,7 +340,7 @@ test(
   "native identity failure prevents dispatch; observation and receipt failures retain unknown ownership",
   { timeout: 15000 },
   async () => {
-    const root = mkdtempSync(path.join(process.cwd(), ".test-native-failure-"));
+    const root = mkdtempSync(path.join(tmpdir(), ".test-native-failure-"));
     const names = [
       "TEAM_CLAUDE_CODE_BIN",
       "TEAM_HARNESS_HOME",
@@ -413,7 +413,7 @@ test(
 );
 
 test("credential files load atomically and reject executable or ambiguous token content", () => {
-  const root = mkdtempSync(path.join(process.cwd(), ".test-credential-"));
+  const root = mkdtempSync(path.join(tmpdir(), ".test-credential-"));
   const name = "TEAM_UNIT_CREDENTIAL_TEST";
   const saved = process.env[name];
   delete process.env[name];

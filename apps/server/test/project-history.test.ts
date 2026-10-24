@@ -783,3 +783,18 @@ test("an unknown old Host does not block a fresh branch; writable checkpoints re
     await t.close();
   }
 });
+
+
+test("a delivery retains its immutable artifacts when workspace snapshot capture fails", async () => {
+  const t = await setup();
+  try {
+    writeFileSync(path.join(t.workspace, "large.bin"), Buffer.alloc(8 * 1024 * 1024 + 1));
+    const context = t.service.runtime.history.context(t.team.id, t.main.id);
+    const node = t.service.runtime.history.delivery(t.team.id, t.main.id, context.nodeId,
+      "Completed report", { actor: "runtime" }, [], true);
+    assert.equal(node.kind, "delivery");
+    assert.equal(node.workspaceSnapshotId, null);
+    assert.equal(t.service.runtime.history.node(t.team.id, node.id).id, node.id);
+    assert.ok(t.service.runtime.store.events(t.team.id, 0, 1000).some(e => e.type === "project.checkpoint_unavailable"));
+  } finally { await t.close(); }
+});

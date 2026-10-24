@@ -110,6 +110,7 @@ function diffPreferences(old: Workspace, next: Workspace): PreferencesPatch {
       "color",
       "canvasViewports",
       "hostPosition",
+      "historyPositions",
     ] as const)
       if (JSON.stringify(previous?.[field]) !== JSON.stringify(team[field]))
         values[field] = team[field] ?? null;

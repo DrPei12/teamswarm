@@ -514,6 +514,7 @@ test("saved reasoning retains original sources, optimistic revisions, rejected i
       reason: "Avoid document piles",
       sourceMessageIds: [f.run.sourceMessageId],
     };
+    const beforeContext = f.service.runtime.history.context(f.team.id, f.branch.id);
     const first = f.service.runtime.records.saveInsight(
       f.team.id,
       f.branch.id,
@@ -522,6 +523,14 @@ test("saved reasoning retains original sources, optimistic revisions, rejected i
       f.host.id,
     );
     assert.equal(first.revision, 1);
+    assert(first.nodeId);
+    const ideaNode = f.service.runtime.history.node(f.team.id, first.nodeId);
+    assert.equal(ideaNode.kind, "insight");
+    assert.equal(ideaNode.source.insightId, first.id);
+    assert.deepEqual(ideaNode.source.messageIds, input.sourceMessageIds);
+    assert.equal(ideaNode.contextVersion, beforeContext.contextVersion);
+    assert.equal(ideaNode.workspaceSnapshotId, null);
+    assert.deepEqual(ideaNode.documents, f.service.runtime.history.node(f.team.id, beforeContext.nodeId).documents);
     assert.throws(
       () =>
         f.service.runtime.records.saveInsight(
@@ -564,6 +573,8 @@ test("saved reasoning retains original sources, optimistic revisions, rejected i
       "user",
     );
     assert.equal(second.revision, 2);
+    assert.notEqual(second.nodeId, first.nodeId);
+    assert.equal(f.service.runtime.history.node(f.team.id, first.nodeId).source.insightId, first.id);
     assert.deepEqual(second.sourceMessageIds, first.sourceMessageIds);
     f.run.state = "completed";
     f.store.save("runs", f.run);

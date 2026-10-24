@@ -18,7 +18,7 @@ import {
   toolValue,
   field,
   type ActivityGroup,
-} from "./activityPresentation";
+} from "./activityPresentation.ts";
 
 function GroupedActivity({
   group,
@@ -137,8 +137,14 @@ function ToolDetails({ item }: { item: TranscriptItem }) {
         {item.output && <pre className="activity-output">{item.output}</pre>}
       </>
     );
-  const args = toolValue(item.text),
-    result = toolValue(item.output);
+  const rawArgs = toolValue(item.text);
+  const args =
+    item.title === "team_adopt_branch" &&
+    rawArgs.definition &&
+    typeof rawArgs.definition === "object"
+      ? (rawArgs.definition as Record<string, unknown>)
+      : rawArgs;
+  const result = toolValue(item.output);
   const lines = [
     "summary",
     "objective",
@@ -159,7 +165,10 @@ function ToolDetails({ item }: { item: TranscriptItem }) {
       if (document && typeof document === "object") {
         const d = document as Record<string, unknown>;
         lines.push(
-          [field(d, "title"), field(d, "text") || field(d, "body")]
+          [
+            field(d, "title"),
+            field(d, "content") || field(d, "text") || field(d, "body"),
+          ]
             .filter(Boolean)
             .join("\n"),
         );
@@ -192,6 +201,9 @@ const toolLabels: Record<string, string> = {
   team_select_resource: "Select execution resource",
   team_derive_resource: "Save model choice",
   team_project_context: "Read project context",
+  team_adoption_context: "Read project context",
+  team_adopt_branch: "Adopt ideas into mainline",
+  team_save_insight: "Preserve an idea",
   team_state: "Read team progress",
   team_submit_result: "Submit work result",
   team_read_artifact: "Read submitted file",

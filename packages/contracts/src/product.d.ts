@@ -82,6 +82,7 @@ export type Member = {
   y?: number;
   workId?: string;
   error?: string | null;
+  conversationStatus?: "paused" | "error";
 };
 export type Connection = {
   id: string;
@@ -180,13 +181,16 @@ export type Delivery = {
   version: number;
   files?: Attachment[];
   artifactIds?: { id: string; name: string }[];
+  branchId?: string;
   hostDelivery?: {
     status: "pending" | "delivered";
     contextVersion: string;
     workId: string;
     attemptId: string;
     stale: boolean;
+    superseded?: boolean;
   };
+  outcome?: boolean;
 };
 export type Plugin = {
   id: string;
@@ -202,8 +206,10 @@ export type Team = {
   context?: { used: number; limit: number };
   configured?: boolean;
   lastChatId?: string;
+  mainChatId?: string;
   canvasViewports?: Record<string, { x: number; y: number; zoom: number }>;
   hostPosition?: { x: number; y: number };
+  historyPositions?: Record<string, { x: number; y: number }>;
 };
 export type Skill = {
   id: string;
@@ -232,6 +238,7 @@ export type Workspace = {
   members: Member[];
   connections: Connection[];
   deliveries: Delivery[];
+  updates?: Delivery[];
   plugins: Plugin[];
   eventIds?: string[];
   service?: { revision: number; migrated: boolean };

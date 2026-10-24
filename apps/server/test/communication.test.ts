@@ -8,6 +8,7 @@ import {
   existsSync,
 } from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { createApp } from "../src/app.js";
 import type {
@@ -33,6 +34,208 @@ const config: ExecutionConfig = {
   access: "workspace-write",
 };
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+test("repair continuation preserves its unpublished candidate instead of an older published path", async () => {
+  const t = await setup();
+  try {
+    t.harness.finish(t.works[0].id);
+    await until(() => t.state(t.works[0].id).status === "failed");
+    const first = await t.tool(t.hostId, "team_delegate", {
+      memberId: t.members[0].id, title: "Initial published result", instructions: "Create the first version.",
+      acceptanceCriteria: ["File has intended content"], inputArtifactIds: [], dependsOn: [],
+      writePaths: ["continuation.txt"], verification: "self-check",
+    });
+    await until(() => t.harness.call(first.id));
+    const file = path.join(t.workspace, "continuation.txt");
+    writeFileSync(file, "published");
+    await t.tool(first.id, "team_submit_result", {
+      summary: "Published", files: ["continuation.txt"], usedArtifactIds: [],
+      selfChecks: [{ criterion: first.acceptanceCriteria[0], evidence: "Read published bytes.", evidenceEventIds: [] }],
+    });
+    t.harness.finish(first.id);
+    await until(() => t.state(first.id).status === "self_checked");
+    const candidate = await t.tool(t.hostId, "team_delegate", {
+      memberId: t.members[0].id, title: "Unpublished candidate", instructions: "Revise for independent review.",
+      acceptanceCriteria: first.acceptanceCriteria, inputArtifactIds: t.state(first.id).artifactIds, dependsOn: [],
+      continuationOf: first.id, writePaths: ["continuation.txt"], verification: "independent",
+    });
+    await until(() => t.harness.call(candidate.id));
+    writeFileSync(file, "candidate");
+    await t.tool(candidate.id, "team_submit_result", {
+      summary: "Candidate", files: ["continuation.txt"], usedArtifactIds: candidate.inputs,
+    });
+    t.harness.finish(candidate.id);
+    await until(() => t.state(candidate.id).status === "submitted");
+    const submitted = t.state(candidate.id);
+    const response = await t.api(`/product/teams/${t.team.id}/works/${candidate.id}/messages`, {
+      mode: "revise", expectedRevision: submitted.revision, clientRequestId: randomUUID(),
+      content: "Continue this candidate and preserve its exact input version.",
+    });
+    assert.equal(response.status, 200);
+    const next = response.body.work;
+    assert.equal(next.continuationOf, candidate.id);
+    for (const id of submitted.artifactIds) assert.ok(next.inputs.includes(id), "Own unpublished artifacts remain exact inputs.");
+    await until(() => t.harness.call(next.id) || t.state(next.id).status === "failed");
+    assert.equal(t.state(next.id).status, "running");
+    assert.equal(readFileSync(file, "utf8"), "candidate");
+  } finally { await t.close(); }
+});
+
+test("stale submitted inputs reject delegation before creating work or waking a follow-up", async () => {
+  const t = await setup();
+  try {
+    const source = t.state(t.works[0].id);
+    source.verification = "self-check";
+    t.service.runtime.store.save("works", source);
+    const file = path.join(t.harness.call(source.id).request.workspace, "A.txt");
+    writeFileSync(file, "original");
+    await t.tool(source.id, "team_submit_result", {
+      summary: "Source", files: ["A.txt"], usedArtifactIds: [],
+      selfChecks: source.acceptanceCriteria.map(criterion => ({ criterion, evidence: "Read exact source.", evidenceEventIds: [] })),
+    });
+    t.harness.finish(source.id);
+    await until(() => t.state(source.id).status === "self_checked");
+    writeFileSync(file, "new unsubmitted change");
+    const store = t.service.runtime.store;
+    const works = store.list<Work>("works", t.team.id).map(w => w.id);
+    const attempts = store.list<Attempt>("attempts", t.team.id).map(a => a.id);
+    await assert.rejects(t.tool(t.hostId, "team_delegate", {
+      memberId: t.members[1].id, title: "Consume source", instructions: "Read the submitted source.",
+      acceptanceCriteria: ["Consumed current source"], inputArtifactIds: t.state(source.id).artifactIds,
+      dependsOn: [source.id], writePaths: [], verification: "self-check",
+    }), { code: "stale_delegation_input" });
+    assert.deepEqual(store.list<Work>("works", t.team.id).map(w => w.id), works);
+    assert.deepEqual(store.list<Attempt>("attempts", t.team.id).map(a => a.id), attempts);
+    assert.equal(readFileSync(file, "utf8"), "new unsubmitted change");
+  } finally { await t.close(); }
+});
+
+test("responsibility retries reuse work across wording and ordering changes without weakening its contract", async () => {
+  const t = await setup();
+  try {
+    const args = { memberId: t.members[0].id, title: "Small correction", instructions: "Correct one label.",
+      acceptanceCriteria: ["Label is correct", "Other content retained"], inputArtifactIds: [], dependsOn: [],
+      writePaths: ["label.txt"], responsibilityKey: "label-correction", verification: "self-check" };
+    const first = await t.tool(t.hostId, "team_delegate", args);
+    const second = await t.tool(t.hostId, "team_delegate", {
+      ...args, title: "Continue label correction", instructions: "Please correct the same label.",
+      acceptanceCriteria: [...args.acceptanceCriteria].reverse(),
+    });
+    assert.equal(second.id, first.id);
+    assert.equal(second.delegationReuse.instructionsApplied, false);
+    assert.equal(t.state(first.id).instructions, args.instructions);
+    assert.equal(t.state(first.id).verification, "self-check");
+    await assert.rejects(t.tool(t.hostId, "team_delegate", { ...args, acceptanceCriteria: ["Only one weaker check"] }),
+      { code: "responsibility_changed" });
+    assert.equal(t.service.runtime.store.list<Work>("works", t.team.id).filter(w => w.responsibilityKey === args.responsibilityKey).length, 1);
+    const implicit = { ...args, responsibilityKey: undefined, writePaths: ["other.txt"] };
+    const owned = await t.tool(t.hostId, "team_delegate", implicit);
+    const repeated = await t.tool(t.hostId, "team_delegate", { ...implicit, title: "Renamed", instructions: "Rephrased request." });
+    assert.equal(repeated.id, owned.id, "Declared ownership also gives legacy callers stable deduplication.");
+    assert.equal(t.harness.calls.filter(c => c.work.id === first.id).length, 0, "Busy member did not receive extra executions.");
+  } finally { await t.close(); }
+});
+
+test("review instruction updates reuse the running review and require new acknowledgment and command evidence", async () => {
+  const t = await setup();
+  try {
+    const source = t.works[0];
+    writeFileSync(path.join(t.harness.call(source.id).request.workspace, "A.txt"), "source");
+    await t.tool(source.id, "team_submit_result", { summary: "Source", files: ["A.txt"], usedArtifactIds: [] });
+    t.harness.finish(source.id);
+    await until(() => t.state(source.id).status === "submitted");
+    const reviewer = await t.tool(t.hostId, "team_add_member", {
+      name: "Updated reviewer", responsibility: "Independent checks", config: { ...config, access: "read-only" },
+    });
+    const args = { workId: source.id, reviewerMemberId: reviewer.id, instructions: "Run original checks." };
+    const review = await t.tool(t.hostId, "team_review", args);
+    await until(() => t.harness.call(review.id));
+    for (const id of review.inputs) await t.tool(review.id, "team_read_artifact", { artifactId: id });
+    const store = t.service.runtime.store;
+    store.event(t.team.id, "execution.item",
+      { type: "commandExecution", exitCode: 0, startedAt: new Date(0).toISOString() }, t.state(review.id), t.state(review.id).attemptId!);
+    const oldCheck = store.db.prepare("SELECT id FROM runtime_events WHERE attempt_id=? AND type='execution.item' ORDER BY sequence DESC LIMIT 1").get(t.state(review.id).attemptId!)!;
+    const updated = await t.tool(t.hostId, "team_review", { ...args, instructions: "Also verify invalid input." });
+    assert.equal(updated.id, review.id);
+    assert.equal(updated.reviewInstructionsRevision, 2);
+    const unchanged = await t.tool(t.hostId, "team_review", { ...args, instructions: "Also verify invalid input." });
+    assert.equal(unchanged.reviewInstructionsRevision, 2);
+    await assert.rejects(t.tool(review.id, "team_review_evidence", {}), { code: "review_instructions_changed" });
+    const read = await t.tool(review.id, "team_read_work", { workId: review.id });
+    assert.match(read.work.instructions, /invalid input/);
+    const criteria = source.acceptanceCriteria.map(criterion => ({
+      criterion, passed: true, evidence: "Native command verified source.", evidenceType: "native_check", evidenceEventIds: [oldCheck.id],
+    }));
+    await assert.rejects(t.tool(review.id, "team_accept_work", { workId: source.id, verdict: "accepted", criteria }), { code: "review_check_outdated" });
+    store.event(t.team.id, "execution.item",
+      { type: "commandExecution", exitCode: 0, startedAt: new Date().toISOString() }, t.state(review.id), t.state(review.id).attemptId!);
+    const fresh = store.db.prepare("SELECT id FROM runtime_events WHERE attempt_id=? AND type='execution.item' ORDER BY sequence DESC LIMIT 1").get(t.state(review.id).attemptId!)!;
+    const accepted = await t.tool(review.id, "team_accept_work", {
+      workId: source.id, verdict: "accepted", criteria: criteria.map(c => ({ ...c, evidenceEventIds: [fresh.id] })),
+    });
+    assert.equal(accepted.verdict, "accepted");
+    assert.equal(t.harness.calls.filter(c => c.work.id === review.id).length, 1, "Updating instructions does not restart the native session.");
+  } finally { await t.close(); }
+});
+
+test("queued review instruction updates reach the first native request without a second execution", async () => {
+  const t = await setup();
+  try {
+    const [first, second] = t.works;
+    for (const source of [first, second]) {
+      writeFileSync(path.join(t.harness.call(source.id).request.workspace, source.title + ".txt"), "source");
+      await t.tool(source.id, "team_submit_result", {
+        summary: "Source " + source.title, files: [source.title + ".txt"], usedArtifactIds: [],
+      });
+      t.harness.finish(source.id);
+    }
+    await until(() => t.state(first.id).status === "submitted" && t.state(second.id).status === "submitted");
+    const reviewer = await t.tool(t.hostId, "team_add_member", {
+      name: "Queued review reviewer", responsibility: "Independent read-only checks",
+      config: { ...config, access: "read-only" },
+    });
+    // The first review keeps the reviewer busy, so the second review is genuinely queued.
+    const active = await t.tool(t.hostId, "team_review", {
+      workId: first.id, reviewerMemberId: reviewer.id, instructions: "Check the first source.",
+    });
+    await until(() => t.harness.call(active.id) && t.state(active.id).status === "running");
+    const originalInstructions = "Run the original queued checks.";
+    const args = { workId: second.id, reviewerMemberId: reviewer.id, instructions: originalInstructions };
+    const queued = await t.tool(t.hostId, "team_review", args);
+    assert.equal(t.state(queued.id).status, "queued");
+    assert.equal(t.harness.call(queued.id), undefined, "A queued review has no native execution yet.");
+    const revisedInstructions = "Also verify the queued input binding.";
+    const updated = await t.tool(t.hostId, "team_review", { ...args, instructions: revisedInstructions });
+    assert.equal(updated.id, queued.id);
+    assert.equal(updated.reviewInstructionsRevision, 2);
+    assert.equal(t.state(queued.id).status, "queued");
+    const repeated = await t.tool(t.hostId, "team_review", { ...args, instructions: revisedInstructions });
+    assert.equal(repeated.id, queued.id);
+    assert.equal(repeated.reviewInstructionsRevision, 2, "Repeating the same queued update is idempotent.");
+    assert.equal(
+      t.service.runtime.store.list<Work>("works", t.team.id).filter((w) => w.reviewOf === second.id).length, 1,
+      "Instruction updates reuse the one queued review work.",
+    );
+    const target = t.state(second.id);
+    assert.deepEqual(updated.inputs, target.artifactIds, "The review keeps the target's exact immutable input artifacts.");
+    assert.deepEqual(updated.acceptanceCriteria, target.acceptanceCriteria, "The review keeps the target's original acceptance criteria.");
+    t.harness.finish(active.id);
+    await until(() => t.harness.call(queued.id));
+    const firstRequest = t.harness.call(queued.id);
+    assert.match(firstRequest.work.instructions, /Also verify the queued input binding\./);
+    assert.doesNotMatch(firstRequest.work.instructions, /Run the original queued checks\./);
+    assert.match(firstRequest.request.input, /Also verify the queued input binding\./, "The dispatch request itself carries the revised instructions.");
+    assert.deepEqual(firstRequest.work.inputs, target.artifactIds);
+    assert.deepEqual(firstRequest.work.acceptanceCriteria, target.acceptanceCriteria);
+    assert.equal(t.harness.calls.filter((call) => call.work.id === queued.id).length, 1);
+    t.service.runtime.pump();
+    await delay(50);
+    assert.equal(
+      t.harness.calls.filter((call) => call.work.id === queued.id).length, 1,
+      "Updating instructions while queued does not cause a second native execution.",
+    );
+  } finally { await t.close(); }
+});
 async function until(check: () => unknown) {
   const end = Date.now() + 8000;
   while (!check()) {
@@ -88,7 +291,7 @@ class ControlledHarness implements Harness {
   }
 }
 async function setup() {
-  const root = mkdtempSync(path.join(process.cwd(), ".test-communication-"));
+  const root = mkdtempSync(path.join(tmpdir(), ".test-communication-"));
   const workspace = path.join(root, "project");
   mkdirSync(workspace);
   writeFileSync(path.join(workspace, "base.txt"), "shared base");
@@ -258,6 +461,55 @@ test("Host dependency reports preserve repair threads and recognize self-checked
   }
 });
 
+test("finalized review reports unblock follow-up without recursively accepting reviews or bypassing producer acceptance", async () => {
+  for (const verdict of ["accepted", "rejected", null] as const) {
+    const t = await setup();
+    try {
+      const [source, busy] = t.works;
+      const store = t.service.runtime.store;
+      writeFileSync(path.join(t.harness.call(source.id).request.workspace, "A.txt"), "source");
+      await t.tool(source.id, "team_submit_result", { summary: "Source", files: ["A.txt"], usedArtifactIds: [] });
+      t.harness.finish(source.id);
+      await until(() => t.state(source.id).status === "submitted");
+      const reviewer = await t.tool(t.hostId, "team_add_member", {
+        name: "Report reviewer", responsibility: "Review source", config: { ...config, access: "read-only" },
+      });
+      const review = await t.tool(t.hostId, "team_review", {
+        workId: source.id, reviewerMemberId: reviewer.id, instructions: "Inspect source and record the verdict.",
+      });
+      await until(() => t.harness.call(review.id));
+      for (const id of review.inputs) await t.tool(review.id, "team_read_artifact", { artifactId: id });
+      if (verdict) await t.tool(review.id, "team_accept_work", {
+        workId: source.id, verdict,
+        criteria: source.acceptanceCriteria.map((criterion) => ({ criterion, passed: verdict === "accepted",
+          evidence: "Inspected immutable source bytes.", evidenceType: "review_judgment", evidenceEventIds: [] })),
+      });
+      t.harness.finish(review.id);
+      await until(() => t.state(review.id).status === "submitted");
+      const reportInputs = t.state(review.id).artifactIds;
+      assert.ok(reportInputs.length, "The actual review result was captured as an immutable input.");
+      const args = { memberId: busy.memberId, instructions: "Read the finalized review report.",
+        acceptanceCriteria: ["Report read"], inputArtifactIds: reportInputs, workspaceMode: "isolated" };
+      const follow = await t.tool(t.hostId, "team_delegate", { ...args, title: "Document review outcome", dependsOn: [] });
+      const explicit = await t.tool(t.hostId, "team_delegate", { ...args, title: "Integrate accepted producer", dependsOn: [source.id] });
+      const blocked = async (id: string) => (await t.tool(t.hostId, "team_state", {})).works.find((w: Work) => w.id === id).blockedOn;
+      assert.equal((await blocked(follow.id)).length, verdict ? 0 : 1);
+      assert.equal((await blocked(explicit.id)).length, verdict === "accepted" ? 0 : verdict === "rejected" ? 1 : 2);
+      if (verdict) {
+        store.setStatus(t.state(source.id), "submitted");
+        assert.equal((await blocked(follow.id))[0].requiredStatus, "submitted_with_current_verdict", "A historical verdict does not finalize a changed producer state.");
+        store.setStatus(t.state(source.id), verdict);
+        t.harness.finish(busy.id);
+        await until(() => t.harness.call(follow.id));
+        assert.deepEqual(t.harness.call(follow.id).work.inputs, reportInputs, "Dispatch retains the assigned report; no replacement or unbound reference is needed.");
+      } else {
+        assert.equal((await blocked(follow.id))[0].requiredStatus, "submitted_with_current_verdict");
+        assert.equal(t.harness.call(follow.id), undefined, "An unrecorded review never dispatches downstream work.");
+      }
+    } finally { await t.close(); }
+  }
+});
+
 test("blocked integration exposes missing acceptance and requests one bounded coordination turn per unchanged state", async () => {
   const t = await setup();
   try {
@@ -407,6 +659,49 @@ test("a repeated branch coordination reminder does not keep an otherwise complet
   } finally {
     await t.close();
   }
+});
+
+test("late collaboration closes an already verified Run, including durable restart, without fabricating acceptance", async () => {
+  const t = await setup();
+  try {
+    const store = t.service.runtime.store;
+    const run = store.get<Run>("runs", t.team.id, t.state(t.hostId).runId);
+    await t.api(`${t.prefix}/runs/${run.id}/pause`, {});
+    await until(() => t.works.every((w) => t.state(w.id).status === "interrupted"));
+    for (const work of t.works) store.setStatus(t.state(work.id), "superseded");
+    const ancestor = t.state(t.works[1].id);
+    store.setStatus(ancestor, "submitted");
+    const production = t.state(t.works[0].id);
+    production.workspaceMode = "shared";
+    production.continuationOf = ancestor.id;
+    store.setStatus(production, "accepted");
+    const host = t.state(t.hostId);
+    host.kind = "host-followup";
+    store.setStatus(host, "submitted");
+    const helper = store.createWork(run, production.memberId, "Late exchange", "Reply and end", [], [], []);
+    helper.kind = "collaboration";
+    store.save("works", helper);
+    run.state = "active";
+    store.save("runs", run);
+    await until(() => t.state(helper.id).status === "running");
+    assert.equal(store.get<Run>("runs", t.team.id, run.id).state, "active");
+    const calls = t.harness.calls.length;
+    t.harness.finish(helper.id);
+    await until(() => store.get<Run>("runs", t.team.id, run.id).state === "completed");
+    assert.equal(t.harness.calls.length, calls, "Closing an exchange needs no duplicate Host or production turn");
+    // The old service could persist exactly this idle-but-active state.
+    store.save("runs", {...store.get<Run>("runs", t.team.id, run.id), state: "active"});
+    await t.restart();
+    await until(() => t.service.runtime.store.get<Run>("runs", t.team.id, run.id).state === "completed");
+    assert.equal(t.harness.calls.length, calls);
+    // Losing independent acceptance must still prevent delivery.
+    const current = t.service.runtime.store;
+    current.setStatus(current.get<Work>("works", t.team.id, production.id), "submitted");
+    current.save("runs", {...current.get<Run>("runs", t.team.id, run.id), state: "active"});
+    await delay(700);
+    assert.notEqual(current.get<Run>("runs", t.team.id, run.id).state, "completed");
+    assert.equal(current.list("acceptances", t.team.id).length, 0);
+  } finally { await t.close(); }
 });
 
 test("Host replaces ended duplicate responsibility with explicit independent work and preserves the project definition", async () => {
@@ -725,6 +1020,67 @@ test("formal review delegation binds every immutable input, original criteria an
   } finally {
     await t.close();
   }
+});
+
+test("continuation review reads its bounded historical evidence without gaining unrelated or mutation authority", async () => {
+  const t = await setup();
+  try {
+    const [a, b, c] = t.works;
+    const exchange = await t.tool(a.id,"team_send",{requestKey:"history",recipientId:b.memberId,topic:"Boundary",content:"Keep the first result."});
+    const unrelated = await t.tool(b.id,"team_send",{requestKey:"other",recipientId:c.memberId,topic:"Other task",content:"Unrelated evidence."});
+    writeFileSync(path.join(t.harness.call(a.id).request.workspace,"a.txt"),"first version");
+    await t.tool(a.id,"team_submit_result",{summary:"Original",files:["a.txt"],usedArtifactIds:[]});
+    t.harness.finish(a.id);
+    await until(()=>t.state(a.id).status==="submitted");
+    const original = t.state(a.id).artifactIds;
+    const next = await t.tool(t.hostId,"team_delegate",{memberId:a.memberId,title:"Revalidate",instructions:"Check current definition",acceptanceCriteria:a.acceptanceCriteria,inputArtifactIds:original,dependsOn:[],continuationOf:a.id});
+    await until(()=>t.harness.call(next.id));
+    for(const id of original) await t.tool(next.id,"team_read_artifact",{artifactId:id});
+    await t.tool(next.id,"team_submit_result",{summary:"Current result",files:["a.txt"],usedArtifactIds:original});
+    t.harness.finish(next.id);
+    await until(()=>t.state(next.id).status==="submitted");
+    const reviewer=await t.tool(t.hostId,"team_add_member",{name:"History reviewer",responsibility:"Independent checks",config:{...config,access:"read-only"}});
+    const review=await t.tool(t.hostId,"team_review",{workId:next.id,reviewerMemberId:reviewer.id,instructions:"Read target and original handoff"});
+    await until(()=>t.harness.call(review.id));
+    for(const id of original) assert.equal((await t.tool(review.id,"team_read_artifact",{artifactId:id})).id,id);
+    assert.equal((await t.tool(review.id,"team_read_exchange",{exchangeId:exchange.exchange.id})).messages[0].id,exchange.message.id);
+    await assert.rejects(t.tool(review.id,"team_read_exchange",{exchangeId:unrelated.exchange.id}),/outside your responsibility/);
+    await assert.rejects(t.tool(review.id,"team_reply",{exchangeId:exchange.exchange.id,messageKey:"mutate",kind:"comment",content:"Must remain read-only"}),/outside your responsibility/);
+    writeFileSync(path.join(t.harness.call(b.id).request.workspace,"b.txt"),"unrelated");
+    const other=await t.tool(b.id,"team_submit_result",{summary:"Unrelated",files:["b.txt"],usedArtifactIds:[]});
+    await assert.rejects(t.tool(review.id,"team_read_artifact",{artifactId:other[0].id}),/not assigned/);
+  } finally { await t.close(); }
+});
+
+test("stale producer context rejects both review entry points before creating or dispatching review work", async () => {
+  const t = await setup();
+  try {
+    const a = t.works[0];
+    const reviewer = await t.tool(t.hostId, "team_add_member", {
+      name: "Verifier", responsibility: "Independent checks", config: { ...config, access: "read-only" },
+    });
+    writeFileSync(path.join(t.harness.call(a.id).request.workspace, "a.txt"), "result");
+    await t.tool(a.id, "team_submit_result", { summary: "Result", files: ["a.txt"], usedArtifactIds: [] });
+    t.harness.finish(a.id);
+    await until(() => t.state(a.id).status === "submitted");
+    const branch = t.service.runtime.history.ensure(t.team.id);
+    await t.tool(t.hostId, "team_publish_definition", {
+      expectedHeadId: branch.headNodeId, title: "Changed definition",
+      documents: [{key:"interface",kind:"design",title:"Interface",content:"New interface requirements must be checked by the producer."}],
+    });
+    const store = t.service.runtime.store;
+    const before = store.list<Work>("works", t.team.id).map((w) => [w.id, w.status, w.revision]);
+    const calls = t.harness.calls.length;
+    await assert.rejects(t.tool(t.hostId, "team_review", {
+      workId:a.id, reviewerMemberId:reviewer.id, instructions:"Review current result",
+    }), /outdated project definition/);
+    await assert.rejects(t.tool(t.hostId, "team_delegate", {
+      memberId:reviewer.id,title:"Review",instructions:"Review current result",acceptanceCriteria:a.acceptanceCriteria,
+      inputArtifactIds:t.state(a.id).artifactIds, dependsOn:[a.id], reviewOf:a.id,
+    }), /outdated project definition/);
+    assert.deepEqual(store.list<Work>("works", t.team.id).map((w) => [w.id,w.status,w.revision]), before);
+    assert.equal(t.harness.calls.length, calls);
+  } finally { await t.close(); }
 });
 
 test("review helper replaces incomplete inactive bindings, refuses active mismatch, and exposes rejection evidence", async () => {
@@ -1911,4 +2267,109 @@ test("user review request keeps a held Host untouched, binds submission, and rej
     assert.equal(store.list("acceptances",t.team.id).length,0);
     assert.ok(store.events(t.team.id,0,10000).some(e=>e.type==="review.requested"&&e.data.actor==="user"));
   } finally { await t.close(); }
+});
+
+
+test("expired exchange waits do not dispatch model turns until new peer evidence arrives", async () => {
+  const t = await setup();
+  try {
+    const [a,b] = t.works;
+    const sent = await t.tool(a.id,"team_send",{requestKey:"bounded-wait",recipientId:b.memberId,topic:"Required interface",content:"Send the final field name."});
+    await t.tool(a.id,"team_yield",{summary:"Waiting for the field name",waitForExchangeIds:[sent.exchange.id],waitSeconds:1});
+    t.harness.finish(a.id);
+    await until(()=>t.state(a.id).status==="waiting");
+    const waiting=t.state(a.id); waiting.continuation!.deadline=new Date(0).toISOString();t.service.runtime.store.save("works",waiting);
+    const calls=t.harness.calls.length;
+    for(let i=0;i<20;i++)t.service.runtime.communication.schedule(t.team.id);
+    assert.equal(t.state(a.id).status,"waiting");
+    assert.equal(t.harness.calls.length,calls);
+    assert.equal(t.service.runtime.store.db.prepare("SELECT count(*) n FROM runtime_events WHERE work_id=? AND type='exchange.wait_expired'").get(a.id)!.n,1);
+    await t.tool(b.id,"team_read_exchange",{exchangeId:sent.exchange.id});
+    await t.tool(b.id,"team_reply",{exchangeId:sent.exchange.id,messageKey:"field",kind:"answer",content:"resourceVersion"});
+    await until(()=>t.harness.calls.filter(c=>c.work.id===a.id).length===2);
+    assert.equal(t.state(a.id).status,"running");
+  }finally{await t.close();}
+});
+
+test("duplicate delegations reuse one responsibility and overlapping shared writes are rejected",async()=>{
+  const t=await setup();
+  try{
+    const input={memberId:t.members[0].id,title:"Scoped document",instructions:"Maintain the document",acceptanceCriteria:["Correct document"],inputArtifactIds:[],dependsOn:[],verification:"self-check",workspaceMode:"shared",writePaths:["owned.md"]};
+    const first=await t.tool(t.hostId,"team_delegate",input);
+    const second=await t.tool(t.hostId,"team_delegate",input);
+    assert.equal(second.id,first.id);
+    await assert.rejects(t.tool(t.hostId,"team_delegate",{...input,memberId:t.members[1].id,instructions:"Different requested content"}),/already owns/);
+    assert.equal(t.service.runtime.store.list<Work>("works",t.team.id).filter(w=>w.title==="Scoped document").length,1);
+  }finally{await t.close();}
+});
+
+test("bounded members write disjoint shared files concurrently while a legacy unbounded writer waits",async()=>{
+  const t=await setup();
+  try{
+    for(const w of t.works)t.harness.finish(w.id,"failed");
+    await until(()=>t.works.every(w=>t.state(w.id).status==="failed"));
+    Object.assign(t.harness.capabilities,{boundedWorkspaceWrites:true});
+    const first=await t.tool(t.hostId,"team_delegate",{memberId:t.members[0].id,title:"First file",instructions:"Write first",acceptanceCriteria:["first"],inputArtifactIds:[],dependsOn:[],workspaceMode:"shared",writePaths:["first.md"]});
+    const second=await t.tool(t.hostId,"team_delegate",{memberId:t.members[1].id,title:"Second file",instructions:"Write second",acceptanceCriteria:["second"],inputArtifactIds:[],dependsOn:[],workspaceMode:"shared",writePaths:["second.md"]});
+    const run=t.service.runtime.store.get<any>("runs",t.team.id,t.state(t.hostId).runId);
+    const legacy=t.service.runtime.store.createWork(run,t.members[2].id,"Unbounded legacy","Legacy task",["legacy"],[],[],null);
+    legacy.legacyWorkspaceWrite=true;
+    t.service.runtime.store.save("works",legacy);
+    await until(()=>t.harness.call(first.id)&&t.harness.call(second.id));
+    assert.equal(t.state(first.id).status,"running");
+    assert.equal(t.state(second.id).status,"running");
+    assert.equal(t.state(legacy.id).status,"queued");
+    await t.tool(first.id,"team_write_file",{path:"first.md",text:"first",expectedSha256:null});
+    await t.tool(second.id,"team_write_file",{path:"second.md",text:"second",expectedSha256:null});
+    await assert.rejects(t.tool(first.id,"team_write_file",{path:"first.md",text:"placeholder",expectedSha256:null}),{code:"file_changed"});
+    const current = await t.tool(first.id,"team_read_file",{path:"first.md"});
+    await t.tool(first.id,"team_edit_file",{path:"first.md",oldText:"first",newText:"first edited",expectedSha256:current.sha256});
+    assert.equal(readFileSync(path.join(t.workspace,"first.md"),"utf8"),"first edited");
+    await assert.rejects(t.tool(first.id,"team_write_file",{path:"second.md",text:"clobber",expectedSha256:null}),{code:"write_scope_denied"});
+    assert.equal(readFileSync(path.join(t.workspace,"second.md"),"utf8"),"second");
+    t.harness.finish(first.id,"failed");t.harness.finish(second.id,"failed");
+    await until(()=>t.harness.call(legacy.id));
+  }finally{await t.close();}
+});
+
+test("Host state reports selected resources and the frozen execution separately from member base configuration",async()=>{
+  const t=await setup();
+  try{
+    const resource=t.service.runtime.catalog.put(t.team.id,"selected-model",{name:"Selected model",description:"",config:{...config,model:"selected-model"},expectedVersion:0});
+    const member=t.service.runtime.store.get<Member>("members",t.team.id,t.members[0].id);
+    member.selection={resourceId:resource.id,resourceVersion:resource.version,reason:"Chosen resource"};
+    t.service.runtime.store.save("members",member);
+    const state=await t.tool(t.hostId,"team_state",{});
+    assert.equal(state.members.find((m:any)=>m.id===member.id).model,"selected-model");
+    assert.equal(state.works.find((w:any)=>w.id===t.works[0].id).execution.model,null);
+    assert.equal(state.works.find((w:any)=>w.id===t.works[0].id).execution.source,"attempt");
+  }finally{await t.close();}
+});
+
+test("file-only recovery revokes old tool authority without inventing native termination; command executions remain held",async()=>{
+  const t=await setup();
+  try{
+    const [a,b]=t.works;
+    for(const w of [a,b])t.harness.finish(w.id,"unknown");
+    await until(()=>[a,b].every(w=>t.state(w.id).status==="recovery_required"));
+    Object.assign(t.harness.capabilities,{boundedWorkspaceWrites:true});
+    t.service.runtime.harnesses.set("codex",{...t.harness,id:"codex",capabilities:t.harness.capabilities,inspect:async()=>({}),execute:()=>{throw new Error("must not dispatch")},interrupt:async()=>{},close:async()=>{},reconcile:async()=>({status:"unknown",text:""})});
+    const store=t.service.runtime.store;
+    for(const w of [a,b]){
+      const attempt=store.get<Attempt>("attempts",t.team.id,t.state(w.id).attemptId!);
+      attempt.config={...attempt.config,harness:"codex"};
+      attempt.actual={nativeSourceAccess:"read-only",workspaceBoundary:{writePaths:["owned.md"]},sandbox:{type:"readOnly"}};
+      store.save("attempts",attempt);
+    }
+    const commandWork=t.state(b.id);commandWork.executionRequirements={nativeCommands:true};store.save("works",commandWork);
+    await assert.rejects(t.service.runtime.reconcile(t.team.id,b.id),{code:"recovery_unknown"});
+    const priorAttempt=t.state(a.id).attemptId!;
+    const recovered=await t.service.runtime.reconcile(t.team.id,a.id);
+    assert.equal(recovered.status,"interrupted");
+    assert.equal(store.get<Attempt>("attempts",t.team.id,priorAttempt).actual!.nativeTerminationObserved,false);
+    assert.ok(store.get<Attempt>("attempts",t.team.id,priorAttempt).actual!.toolsRevokedAt);
+    await assert.rejects(t.tool(a.id,"team_write_file",{path:"owned.md",text:"late write",expectedSha256:null}),{code:"stale_attempt"});
+    assert.equal(existsSync(path.join(t.harness.call(a.id).request.workspace,"owned.md")),false);
+    assert.equal(store.list("acceptances",t.team.id).length,0);
+  }finally{await t.close();}
 });

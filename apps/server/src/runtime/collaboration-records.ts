@@ -371,6 +371,15 @@ export class CollaborationRecords {
         author,
         createdAt: new Date().toISOString(),
       };
+      const firstSource = resolveProjectSource(this.store, teamId, sourceMessageIds[0], branchId);
+      note.nodeId = this.store.history!.recordInsight(teamId, branchId, note.title, {
+        actor: author === "member" ? "runtime" : author,
+        insightId: note.id,
+        workId: sourceWorkId,
+        messageIds: sourceMessageIds,
+        conversationId: firstSource && "conversationId" in firstSource ? firstSource.conversationId : undefined,
+        reason: note.reason,
+      }).id;
       this.insert("insights", note);
       this.store.event(teamId, "insight.saved", {
         insightId: note.id,

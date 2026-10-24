@@ -1,6 +1,6 @@
 # Platform support
 
-TeamSwarm 0.4.3 provides a Windows x64 desktop installer.
+TeamSwarm 0.5.0 provides a Windows x64 desktop installer.
 
 | Operating system and architecture | Desktop format | Availability |
 |---|---|---|

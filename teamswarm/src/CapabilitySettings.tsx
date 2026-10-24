@@ -23,7 +23,7 @@ import { useI18n } from "./i18n";
 import { Disclosure } from "./Disclosure";
 import { HarnessInstallation } from "./HarnessInstallation";
 import { HarnessAccount } from "./HarnessAccount";
-import { ModelPicker } from "./ModelPicker";
+import { ModelPicker, modelProvider } from "./ModelPicker";
 import type { HarnessInspection } from "./harnessCatalog";
 import "./capabilities.css";
 
@@ -582,7 +582,7 @@ export function CapabilitySettings({
           <footer className="cap-footer">
             <div aria-live="polite">
               {error ? (
-                <span className="form-error">{error}</span>
+                <span className="form-error">{t(error)}</span>
               ) : notice ? (
                 <span className="cap-success">
                   <Check size={14} />
@@ -702,7 +702,10 @@ function ConnectionEditor({
         result.models.map((model) => ({
           model,
           name: model,
-          provider: draft.name || t("API connection"),
+          provider:
+            modelProvider({ model, name: model }) === "Other providers"
+              ? draft.name || t("API connection")
+              : modelProvider({ model, name: model }),
         })),
       );
       if (!result.models.length)
@@ -1020,7 +1023,7 @@ function ConnectionEditor({
       <footer className="cap-footer">
         <div role={error ? "alert" : undefined}>
           {error ? (
-            <span className="form-error">{error}</span>
+            <span className="form-error">{t(error)}</span>
           ) : (
             t("Add the connection, then save your team settings.")
           )}
@@ -1105,7 +1108,7 @@ function CodexAccount({
           {t("Continue in browser")} ↗
         </a>
       )}
-      {error && <p role="alert">{error}</p>}
+      {error && <p role="alert">{t(error)}</p>}
     </div>
   );
 }

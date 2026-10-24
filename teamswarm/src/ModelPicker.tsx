@@ -20,6 +20,7 @@ export function modelProvider(model: Model) {
   if (/^gemini[-.]/.test(id)) return "Google";
   if (/^grok[-.]/.test(id)) return "xAI";
   if (/^deepseek[-.]/.test(id)) return "DeepSeek";
+  if (/^qwen[\d.-]/.test(id)) return "Qwen";
   return "Other providers";
 }
 

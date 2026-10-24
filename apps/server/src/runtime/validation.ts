@@ -1,3 +1,4 @@
+import { adoptionContextInput, adoptionInput } from "./branch-adoption.js";
 import { z } from "zod";
 import { badRequest } from "../errors.js";
 import { definitionInput } from "./project-history.js";
@@ -5,6 +6,10 @@ import { insightInput } from "./collaboration-records.js";
 
 export const key = z.string().trim().min(1).max(200);
 export const text = z.string().trim().min(1).max(20000);
+export const executionRequirements = z.object({
+  nativeCommands: z.boolean().optional(), childProcesses: z.boolean().optional(),
+  scratchWrite: z.boolean().optional(), loopback: z.boolean().optional(), fileLinks: z.boolean().optional(),
+}).strict();
 const nullableName = z.string().trim().min(1).max(200).nullable().default(null);
 export const executionConfig = z
   .object({
@@ -86,7 +91,7 @@ export function parse<T extends z.ZodType>(
 export const tools = {
   team_save_insight: {
     description:
-      "Preserve a useful idea or decision with exact sourceMessageIds from the current input or team_state. Use a stable key and expectedRevision (0 for new). Proposed/rejected/superseded ideas are NOT effective requirements. Host records explicit user judgments as adopted, uncertainty as proposed. Members may only propose. Never invent source IDs or turn a tentative idea into a commitment.",
+      "Preserve a useful idea or decision with exact sourceMessageIds from the current input or team_state. Use a stable key and expectedRevision (0 for new). Proposed/rejected/superseded ideas are NOT effective requirements. Host records explicit user judgments as adopted, uncertainty as proposed. When adopting a branch into mainline, keep its ideas proposed until team_adopt_branch atomically publishes them; use that tool instead of simply changing the insight status. Members may only propose. Never invent source IDs or turn a tentative idea into a commitment.",
     schema: insightInput,
   },
   team_insight_sources: {
@@ -247,6 +252,14 @@ export const tools = {
       "After reading changed project context and reconsidering your work, acknowledge the node you are now using. This is your application claim, not independent proof.",
     schema: z.object({ nodeId: key }).strict(),
   },
+  team_adoption_context: {
+    description: "Host dialogue only. On an explicit user decision to adopt this branch, provide the complete verbatim current user message as authorizationQuote. Read source, base and current mainline documents plus current ideas for a bounded merge. Does not change documents.",
+    schema: adoptionContextInput,
+  },
+  team_adopt_branch: {
+    description: "Host dialogue only. Atomically integrate explicitly adopted source ideas into complete mainline documents with both observed heads. Preserve branch and provenance. Use only current proposed insight IDs. Re-read context on conflict. This does not merge code or authorize implementation.",
+    schema: adoptionInput,
+  },
   team_publish_definition: {
     description:
       "Host only. Maintain shared goal, requirement, understanding or design documents as COMPLETE coherent definitions. Submit only changed/new documents; omitted documents remain unchanged unless listed in removeKeys. Never put revision history, old/latest labels, or 'updated from' explanations in document bodies. Put change rationale in reason; source conversation is recorded automatically. Use stable document keys. expectedHeadId must equal nodeId from team_project_context (not branchId or contextVersion). Dependencies must be exact document IDs or key:<stable-key>, for example key:goal. Identify affected work. Ordinary ideas can be captured as understandings without delegating implementation. Cross-branch selection belongs to the user, not this tool.",
@@ -304,7 +317,7 @@ export const tools = {
   },
   team_delegate: {
     description:
-      "Host only. Assign owned work with exact acceptance criteria, versioned input IDs and dependencies. Set verification=self-check for small reversible work; independent for complex/high-impact work or explicit independent review. Use continuationOf to continue the exact existing work thread. Production dependencies and input producers must satisfy their verification policy: self-check work must be self_checked and independent work must be ACCEPTED; submitted is insufficient. For independent review, specify reviewOf and a different read-only member, assign all target artifact versions, read them, then call team_accept_work. Shared integration of isolated sources requires every deliverable source work ID in integratesWorkIds and dependsOn plus every source artifact in inputArtifactIds.",
+      "Host only. Assign owned work with exact acceptance criteria, versioned input IDs and dependencies. Use one stable responsibilityKey per responsibility and reuse it on retries; declared writePaths also deduplicate repeated ownership. Reused work retains its original instructions: if delegationReuse.instructionsApplied=false, send necessary changes to that thread instead of assigning it again. Changed criteria, inputs or permissions require explicit continuation. Set verification=self-check for small reversible work; independent for complex/high-impact work or explicit independent review. Use continuationOf to continue the exact existing work thread. Production dependencies and input producers must satisfy their verification policy: self-check work must be self_checked and independent work must be ACCEPTED; submitted is insufficient. Stale inputs fail before creating work; read current files or continue the original responsibility rather than retrying stale versions. For independent review use team_review. Shared integration of isolated sources requires every deliverable source work ID in integratesWorkIds and dependsOn plus every source artifact in inputArtifactIds.",
     schema: z
       .object({
         memberId: key,
@@ -318,6 +331,9 @@ export const tools = {
           .enum(["self-check", "independent"])
           .default("independent"),
         continuationOf: key.optional(),
+        responsibilityKey: key.optional(),
+        writePaths: z.array(z.string().min(1).max(2000)).max(128).optional(),
+        executionRequirements: executionRequirements.optional(),
         workspaceMode: z.enum(["shared", "isolated"]).default("shared"),
         integratesWorkIds: z.array(key).max(30).default([]),
       })
@@ -327,8 +343,12 @@ export const tools = {
     description:
       "Host only. Assign an independent read-only reviewer to a submitted production work. The service binds reviewOf, EVERY exact artifact version, target workspace, dependencies and original acceptance criteria automatically. Reviewer must read the artifacts and call team_accept_work; an A2A answer is not acceptance. Use this for formal review instead of creating a generic production task.",
     schema: z
-      .object({ workId: key, reviewerMemberId: key, instructions: text })
+      .object({ workId: key, reviewerMemberId: key, instructions: text, executionRequirements: executionRequirements.optional() })
       .strict(),
+  },
+  team_execution_environment: {
+    description: "Return a fresh prepared command prefix inside this attempt's existing native scratch grant. Use only when rerunning checks consumed the real link fixtures; ordinary checks already receive a prepared prefix at startup. No model call, source change or additional permission grant.",
+    schema: z.object({}).strict(),
   },
   team_replace_work: {
     description:
@@ -346,6 +366,22 @@ export const tools = {
     description:
       "Read an immutable submitted artifact version. This records actual delivery to this attempt, not a claim of understanding or use.",
     schema: z.object({ artifactId: key }).strict(),
+  },
+  team_read_file: {
+    description: "Read a project UTF-8 file and its current hash. Read before editing; use offsets for large files. Private/runtime directories are excluded.",
+    schema: z.object({ path: z.string().min(1).max(2000), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(64000).default(20000) }).strict(),
+  },
+  team_list_files: {
+    description: "List a project directory without private/runtime directories. Paths are relative to the assigned workspace.",
+    schema: z.object({ path: z.string().min(1).max(2000).optional() }).strict(),
+  },
+  team_write_file: {
+    description: "Create a missing owned UTF-8 file with expectedSha256=null. Existing files cannot be replaced: read them and use team_edit_file with an exact fragment, preserving all other content. Paths outside writePaths are rejected.",
+    schema: z.object({ path: z.string().min(1).max(2000), text: z.string().max(2 * 1024 * 1024), expectedSha256: z.null() }).strict(),
+  },
+  team_edit_file: {
+    description: "Replace exactly one oldText occurrence in an owned UTF-8 file. Use its current hash from team_read_file and preserve unrelated content. Paths outside writePaths are rejected.",
+    schema: z.object({ path: z.string().min(1).max(2000), oldText: z.string().min(1).max(200000), newText: z.string().max(200000), expectedSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
   },
   team_submit_result: {
     description:

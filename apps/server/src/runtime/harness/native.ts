@@ -19,9 +19,11 @@ import type {
 import { redact } from "../redact.js";
 import { sessionStoreScope } from "./session-scope.js";
 import { NativeUsage } from "./native-usage.js";
+import { preflight, type PreflightInput } from "./preflight.js";
 import { grokModelConfig, isolateGrokEnvironment } from "./grok-config.js";
 import { accountHome, subscriptionEnvironment, subscriptionInspection, subscriptionAccounts, subscriptionScope, claudeSubscriptionFlags } from "./subscriptions.js";
 import { rebootConfirmsTermination, systemBootTime } from "./native-recovery.js";
+import { recoverOpenCodeTruncation } from "./opencode-recovery.js";
 import {
   childEnvironment,
   nativeEntry,
@@ -48,6 +50,7 @@ export class NativeHarness implements Harness {
   constructor(readonly id: NativeId) {
     this.capabilities = {
       dispatchTracking: true,
+      boundedWorkspaceWrites: true,
       sessions: true,
       resume: id !== "deepseek-harness",
       streaming: true,
@@ -124,8 +127,12 @@ export class NativeHarness implements Harness {
         "The configured thinking format requires Pi Chat Completions.",
       );
   }
+  async preflight(request: PreflightInput) {
+    this.validateConfig(request.config);
+    return preflight(request, nativeEntry(this.id), false);
+  }
   async execute(request: HarnessRequest): Promise<HarnessResult> {
-    const c = request.config;
+    const c = request.workspaceBoundary ? { ...request.config, access: "read-only" as const } : request.config;
     this.validateConfig(c);
     const subscription = (this.id === "claude-code" || this.id === "grok") && !c.baseUrl && !c.credentialEnv;
     if (!subscription && (!c.model || !c.baseUrl || !c.credentialEnv))
@@ -146,6 +153,7 @@ export class NativeHarness implements Harness {
     const binding = JSON.stringify({
       workspace: path.resolve(request.workspace),
       config: c,
+      ...(request.workspaceBoundary ? { workspaceBoundary: request.workspaceBoundary } : {}),
       ...(subscription ? { accountScope: subscriptionScope(this.id as "claude-code" | "grok") } : {}),
     });
     const bindingPath = path.join(home, "binding.json");
@@ -339,7 +347,8 @@ export class NativeHarness implements Harness {
             "workflow-ptc",
             "tool-workflow",
             "tool-plugin-manager",
-            ...(process.env.TEAM_DSH_DISABLE_SHELL === "1"
+            ...(request.workspaceBoundary ? ["tool-fs"] : []),
+            ...(request.workspaceBoundary || process.env.TEAM_DSH_DISABLE_SHELL === "1"
               ? ["tool-bash", "tool-pwsh", "tool-jobs"]
               : []),
           ].map((id) => ({ id, disabled: true })),
@@ -388,6 +397,7 @@ export class NativeHarness implements Harness {
         harness: this.id,
         protocol: c.protocol ?? this.capabilities.protocol,
         configured: true,
+        ...(request.workspaceBoundary ? { workspaceBoundary: request.workspaceBoundary, nativeSourceAccess: "read-only" } : {}),
         ...(this.id === "deepseek-harness" && process.env.TEAM_DSH_DISABLE_SHELL === "1" ? { shellTools: "disabled" } : {}),
         turnIdentity: "adapter control token; native identifiers are separate events",
       });
@@ -542,6 +552,8 @@ export class NativeHarness implements Harness {
               usage(event.part?.tokens ?? {});
               if (["stop", "end_turn"].includes(event.part?.reason))
                 terminal = { status: "completed", text };
+              else if (event.part?.reason === "length")
+                terminal = { status: "failed", text, error: "OpenCode reached the model output limit before completing the turn." };
             }
           } else {
             if (event.id === 99 && !event.error && event.result)
@@ -782,7 +794,7 @@ export class NativeHarness implements Harness {
     }, 5000);
     void active.done.finally(() => clearTimeout(timer));
   }
-  async reconcile(sessionId: string, turnId: string): Promise<HarnessResult> {
+  async reconcile(sessionId: string, turnId: string, context?: { workId: string; attemptId: string; startedAt: string }): Promise<HarnessResult> {
     if (
       !/^[a-zA-Z0-9_-]{1,100}$/.test(sessionId) ||
       !/^[a-zA-Z0-9_-]{1,100}$/.test(turnId)
@@ -806,6 +818,10 @@ export class NativeHarness implements Harness {
     if (value.sessionId !== sessionId || value.turnId !== turnId)
       throw new Error("Native receipt identity does not match this execution.");
     if (!value.result || value.result.status === "unknown") {
+      if (this.id === "opencode" && context) {
+        const recovered = recoverOpenCodeTruncation(path.dirname(file), value, context);
+        if (recovered) return recovered;
+      }
       const bootedAt = await systemBootTime();
       if (rebootConfirmsTermination(value.updatedAt, bootedAt))
         return {

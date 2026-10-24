@@ -9,6 +9,7 @@ export type ActivityGroup = {
 const contextTools = new Set([
   "team_state",
   "team_project_context",
+  "team_adoption_context",
   "team_inbox",
   "team_read_artifact",
   "team_review_evidence",

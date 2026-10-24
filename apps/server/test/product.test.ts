@@ -361,7 +361,13 @@ test("background deliveries require explicit current-context viewing and waiting
       );
       return { work, attempt, delivery };
     };
-    const ready = createDelivery("A background result ready to view");
+    const intermediate = createDelivery("The independent review is in progress");
+    const ready = createDelivery("A completed read-only research report");
+    const report = store.capture(ready.work, ready.delivery.content, []);
+    const concurrentMember = store.createMember(team.id, "Concurrent writer", "Other work", { ...host.config, access: "workspace-write" });
+    const concurrent = store.createWork(run, concurrentMember.id, "Other task", "Keep working", ["Other result"], [], []);
+    store.start(concurrent, concurrentMember.config);
+
     const head = service.runtime.history.branch(team.id, branch.id).headNodeId;
     service.runtime.history.delivery(
       team.id,
@@ -373,9 +379,13 @@ test("background deliveries require explicit current-context viewing and waiting
         workId: ready.work.id,
         conversationId: chat.id,
       },
-      [],
-      false,
+      report.map(a => a.id),
+      true,
     );
+    const completedNode = service.runtime.history.timeline(team.id, 0, 100).nodes.find(n => n.kind === "delivery" && n.source.workId === ready.work.id)!;
+    assert.equal(completedNode.workspaceSnapshotId, null);
+    assert.deepEqual(completedNode.artifactIds, report.map(a => a.id));
+    store.setStatus(concurrent, "interrupted");
     const hidden = store.createWork(
       run,
       host.id,
@@ -422,8 +432,31 @@ test("background deliveries require explicit current-context viewing and waiting
       snapshot.members.find((m) => m.id === member.id)?.status,
       "waiting",
     );
+    store.setStatus(waiting, "self_checked");
+    const conversation = store.createWork(run, member.id, "Follow-up conversation", "A separate exchange", [], [], []);
+    conversation.kind = "collaboration";
+    store.save("works", conversation);
+    store.setStatus(conversation, "interrupted");
+    conversation.updatedAt = new Date(Date.parse(waiting.updatedAt) + 1000).toISOString();
+    store.save("works", conversation);
+    const completedCard = ((await request("/product")).body as Workspace).members.find(m => m.id === member.id)!;
+    assert.equal(completedCard.status, "complete");
+    assert.equal(completedCard.workId, waiting.id);
+    assert.equal(completedCard.conversationStatus, "paused");
+    store.setStatus(conversation, "running");
+    assert.equal(((await request("/product")).body as Workspace).members.find(m => m.id === member.id)?.status, "working");
+    store.setStatus(conversation, "interrupted");
+    const historyPositions = {[branch.headNodeId]: {x:123,y:456}};
+    assert.equal((await request("/product/preferences", {teams:{[team.id]:{historyPositions}}}, "PATCH")).status, 200);
+    assert.deepEqual(((await request("/product")).body as Workspace).teams.find(t=>t.id===team.id)?.historyPositions, historyPositions);
     assert.equal(snapshot.deliveries.length, 1);
+    assert.equal(snapshot.updates!.length, 1);
+    assert.equal(snapshot.updates![0].id, intermediate.delivery.id);
+    assert.equal(snapshot.updates![0].hostDelivery?.superseded, true);
+    assert.equal(snapshot.updates![0].hostDelivery?.status, "pending");
     assert.equal(snapshot.deliveries[0].id, ready.delivery.id);
+    assert.equal(snapshot.deliveries[0].outcome, true);
+    assert.deepEqual(snapshot.deliveries[0].artifactIds, []);
     assert.equal(snapshot.deliveries[0].read, false);
     assert.equal(snapshot.deliveries[0].hostDelivery?.status, "pending");
     assert(
@@ -445,6 +478,7 @@ test("background deliveries require explicit current-context viewing and waiting
     assert.equal((await request(view, input)).status, 200);
     snapshot = (await request("/product")).body as Workspace;
     assert.equal(snapshot.deliveries.length, 1);
+    assert.equal(snapshot.updates!.length, 1);
     assert.equal(snapshot.deliveries[0].read, true);
     assert.equal(snapshot.deliveries[0].hostDelivery?.status, "delivered");
     assert.equal(
@@ -484,7 +518,7 @@ test("background deliveries require explicit current-context viewing and waiting
       200,
     );
     snapshot = (await request("/product")).body as Workspace;
-    const card = snapshot.deliveries.find((d) => d.id === stale.delivery.id)!;
+    const card = snapshot.updates!.find((d) => d.id === stale.delivery.id)!;
     assert.equal(card.read, false);
     assert.equal(card.hostDelivery?.stale, true);
     assert.equal(

@@ -6,14 +6,14 @@
 
 ## Windows x64
 
-下载并运行 `TeamSwarm-0.4.3-Windows-x64.exe`，按需选择安装目录，随后从开始菜单打开 **TeamSwarm**。默认安装到当前用户。
+下载并运行 `TeamSwarm-0.5.0-Windows-x64.exe`，按需选择安装目录，随后从开始菜单打开 **TeamSwarm**。默认安装到当前用户。
 
 Windows 安装包未签名，Windows 会显示未知发布者。核对下载来源和校验值后再选择运行。
 
 在 PowerShell 中计算校验值：
 
 ```powershell
-Get-FileHash .\TeamSwarm-0.4.3-Windows-x64.exe -Algorithm SHA256
+Get-FileHash .\TeamSwarm-0.5.0-Windows-x64.exe -Algorithm SHA256
 ```
 
 将结果与 `SHA256SUMS.txt` 中相应文件的记录比较。

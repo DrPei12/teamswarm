@@ -31,6 +31,16 @@ for (const file of ['apps/desktop/package.json','apps/server/package.json','team
   const item = JSON.parse(readFileSync(path.join(root,file),'utf8'));
   if (item.version !== version || item.license !== 'Apache-2.0') errors.push(`${file}: inconsistent version/license`);
 }
+const rootPackage = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
+const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
+const desktop = JSON.parse(readFileSync(path.join(root, 'electron-builder.json'), 'utf8'));
+if (desktop.electronVersion !== rootPackage.devDependencies.electron || desktop.electronVersion !== lock.packages['node_modules/electron'].version)
+  errors.push('Electron packaging version must match the installed runtime');
+for (const file of ['apps/server/package.json','teamswarm/package.json']) {
+  const item = JSON.parse(readFileSync(path.join(root,file),'utf8'));
+  if (item.dependencies?.['@team/contracts'] && item.dependencies['@team/contracts'] !== version)
+    errors.push(`${file}: inconsistent contracts dependency`);
+}
 for (const language of ['en','zh-CN']) for (const name of ['installation','getting-started','harnesses','usage','data-and-privacy','troubleshooting','platforms','architecture','development','releasing']) {
   if (!existsSync(path.join(root, `docs/${language}/${name}.md`))) errors.push(`Missing ${language}/${name}`);
 }

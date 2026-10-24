@@ -141,6 +141,19 @@ export class RuntimeStore {
           CREATE UNIQUE INDEX IF NOT EXISTS runtime_host_member ON runtime_members(team_id) WHERE json_extract(data, '$.kind') = 'host';
           INSERT OR IGNORE INTO runtime_migrations VALUES (1, datetime('now'));
         `);
+        if (!this.db.prepare("SELECT 1 FROM runtime_migrations WHERE version = 3").get()) {
+          for (const team of teams.listTeams()) {
+            const hosts = new Set(this.list<Member>("members", team.id).filter((m) => m.kind === "host").map((m) => m.id));
+            for (const work of this.list<Work>("works", team.id)) {
+              if (work.writePaths === undefined && !work.reviewOf && !work.interaction &&
+                  work.kind !== "collaboration" && !hosts.has(work.memberId)) {
+                work.legacyWorkspaceWrite = true;
+                this.save("works", work);
+              }
+            }
+          }
+          this.db.prepare("INSERT INTO runtime_migrations VALUES (3, ?)").run(timestamp());
+        }
       });
       // An interrupted service never turns an unknown execution into success or replays it.
       for (const team of teams.listTeams())
@@ -821,6 +834,13 @@ export class RuntimeStore {
       work.attemptId!,
     );
   }
+  assertReviewTargetCurrent(target: Work): void {
+    if (this.history && (!target.attemptId || !this.history.isCurrent(target, target.attemptId)))
+      throw conflict(
+        "producer_context_stale",
+        `Producer work ${target.id} was submitted under an outdated project definition. Ask the Host to arrange production revalidation or replacement under the current definition before assigning a new review. A reviewer's own context acknowledgement cannot update the producer's submission.`,
+      );
+  }
   accept(
     reviewer: Work,
     targetId: string,
@@ -835,11 +855,7 @@ export class RuntimeStore {
       target.teamId,
       target.attemptId!,
     );
-    if (this.history && !this.history.isCurrent(target, produced.id))
-      throw conflict(
-        "producer_context_stale",
-        `Producer work ${target.id} was submitted under an outdated project definition. Ask the Host to arrange production revalidation or replacement under the current definition before assigning a new review. A reviewer's own context acknowledgement cannot update the producer's submission.`,
-      );
+    this.assertReviewTargetCurrent(target);
     this.history?.assertCurrent(reviewer, reviewer.attemptId!);
     if (
       this.history &&
@@ -858,6 +874,8 @@ export class RuntimeStore {
       reviewer.teamId,
       reviewer.attemptId!,
     );
+    if ((reviewing.reviewInstructionsRevision ?? 1) !== (reviewer.reviewInstructionsRevision ?? 1))
+      throw conflict("review_instructions_changed", "Read the current review work and follow its updated instructions before acceptance.");
     if (
       reviewer.reviewOf !== targetId ||
       reviewing.config.access !== "read-only"
@@ -904,6 +922,9 @@ export class RuntimeStore {
         "incomplete_evidence",
         "Provide one evidenced result for every exact acceptance criterion.",
       );
+    if (verdict === "accepted" && reviewer.executionRequirements?.nativeCommands &&
+        !criteria.some((criterion) => criterion.evidenceType === "native_check" && criterion.passed))
+      throw badRequest("missing_check", "This review requires an observed native command check before acceptance.");
     for (const criterion of criteria) {
       if (criterion.evidenceType === "native_check") {
         if (!criterion.evidenceEventIds.length)
@@ -918,8 +939,15 @@ export class RuntimeStore {
             )
             .get(id, reviewer.teamId, reviewer.attemptId);
           const check = event ? JSON.parse(String(event.data)) : null;
+          if (reviewing.reviewInstructionsAcknowledgedAt &&
+              (!check?.startedAt || check.startedAt < reviewing.reviewInstructionsAcknowledgedAt))
+            throw conflict("review_check_outdated", "Run the required command after reading the updated review instructions; earlier command evidence is retained as history.");
+          if (!check)
+            throw conflict(
+              "invalid_check",
+              `No command evidence matches '${id}' in this review attempt. Copy the complete id returned by team_review_evidence, not an abbreviated ID, nativeItemId, or transcript event ID.`,
+            );
           if (
-            !check ||
             check.type !== "commandExecution" ||
             !Number.isInteger(check.exitCode) ||
             (criterion.passed && check.exitCode !== 0)

@@ -132,6 +132,26 @@ export interface Work {
   continuation?: WorkContinuation;
   /** Task resource choice; pins this Work and always wins over the member default. */
   selection?: ResourceSelection;
+  /** Project-relative files (or directories ending in /) owned by this responsibility. */
+  writePaths?: string[];
+  /** Retains the native write grant of work created before scoped file ownership. */
+  legacyWorkspaceWrite?: boolean;
+  /** Only request expensive execution probes when this work actually needs them. */
+  executionRequirements?: ExecutionRequirements;
+  delegationFingerprint?: string;
+  /** Stable responsibility within the effective requirements; retries reuse its work. */
+  responsibilityKey?: string;
+  delegationContract?: string;
+  /** Review text revisions do not change the submission, criteria or reviewer. */
+  reviewInstructionsRevision?: number;
+  reviewInstructionsUpdatedAt?: string;
+}
+export interface ExecutionRequirements {
+  nativeCommands?: boolean;
+  childProcesses?: boolean;
+  scratchWrite?: boolean;
+  loopback?: boolean;
+  fileLinks?: boolean;
 }
 export interface MemberMessage {
   sourceWorkId?: string;
@@ -182,10 +202,14 @@ export interface ProjectInsight {
   reason: string;
   sourceMessageIds: string[];
   sourceWorkId?: string;
+  nodeId?: string;
   author: "user" | "host" | "member";
   createdAt: string;
 }
 export interface Attempt {
+  reviewInstructionsRevision?: number;
+  reviewInstructionsAcknowledgedAt?: string;
+  instructionsSha256?: string;
   id: string;
   teamId: string;
   workId: string;
@@ -219,6 +243,8 @@ export interface WorkContinuation {
   deadline: string;
   attemptId: string;
   contextVersion: string;
+  /** A deadline is an observable escalation, not permission to poll the model. */
+  timeoutReportedAt?: string;
 }
 export interface TeamExchange {
   id: string;
@@ -324,14 +350,19 @@ export interface ToolSpec {
   inputSchema: Record<string, unknown>;
 }
 export interface HarnessRequest {
+  executionRequirements?: ExecutionRequirements;
+  executionEnvironment?: PreparedExecutionEnvironment;
   workspace: string;
   /** Platform-owned scratch space for an independent review; project files stay read-only. */
   verificationDirectory?: string;
+  /** Native source writes are disabled; project edits use checked Team file tools. */
+  workspaceBoundary?: { writePaths: string[] };
   config: ExecutionConfig;
   instructions: string;
   input: string;
   sessionId?: string;
   contextIsolation?: "branch";
+  hostMode?: "dialogue" | "coordination";
   tools: ToolSpec[];
   onSession: (id: string, actual: Record<string, unknown>) => void;
   onTurn: (id: string) => void;
@@ -352,11 +383,24 @@ export interface Harness {
   capabilities: Record<string, boolean | string>;
   inspect(): Promise<Record<string, unknown>>;
   validateConfig?(config: ExecutionConfig): void;
+  preflight?(request: {
+    workspace: string;
+    config: ExecutionConfig;
+    writePaths?: string[];
+    legacyWorkspaceWrite?: boolean;
+    scratchDirectory: string;
+    requirements: ExecutionRequirements;
+  }): Promise<Record<string, unknown> & { passed: boolean; environment?: PreparedExecutionEnvironment }>;
   execute(request: HarnessRequest): Promise<HarnessResult>;
   interrupt(sessionId: string, turnId: string): Promise<void>;
-  reconcile?(sessionId: string, turnId: string): Promise<HarnessResult>;
+  reconcile?(sessionId: string, turnId: string, context?: { workId: string; attemptId: string; startedAt: string }): Promise<HarnessResult>;
   reconcileStart?(sessionId: string, native: Record<string, unknown>): Promise<HarnessResult & { turnId?: string }>;
   close(): Promise<void>;
+}
+export interface PreparedExecutionEnvironment {
+  directory: string;
+  commandPrefix: string[];
+  linkFixtures?: string;
 }
 
 export interface ProjectDocument {
@@ -391,7 +435,9 @@ export interface ProjectNode {
     | "selection"
     | "delivery"
     | "work-result"
-    | "acceptance";
+    | "acceptance"
+    | "insight"
+    | "merge";
   title: string;
   documents: Record<string, string>;
   contextVersion: string;
@@ -405,6 +451,8 @@ export interface ProjectNode {
     selectedRevisionIds?: string[];
     reason?: string;
     exchangeMessageIds?: string[];
+    insightId?: string;
+    adoption?: { sourceBranchId: string; sourceNodeId: string; baseNodeId: string; insightIds: string[]; authorizationQuote: string; ideas: { id: string; title: string; content: string; sourceMessageIds: string[] }[]; changedKeys: string[] };
   };
   createdAt: string;
 }
