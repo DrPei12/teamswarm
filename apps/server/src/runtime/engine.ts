@@ -1301,13 +1301,28 @@ export class TeamRuntime {
     const host = this.store
       .list<Member>("members", work.teamId)
       .find((m) => m.kind === "host")!;
+    const branchWork = this.store.list<Work>("works", work.teamId);
+    const byId = new Map(branchWork.map((w) => [w.id, w]));
+    const completed = this.store.get<Run>("runs", work.teamId, work.runId).state === "completed";
+    const continuedRunIds = new Set<string>();
+    for (const current of branchWork.filter((w) => w.runId === work.runId)) {
+      const visited = new Set<string>();
+      let ancestor = current;
+      while (ancestor.continuationOf && !visited.has(ancestor.continuationOf)) {
+        visited.add(ancestor.continuationOf);
+        const parent = byId.get(ancestor.continuationOf);
+        if (!parent) break;
+        continuedRunIds.add(parent.runId);
+        ancestor = parent;
+      }
+    }
     for (const linked of this.store
       .list<Run>("runs", work.teamId)
       .filter(
         (r) =>
           r.id !== work.runId &&
           r.state === "active" &&
-          r.continuedWorkIds?.length &&
+          (r.continuedWorkIds?.length || (completed && continuedRunIds.has(r.id))) &&
           this.history.forRun(r).id === branchId,
       )) {
       const lastHost = this.store
