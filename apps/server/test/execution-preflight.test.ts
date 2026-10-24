@@ -562,3 +562,55 @@ test("preflight scratch preparation failure never starts the native process", as
     assert.equal(existsSync(marker), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+// Characterization for the review-evidence contract proposal described in the PR.
+// This does not treat text inspection as sufficient evidence for the stated runtime criterion.
+test("declared review execution requirements gate commands; prose alone does not", async () => {
+  for (const nativeCommands of [false, true]) {
+    const t = await setup();
+    try {
+      const producer = await t.addMember("Producer");
+      const reviewer = await t.addMember("Independent reviewer", { access: "read-only" });
+      const criterion = "Run the HTTP regression and show its successful execution output";
+      const source = await t.tool(t.hostId, "team_delegate", {
+        memberId: producer.id, title: "Synthetic runtime-check target",
+        instructions: "Provide the implementation for an independent runtime check.",
+        acceptanceCriteria: [criterion], inputArtifactIds: [], dependsOn: [],
+        writePaths: ["implementation.txt"], verification: "independent",
+      }) as Work;
+      await until(() => t.harness.call(source.id));
+      await t.tool(source.id, "team_write_file", {
+        path: "implementation.txt", text: "Synthetic implementation; no command has run.\n", expectedSha256: null,
+      });
+      await t.tool(source.id, "team_submit_result", {
+        summary: "Implementation ready; executable check pending", files: ["implementation.txt"], usedArtifactIds: [],
+      });
+      t.harness.finish(source.id);
+      await until(() => t.state(source.id).status === "submitted");
+      const review = await t.tool(t.hostId, "team_review", {
+        workId: source.id, reviewerMemberId: reviewer.id,
+        instructions: "Independently execute the required HTTP regression; static analysis is insufficient.",
+        ...(nativeCommands ? { executionRequirements: { nativeCommands: true } } : {}),
+      }) as Work;
+      if (nativeCommands) {
+        await until(() => t.state(review.id).status === "failed");
+        assert.equal(t.harness.executions(review.id), 0);
+        assert.equal(t.state(source.id).status, "submitted");
+      } else {
+        await until(() => t.harness.call(review.id));
+        for (const artifactId of t.state(source.id).artifactIds)
+          await t.tool(review.id, "team_read_artifact", { artifactId });
+        await t.tool(review.id, "team_accept_work", {
+          workId: source.id, verdict: "accepted", criteria: [{
+            criterion, passed: true,
+            evidence: "Static inspection only; I could not execute the required regression.",
+            evidenceType: "review_judgment", evidenceEventIds: [],
+          }],
+        });
+        // Existing behavior, reproduced deliberately; not the proposed guarantee.
+        assert.equal(t.state(source.id).status, "accepted");
+        assert.deepEqual(t.harness.call(review.id).request.executionRequirements, {});
+      }
+    } finally { await t.close(); }
+  }
+});
