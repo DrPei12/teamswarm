@@ -2414,9 +2414,10 @@ export class TeamRuntime {
           "members",
           teamId,
           input.memberId,
+          "memberId does not refer to a member in this Team. Read the member directory for exact IDs.",
         );
-        for (const id of input.integratesWorkIds) {
-          const source = this.store.get<Work>("works", teamId, id);
+        for (const [index, id] of input.integratesWorkIds.entries()) {
+          const source = this.store.get<Work>("works", teamId, id, `integratesWorkIds[${index}] does not refer to a work in this Team.`);
           if (
             input.workspaceMode !== "shared" ||
             input.reviewOf ||
@@ -2446,7 +2447,7 @@ export class TeamRuntime {
             "Delegate to an independent member.",
           );
         if (input.reviewOf) {
-          const target = this.store.get<Work>("works", teamId, input.reviewOf);
+          const target = this.store.get<Work>("works", teamId, input.reviewOf, "reviewOf does not refer to a work in this Team. For production work, omit reviewOf or use JSON null, not a string.");
           if (
             target.status !== "submitted" ||
             target.memberId === recipient.id ||
@@ -2472,7 +2473,7 @@ export class TeamRuntime {
             "Production work needs acceptance criteria.",
           );
         const continuationBase = input.continuationOf
-          ? this.store.get<Work>("works", teamId, input.continuationOf) : undefined;
+          ? this.store.get<Work>("works", teamId, input.continuationOf, "continuationOf does not refer to a work in this Team. Use an existing work ID or omit this field for new work.") : undefined;
         const identity = delegationIdentity(input);
         const delegationFingerprint = identity.fingerprint;
         const priorDelegation = this.store.list<Work>("works", teamId).find((w) => w.runId === run.id &&
