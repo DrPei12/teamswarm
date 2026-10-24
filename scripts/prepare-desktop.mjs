@@ -1,10 +1,10 @@
-import { copyFileSync, readdirSync, lstatSync, realpathSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs";
+import { lstatSync, realpathSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { Resvg } from "@resvg/resvg-js";
 import { verifyBuild, digest } from "./release-identity.mjs";
-import { packageInventory } from "./package-inventory.mjs";
+import { packageInventory, copyPackageInput as copy } from "./package-inventory.mjs";
 import { desktopNode } from "./desktop-runtime.mjs";
 import { desktopTarget } from "./desktop-platform.mjs";
 
@@ -22,23 +22,6 @@ if (existsSync(target)) {
   rmSync(target, { recursive: true });
 }
 mkdirSync(target, { recursive: true });
-function copy(source, destination, boundary = realpathSync(source)) {
-  const stat = lstatSync(source);
-  if (stat.isSymbolicLink()) {
-    const resolved = realpathSync(source);
-    const relative = path.relative(boundary, resolved);
-    if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Build input link escapes its package.");
-    return copy(resolved, destination, boundary);
-  }
-  if (stat.isDirectory()) {
-    mkdirSync(destination, { recursive: true });
-    for (const entry of readdirSync(source)) copy(path.join(source, entry), path.join(destination, entry), boundary);
-  } else {
-    mkdirSync(path.dirname(destination), { recursive: true });
-    copyFileSync(source, destination);
-    if (process.platform !== "win32") chmodSync(destination, stat.mode & 0o777);
-  }
-}
 for (const item of ["apps/server/dist", "teamswarm/dist", "docs", "LICENSE", "NOTICE"])
   copy(path.join(root, item), path.join(target, item));
 for (const item of ["start-product.mjs", "platform.cjs", "data-tools.mjs", "release-identity.mjs", "install-harnesses.mjs"])

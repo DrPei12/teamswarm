@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,8 @@ import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { copyPackageInput } from '../scripts/package-inventory.mjs';
+import { filesUnder } from '../scripts/release-identity.mjs';
 
 const require = createRequire(import.meta.url);
 const builderRequire = createRequire(require.resolve('app-builder-lib/package.json'));
@@ -110,6 +112,36 @@ test('Electron build downloads preserve proxy auth, bypass, cache and checksum f
   } finally {
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('staged package inventory matches Electron resource copying with nested package metadata', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'teamswarm-package-input-'));
+  const source = join(root, 'source'), stage = join(root, 'stage'), packaged = join(root, 'packaged');
+  const files = {
+    '.gitkeep': '',
+    '.DS_Store': 'metadata',
+    'runtime/node_modules/undici/lib/llhttp/.gitkeep': '',
+    'runtime/node_modules/undici/lib/llhttp/.DS_Store': 'metadata',
+    'runtime/node_modules/undici/lib/llhttp/constants.js': 'export const version = 1;\n',
+    'runtime/node_modules/undici/LICENSE': 'license fixture\n',
+    'config/.runtime-config': '{"enabled":true}\n',
+    'docs/.gitkeep.txt': 'runtime content\n'
+  };
+  try {
+    for (const [name, content] of Object.entries(files)) {
+      await mkdir(join(source, name, '..'), { recursive: true });
+      await writeFile(join(source, name), content);
+    }
+    copyPackageInput(source, stage);
+    const expected = filesUnder(source, Object.keys(files).filter(name => !['.gitkeep', '.DS_Store'].includes(name.split('/').at(-1))));
+    assert.deepEqual(filesUnder(stage, ['.']), expected);
+    const { copyDir } = builderRequire('builder-util/out/fs');
+    await copyDir(stage, packaged, { isUseHardLink: false });
+    assert.deepEqual(filesUnder(packaged, ['.']), expected);
+    assert.equal(Object.keys(filesUnder(source, ['.'])).length, Object.keys(files).length);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
