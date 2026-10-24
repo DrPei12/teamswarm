@@ -84,10 +84,12 @@ try {
   assert.equal(await detail.getByText("After adoption", { exact: true }).isVisible(), true);
   assert.ok((await detail.locator(".adoption-comparison").innerText()).includes("Group related paragraphs by topic."));
   if (process.env.TEAMSWARM_UI_SCREENSHOT) await page.screenshot({ path: process.env.TEAMSWARM_UI_SCREENSHOT });
+  await page.waitForFunction(() => document.querySelector(".adoption-document-toggle")?.getAttribute("aria-expanded") === "true");
   await page.setViewportSize({ width: 900, height: 900 });
+  await page.waitForFunction(() => document.body.style.pointerEvents === "none");
   const toggle = detail.getByRole("button", { name: "Reading requirements", exact: true });
-  if (await toggle.getAttribute("aria-expanded") === "false") await toggle.click();
-  await page.waitForFunction(() => document.querySelector(".adoption-document .activity-disclosure")?.getAttribute("aria-hidden") === "false" && document.querySelector(".adoption-comparison")?.getBoundingClientRect().height > 0);
+  assert.equal(await toggle.getAttribute("aria-expanded"), "true", "Expanded document survives the responsive dialog transition");
+  await page.waitForFunction(() => document.querySelector(".adoption-document .activity-disclosure")?.getAttribute("aria-hidden") === "false" && document.querySelector(".adoption-document .activity-disclosure")?.getBoundingClientRect().height > 0);
   await detail.getByText("After adoption", { exact: true }).scrollIntoViewIfNeeded();
   if (process.env.TEAMSWARM_UI_SCREENSHOT) await page.screenshot({ path: process.env.TEAMSWARM_UI_SCREENSHOT.replace(/\.png$/, "-900.png") });
   await detail.getByRole("button", { name: "View source branch", exact: true }).click();

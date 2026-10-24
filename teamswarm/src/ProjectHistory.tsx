@@ -68,19 +68,22 @@ function AdoptionDocument({
   before,
   after,
   documentKey,
+  open,
+  onToggle,
 }: {
   before?: ProjectDocument;
   after?: ProjectDocument;
   documentKey: string;
+  open: boolean;
+  onToggle: () => void;
 }) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(false);
   return (
     <section className="adoption-document">
       <button
         className="adoption-document-toggle"
         aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
+        onClick={onToggle}
       >
         <span>{after?.title ?? before?.title ?? documentKey}</span>
         <ChevronDown size={14} />
@@ -321,6 +324,9 @@ function HistoryContent({
   const [positions, setPositions] = useState<
     Record<string, { x: number; y: number }>
   >(team.historyPositions ?? {});
+  const [expandedAdoptions, setExpandedAdoptions] = useState<
+    Record<string, boolean>
+  >({});
   const [detailTab, setDetailTab] = useState<"overview" | "members">(
     "overview",
   );
@@ -1213,6 +1219,18 @@ function HistoryContent({
                                       documentKey={key}
                                       before={before}
                                       after={after}
+                                      open={
+                                        !!expandedAdoptions[
+                                          `${displayed.id}:${key}`
+                                        ]
+                                      }
+                                      onToggle={() =>
+                                        setExpandedAdoptions((current) => ({
+                                          ...current,
+                                          [`${displayed.id}:${key}`]:
+                                            !current[`${displayed.id}:${key}`],
+                                        }))
+                                      }
                                     />
                                   );
                                 },
