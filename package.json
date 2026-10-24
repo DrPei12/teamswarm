@@ -30,9 +30,9 @@
     "@openai/codex": "0.163.0",
     "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^24.0.0",
-    "electron": "^44.6.0",
+    "electron": "44.9.1",
     "electron-builder": "26.15.3",
-    "npm": "file:vendor/npm-11.21.1-teamswarm.1.tgz",
+    "npm": "file:vendor/npm-11.21.1-teamswarm.2.tgz",
     "typescript": "^5.9.0"
   },
   "license": "Apache-2.0",

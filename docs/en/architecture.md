@@ -35,3 +35,5 @@ Adapters translate execution configuration to the native harness and observe its
 SQLite stores product facts and execution receipts. The runtime records launch intent before native execution and preserves uncertain ownership until recovery can reconcile it. Process creation identity and system boot information help distinguish a live execution from a reused PID or an earlier operating-system boot.
 
 The service is local and single-user. The renderer uses a local control credential; agent-facing Team tools use separately scoped capabilities. Native tool execution retains its configured permissions and operating-system user privileges.
+
+The Host omits the current source message from its recent-history input when its message ID and full content match the request carried by the work. The eight-message selection window stays fixed, and earlier messages with identical wording remain in history.

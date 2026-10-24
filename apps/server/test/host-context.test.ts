@@ -296,8 +296,8 @@ test("bounded long history, exact frame identity, searchable originals and recov
       first.attemptId!,
     );
     assert.ok(frame.inputBytes < 24000);
-    assert.equal(frame.input.history.length, 8);
-    assert.equal(frame.input.historyAccess.omittedMessages, 995);
+    assert.equal(frame.input.history.length, 7);
+    assert.equal(frame.input.historyAccess.omittedMessages, 996);
     assert.equal(
       frame.inputBytes,
       Buffer.byteLength(app.harness.requests.at(-1)!.input),
@@ -569,6 +569,127 @@ test("failed requests remain discoverable without production work and repeated t
         app.service.runtime.store.settings(app.team.id)!,
       ),
       false,
+    );
+  } finally {
+    await app.close();
+  }
+});
+
+test("Host history does not repeat the source request already carried by its work", async () => {
+  const app = await setup();
+  try {
+    const text =
+      "Preserve the existing synthetic report and finish its verification.";
+    const first = await app.send(text);
+    const firstInput = JSON.parse(app.harness.requests.at(-1)!.input);
+    assert.equal(firstInput.work.instructions, text);
+    assert.equal(
+      firstInput.history.some((m: any) => m.id === firstInput.sourceMessageId),
+      false,
+    );
+    const second = await app.send(text);
+    const secondInput = JSON.parse(app.harness.requests.at(-1)!.input);
+    assert.equal(second.status, "submitted");
+    assert.equal(secondInput.work.instructions, text);
+    assert.equal(
+      secondInput.history.some(
+        (m: any) => m.id === secondInput.sourceMessageId,
+      ),
+      false,
+    );
+    // Equal wording from an older user turn remains a distinct historical decision.
+    assert.ok(
+      secondInput.history.some(
+        (m: any) => m.id === firstInput.sourceMessageId && m.content === text,
+      ),
+    );
+    assert.equal(first.status, "submitted");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Host follow-ups retain source messages whose content differs from work instructions", async () => {
+  const app = await setup();
+  try {
+    const source = "Keep the report in JSON.";
+    const work = await app.send(source);
+    const runtime = app.service.runtime;
+    const run = runtime.store.get<any>("runs", app.team.id, work.runId);
+    const attempt = runtime.store.get<Attempt>(
+      "attempts",
+      app.team.id,
+      work.attemptId!,
+    );
+    const project = runtime.history.context(app.team.id, app.branch.id);
+    for (const instructions of [
+      "Inspect the submitted report.",
+      `${source}\n`,
+    ]) {
+      const input = runtime.hostContext.assemble(
+        { ...work, kind: "host-followup", instructions },
+        { ...attempt, id: randomUUID() },
+        run,
+        project,
+        [],
+        undefined,
+        { sourceMessageId: run.sourceMessageId },
+      );
+      assert.equal(input.work.instructions, instructions);
+      assert.ok(
+        input.history.some(
+          (message: any) =>
+            message.id === run.sourceMessageId && message.content === source,
+        ),
+      );
+    }
+  } finally {
+    await app.close();
+  }
+});
+
+test("Host follow-ups keep the last eight messages when the source is outside the window", async () => {
+  const app = await setup();
+  try {
+    const work = await app.send("Generate the report.");
+    for (let index = 0; index < 10; index++) {
+      app.service.store.recordMessage(
+        app.team.id,
+        app.chat.id,
+        `Report update ${index}`,
+        `update-${index}`,
+      );
+    }
+    const runtime = app.service.runtime;
+    const run = runtime.store.get<any>("runs", app.team.id, work.runId);
+    const attempt = runtime.store.get<Attempt>(
+      "attempts",
+      app.team.id,
+      work.attemptId!,
+    );
+    const messages = app.service.store.getConversationDetail(
+      app.team.id,
+      app.chat.id,
+    ).messages;
+    const input = runtime.hostContext.assemble(
+      { ...work, kind: "host-followup" },
+      { ...attempt, id: randomUUID() },
+      run,
+      runtime.history.context(app.team.id, app.branch.id),
+      [],
+      undefined,
+      { sourceMessageId: run.sourceMessageId },
+    );
+    assert.deepEqual(
+      input.history.map((message: any) => message.id),
+      messages.slice(-8).map((message: any) => message.id),
+    );
+    assert.equal(input.history.length, 8);
+    assert.equal(input.historyAccess.omittedMessages, messages.length - 8);
+    assert.deepEqual(
+      app.service.store.getConversationDetail(app.team.id, app.chat.id)
+        .messages,
+      messages,
     );
   } finally {
     await app.close();
