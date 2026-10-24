@@ -550,6 +550,10 @@ export class CodexHarness implements Harness {
   }
   validateConfig(c: HarnessRequest["config"]) {
     codexCommand();
+    if (c.contextWindowTokens != null)
+      throw new Error("An explicit context window requires Pi or OpenCode.");
+    if (c.maxOutputTokens != null)
+      throw new Error("An explicit output token budget requires Pi or OpenCode.");
     if (c.protocol && c.protocol !== "responses")
       throw new Error("Codex requires a Responses endpoint.");
     if (c.baseUrl && (!c.model || !c.credentialEnv))

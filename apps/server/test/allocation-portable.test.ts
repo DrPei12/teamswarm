@@ -92,9 +92,8 @@ test("export refuses incompatible configs and secrets that cannot travel", () =>
   assert.throws(() =>
     buildPortablePackage({ resources: [resource("bad", config({ credentialEnv: null }))], selections: [] }),
     (error) => isServiceError(error, 400, "incompatible_resource"));
-  // Compatibility is the contract's static rule: effort belongs to codex alone,
-  // and every other Harness needs a credential reference.
-  assert.equal(checkExecutionCompatibility(config({ harness: "pi", effort: "high" })).includes("unsupported_effort"), true);
+  // Pi chat-completions now supports explicit effort; OpenCode still rejects it.
+  assert.equal(checkExecutionCompatibility(config({ harness: "opencode", effort: "high" })).includes("unsupported_effort"), true);
   assert.equal(checkExecutionCompatibility(config({ harness: "codex", effort: "high" })).includes("unsupported_effort"), false);
   // Literal secrets, native paths and session-ish fields are not part of the
   // execution grammar, so nothing that carries them can be exported at all.

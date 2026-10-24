@@ -36,4 +36,4 @@ SQLite stores product facts and execution receipts. The runtime records launch i
 
 The service is local and single-user. The renderer uses a local control credential; agent-facing Team tools use separately scoped capabilities. Native tool execution retains its configured permissions and operating-system user privileges.
 
-The Host keeps the current source request in the work instructions. When that same message is already present there in full, it is omitted from the recent-history slice sent to the harness. Other turns with identical wording remain separate history entries; the stored conversation, requirements and project definitions are unchanged. This removes one duplicate input copy, not native session history or provider token charges.
+The Host omits the current source message from its recent-history input when its message ID and full content match the request carried by the work. The eight-message selection window stays fixed, and earlier messages with identical wording remain in history.

@@ -8,6 +8,8 @@ On Windows, use a short checkout path such as `C:\src\teamswarm` for native desk
 
 The build proxy uses `roarr 3.0.0` with string-only formatting for fixed messages and structured context. The scoped npm override keeps `sprintf-js` out of the build dependency tree.
 
+The bundled npm runtime is `11.21.1-teamswarm.1`, based on npm 11.21.1 with upstream `ip-address 10.7.4` for GHSA-rxp7-6hxx-x8q5. Its pinned archive is installed by `npm ci` and copied into desktop packages. See [runtime sources and reproduction](../../vendor/README.md).
+
 ```sh
 npm ci
 npm run check

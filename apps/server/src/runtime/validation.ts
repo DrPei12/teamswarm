@@ -44,6 +44,8 @@ export const executionConfig = z
       .nullable()
       .optional(),
     thinkingFormat: z.enum(["qwen"]).nullable().optional(),
+    maxOutputTokens: z.number().int().min(1).max(131072).nullable().optional(),
+    contextWindowTokens: z.number().int().min(1024).max(2097152).nullable().optional(),
   })
   .strict();
 export const runtimeSettings = z

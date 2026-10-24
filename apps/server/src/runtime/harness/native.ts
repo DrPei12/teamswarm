@@ -90,6 +90,10 @@ export class NativeHarness implements Harness {
   }
   validateConfig(config: ExecutionConfig) {
     const entry = nativeEntry(this.id);
+    if (config.contextWindowTokens != null && !["pi", "opencode"].includes(this.id))
+      throw new Error("An explicit context window requires Pi or OpenCode.");
+    if (config.maxOutputTokens != null && !["pi", "opencode"].includes(this.id))
+      throw new Error("An explicit output token budget requires Pi or OpenCode.");
     if (this.id === "grok" && path.basename(entry) === "grok-bootstrap.js") throw new Error("Finish the device installation check, then refresh the account status.");
     if ((this.id === "claude-code" || this.id === "grok") && !config.baseUrl && !config.credentialEnv) {
       if (config.protocol && config.protocol !== (this.id === "claude-code" ? "anthropic-messages" : "chat-completions")) throw new Error("Subscription access uses the harness's native protocol.");
@@ -107,7 +111,7 @@ export class NativeHarness implements Harness {
       config.protocol !== "anthropic-messages"
     )
       throw new Error(`${this.id} requires Anthropic Messages.`);
-    if (config.effort != null)
+    if (config.effort != null && !(this.id === "pi" && (!config.protocol || config.protocol === "chat-completions") && ["minimal", "low", "medium", "high", "xhigh", "max"].includes(config.effort)))
       throw new Error(
         `${this.id} does not yet support an explicit reasoning effort; use null.`,
       );
@@ -239,6 +243,7 @@ export class NativeHarness implements Harness {
         env.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
         env.OPENCODE_DISABLE_DEFAULT_PLUGINS = "true";
         env.OPENCODE_DISABLE_MODELS_FETCH = "true";
+        env.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX = String(c.maxOutputTokens ?? 8192);
         env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           share: "disabled",
@@ -263,7 +268,7 @@ export class NativeHarness implements Harness {
               models: {
                 [c.model!]: {
                   name: c.model,
-                  limit: { context: 131072, output: 8192 },
+                  limit: { context: c.contextWindowTokens ?? 131072, output: c.maxOutputTokens ?? 8192 },
                 },
               },
             },

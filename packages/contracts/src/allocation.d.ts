@@ -46,7 +46,7 @@ export interface AllocationRequest {
   selection: ResourceSelection;
 }
 export type CompatibilityIssue = "unknown_harness" | "incompatible_protocol" |
-  "missing_configuration" | "unsupported_effort" | "unsupported_thinking_format";
+  "missing_configuration" | "unsupported_effort" | "unsupported_thinking_format" | "unsupported_output_budget" | "unsupported_context_window";
 export interface ResourceAvailability {
   status: "not_checked" | "available" | "not_installed" | "missing_credentials" |
     "incompatible" | "unavailable" | "stale";

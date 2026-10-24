@@ -178,6 +178,10 @@ export class TeamRuntime {
         "The configured credential environment variable is not available to this service.",
       );
     try {
+      if (config.contextWindowTokens != null && !["pi", "opencode"].includes(config.harness))
+        throw new Error("An explicit context window requires Pi or OpenCode.");
+      if (config.maxOutputTokens != null && !["pi", "opencode"].includes(config.harness))
+        throw new Error("An explicit output token budget requires Pi or OpenCode.");
       if (config.thinkingFormat && config.harness !== "pi")
         throw new Error(
           "The configured thinking format requires the Pi adapter.",

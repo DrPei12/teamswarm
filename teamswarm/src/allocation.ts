@@ -50,7 +50,14 @@ export function resourceIssues(config: ExecutionConfig): CompatibilityIssue[] {
       !config.baseUrl &&
       !config.credentialEnv
     ) &&
-    config.effort != null
+    config.effort != null &&
+    !(
+      config.harness === "pi" &&
+      (!config.protocol || config.protocol === "chat-completions") &&
+      ["minimal", "low", "medium", "high", "xhigh", "max"].includes(
+        config.effort,
+      )
+    )
   )
     issues.push("unsupported_effort");
   if (
@@ -59,6 +66,16 @@ export function resourceIssues(config: ExecutionConfig): CompatibilityIssue[] {
       (config.protocol && config.protocol !== "chat-completions"))
   )
     issues.push("unsupported_thinking_format");
+  if (
+    config.maxOutputTokens != null &&
+    !["pi", "opencode"].includes(config.harness)
+  )
+    issues.push("unsupported_output_budget");
+  if (
+    config.contextWindowTokens != null &&
+    !["pi", "opencode"].includes(config.harness)
+  )
+    issues.push("unsupported_context_window");
   return issues;
 }
 
@@ -171,6 +188,18 @@ export function configFields(config: ExecutionConfig): ResourceConfigField[] {
     { label: "API endpoint", value: config.baseUrl ?? "—" },
     { label: "Credential reference", value: config.credentialEnv ?? "—" },
     { label: "Effort", value: config.effort ?? "Default" },
+    ...(["pi", "opencode"].includes(config.harness)
+      ? [
+          {
+            label: "Context window tokens",
+            value: String(config.contextWindowTokens ?? 131072),
+          },
+          {
+            label: "Maximum output tokens",
+            value: String(config.maxOutputTokens ?? 8192),
+          },
+        ]
+      : []),
     {
       label: "Access",
       value:
@@ -219,6 +248,8 @@ const configKeys = new Set([
   "access",
   "protocol",
   "thinkingFormat",
+  "maxOutputTokens",
+  "contextWindowTokens",
 ]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
