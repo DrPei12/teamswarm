@@ -79,7 +79,7 @@ try {
     createDestination(directory);
     for (const item of readdirSync(path.join(source, "data"))) copyTree(path.join(source, "data", item), path.join(directory, item));
     console.log("Restored into a new data folder. Set TEAM_DATA_DIR to this folder before opening TeamSwarm. Project paths retain their original locations.");
-  } else throw new Error("Use diagnostics, backup or restore. See docs/en/data-and-privacy.md for exact commands and data scope.");
+  } else throw new Error("Use diagnostics, backup or restore. See README.md#data-and-recovery for exact commands and data scope.");
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;

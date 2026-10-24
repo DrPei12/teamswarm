@@ -87,7 +87,7 @@ export function packageInventory(product, frontendRoot) {
       if (!existsSync(path.join(product, file))) throw new Error(`Missing license file: ${file}`);
   }
   const nativeTools = JSON.parse(readFileSync(path.join(product, "config/harnesses.json"), "utf8"));
-  const files = filesUnder(product, ["apps", "teamswarm", "scripts", "config", "runtime", "node_modules", "licenses", "package.json", "package-lock.json", "runtime-manifest.json", "build-identity.json", "TeamSwarm-Tools.cmd", "Install-Harnesses.cmd", "docs", "LICENSE", "NOTICE", "TeamSwarm-Tools.sh", "Install-Harnesses.sh"]);
+  const files = filesUnder(product, ["apps", "teamswarm", "scripts", "config", "runtime", "node_modules", "licenses", "package.json", "package-lock.json", "runtime-manifest.json", "build-identity.json", "TeamSwarm-Tools.cmd", "Install-Harnesses.cmd", "README.md", "README.zh-CN.md", "THIRD_PARTY_NOTICES.md", "LICENSE", "NOTICE", "TeamSwarm-Tools.sh", "Install-Harnesses.sh"]);
   return { schemaVersion: 1, packages: packages.sort((a, b) => (a.scope + a.name + a.location).localeCompare(b.scope + b.name + b.location)),
     nativeTools: Object.fromEntries(Object.entries(nativeTools).map(([name, spec]) => [name, { ...spec, distribution: name === "codex" ? "bundled" : "installed separately by user" }])),
     files, contentSha256: digest(JSON.stringify(files)) };

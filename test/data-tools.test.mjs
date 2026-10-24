@@ -48,6 +48,8 @@ test('CLI help points to a document shipped in source and desktop packages', () 
   const result = spawnSync(process.execPath, [cli], { cwd: root, encoding: 'utf8', windowsHide: true });
   assert.equal(result.status, 1);
   const relative = result.stderr.match(/See (\S+) for exact commands/)[1];
-  assert.equal(relative, 'docs/en/data-and-privacy.md');
-  assert.ok(existsSync(path.join(root, relative)));
+  assert.equal(relative, 'README.md#data-and-recovery');
+  const [file, anchor] = relative.split('#');
+  assert.ok(existsSync(path.join(root, file)));
+  for (const name of [file, 'README.zh-CN.md']) assert.ok(readFileSync(path.join(root, name), 'utf8').includes('<a id="' + anchor + '"></a>'));
 });

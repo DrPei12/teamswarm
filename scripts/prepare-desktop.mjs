@@ -22,7 +22,7 @@ if (existsSync(target)) {
   rmSync(target, { recursive: true });
 }
 mkdirSync(target, { recursive: true });
-for (const item of ["apps/server/dist", "teamswarm/dist", "docs", "LICENSE", "NOTICE"])
+for (const item of ["apps/server/dist", "teamswarm/dist", "README.md", "README.zh-CN.md", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"])
   copy(path.join(root, item), path.join(target, item));
 for (const item of ["start-product.mjs", "platform.cjs", "data-tools.mjs", "release-identity.mjs", "install-harnesses.mjs"])
   copy(path.join(root, "scripts", item), path.join(target, "scripts", item));
