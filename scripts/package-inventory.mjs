@@ -1,6 +1,25 @@
-import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, writeFileSync, mkdirSync, realpathSync, copyFileSync, chmodSync } from "node:fs";
 import path from "node:path";
 import { digest, filesUnder } from "./release-identity.mjs";
+
+export function copyPackageInput(source, destination, boundary = realpathSync(source)) {
+  if ([".gitkeep", ".DS_Store"].includes(path.basename(source))) return;
+  const stat = lstatSync(source);
+  if (stat.isSymbolicLink()) {
+    const resolved = realpathSync(source);
+    const relative = path.relative(boundary, resolved);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Build input link escapes its package.");
+    return copyPackageInput(resolved, destination, boundary);
+  }
+  if (stat.isDirectory()) {
+    mkdirSync(destination, { recursive: true });
+    for (const entry of readdirSync(source)) copyPackageInput(path.join(source, entry), path.join(destination, entry), boundary);
+  } else {
+    mkdirSync(path.dirname(destination), { recursive: true });
+    copyFileSync(source, destination);
+    if (process.platform !== "win32") chmodSync(destination, stat.mode & 0o777);
+  }
+}
 
 export function packageInventory(product, frontendRoot) {
   const packages = [];
