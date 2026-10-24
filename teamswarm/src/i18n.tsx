@@ -10,6 +10,59 @@ export type Language = "en" | "zh-CN";
 export const zhCN: Record<string, string> = {
   "Context window tokens": "上下文 token 数",
   "Maximum output tokens": "最大输出 token 数",
+  "A context window override requires Pi or OpenCode":
+    "上下文窗口覆盖仅支持 Pi 或 OpenCode",
+  "An output token budget requires Pi or OpenCode":
+    "输出 token 预算仅支持 Pi 或 OpenCode",
+  "Adopted into mainline": "已合回主线",
+  Adopted: "已采用",
+  "Adopted ideas are now part of the mainline documents.":
+    "已采用的想法已融入主线文档。",
+  "Adopted ideas": "采用的想法",
+  "Adoption decision": "采用决定",
+  "View source branch": "查看来源分支",
+  "Changed documents": "变更的文档",
+  "Before adoption": "采用前",
+  "After adoption": "采用后",
+  "New document": "新增文档",
+  "Updates to review": "待查看进展",
+  "Progress history": "进展记录",
+  "Earlier context": "较早的项目背景",
+  "Not yet viewed": "尚未查看",
+  "Later result available": "已有后续成果",
+  Viewed: "已查看",
+  Report: "报告",
+  "Adopt ideas into mainline": "将想法融入主线",
+  "Preserve an idea": "保留想法",
+  "Could not load the model list. Check the address and API key, or enter a model ID.":
+    "未能读取型号列表。请检查 API 地址和密钥，也可以直接添加型号 ID。",
+  "Add an API key before loading models.": "请先配置 API Key，再读取型号列表。",
+  "Last conversation paused": "上次交流已暂停",
+  "Last conversation failed": "上次交流未完成",
+  Overview: "这一步的进展",
+  Contributors: "成员贡献",
+  "History details": "历史节点详情",
+  "Retained idea": "保留想法",
+  "An idea from the conversation, kept with its original source.":
+    "从讨论中提炼的想法，保留原话与当前判断。",
+  "The team started here.": "团队从这里开始。",
+  "The shared plan was updated.": "更新了团队共同使用的方案。",
+  "Explore this direction with the context from this point.":
+    "从这一刻的上下文出发，探索另一个方向。",
+  "Selected definitions were brought into this direction.":
+    "将选定的方案版本带入了当前方向。",
+  "This work passed independent review.": "这项工作已通过独立验收。",
+  "Host brought the results together for delivery.":
+    "Host 汇总了成员的成果并交付。",
+  "{name}: {status}": "{name}：{status}",
+  "Files and context preserved for exploring another direction.":
+    "保留此刻的文件与上下文，方便从这里探索新方向。",
+  "Context reused": "沿用方案",
+  "Submitted for review": "已提交，等待验收",
+  "Original discussion": "原始讨论",
+  "Open work conversation": "查看工作对话",
+  "This is a discussion or context checkpoint; no member result was attached.":
+    "这是讨论或上下文记录，没有关联的成员成果。",
   "Loading earlier messages…": "正在加载更早的消息…",
   "Team capabilities": "团队能力与偏好",
   "Choose the tools your team can use": "选择团队可以使用的 Harness",
@@ -324,7 +377,15 @@ export const zhCN: Record<string, string> = {
   Commitment: "承诺",
   Due: "到期时间",
   "Work result": "工作成果",
-  "Independent acceptance": "独立接受",
+  "Independent acceptance": "独立验收",
+  Review: "验收",
+  "Review submitted": "已提交验收意见",
+  "Results summarized": "已汇总结果",
+  "Idea recorded": "已保留想法",
+  "Preserved this idea from the discussion": "从讨论中提炼并保留了这条想法",
+  "Self-checked": "已自检",
+  Accepted: "已验收",
+  Superseded: "已被后续工作替代",
   "Needs reconciliation": "等待确认执行状态",
   "This message is no longer available.": "这条消息已不可用。",
   "Load earlier messages": "加载更早的消息",
@@ -385,6 +446,7 @@ export const zhCN: Record<string, string> = {
   "Sign in with ChatGPT": "使用 ChatGPT 登录",
   Archived: "已归档",
   "Try again from here": "从这里重新尝试",
+  "Branch from here": "从这里开分支",
   "Current position": "当前位置",
   "Reviewing team results": "处理团队结果",
   none: "无",
@@ -720,10 +782,6 @@ export const zhCN: Record<string, string> = {
     "此 Harness 不支持显式推理强度",
   "Thinking format requires Pi chat completions":
     "思考格式仅在 Pi 的 Chat Completions 下可用",
-  "A context window override requires Pi or OpenCode":
-    "上下文窗口覆盖仅支持 Pi 或 OpenCode",
-  "An output token budget requires Pi or OpenCode":
-    "输出 token 预算仅支持 Pi 或 OpenCode",
   "Pi Thinking format (qwen)": "Pi 思考格式（qwen）",
   "Member and task allocation": "成员与任务分配",
   "A member default seeds future work; a task selection pins one work and always wins.":

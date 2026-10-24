@@ -25,3 +25,23 @@ Describe changed requirements in the Host conversation. Current project definiti
 ## Pause, resume and recover
 
 Use the execution controls to pause or stop work. Wait for the displayed execution state to settle before starting conflicting changes. If the service loses contact with an attempt, use recovery to reconcile it before retrying. See [Troubleshooting](troubleshooting.md).
+
+## File ownership and continuation
+
+Each production task declares the relative files or directories it owns. Members use Team file tools for those changes; other project files remain read-only. A write requires the current file hash, and overlapping active ownership is rejected. Disjoint file tasks can run concurrently. Repeating the same responsibility returns its existing work; send new instructions to that thread or continue it explicitly.
+
+Continue a work thread to retain its member, file scope and unpublished candidate. The earlier result and the new submission keep separate versions.
+
+## Update an independent review
+
+Change review instructions on the existing review. A running reviewer must read the new revision before accepting work and rerun required commands afterward. File-only reviews can compare content without a command sandbox. Executable checks require a member with native check support; TeamSwarm prepares a temporary directory while keeping project files read-only.
+
+## Adopt a discussion branch
+
+Discuss an idea in its source branch and keep it as a proposed insight. When you decide to adopt it, tell the Host directly, for example: “Adopt this branch's proposed reading layout into the mainline documents.” The Host compares the source, its base and the current mainline, then updates the selected documents. A newer message or a changed branch head requires it to read the current decision and context again.
+
+Open the merge node in project history to see the decision, source discussion, selected ideas and document changes. Adoption updates project definitions; request implementation when you want those definitions applied to code.
+
+## Progress and completed results
+
+Progress updates and completed deliverables have separate lists. A completed result remains available when a full workspace snapshot cannot be captured. History nodes without a file snapshot can be inspected; creating a new workspace branch requires a node with a saved snapshot.

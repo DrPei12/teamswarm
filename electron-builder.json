@@ -1,7 +1,7 @@
 {
   "appId": "org.teamswarm.desktop",
   "productName": "TeamSwarm",
-  "electronVersion": "44.6.0",
+  "electronVersion": "44.9.1",
   "directories": {
     "app": "apps/desktop",
     "output": "release"

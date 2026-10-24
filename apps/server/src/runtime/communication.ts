@@ -54,13 +54,15 @@ export class TeamCommunication {
   }
   participant(work: Work, id: string, allowHost = false, allowReview = false) {
     const e = this.store.get<TeamExchange>("exchanges", work.teamId, id);
-    // A formal review may inspect evidence produced by its exact target Work.
+    // A formal review may inspect its target and that responsibility's earlier turns.
     // This is read authority only, never participant or mutation authority.
+    const reviewWorkIds = new Set(
+      allowReview ? this.reviewLineage(work).map((target) => target.id) : [],
+    );
     const reviewEvidence =
       allowReview &&
-      work.reviewOf &&
-      (e.originWorkId === work.reviewOf ||
-        this.messages(e).some((m) => m.workId === work.reviewOf));
+      (reviewWorkIds.has(e.originWorkId) ||
+        this.messages(e).some((m) => reviewWorkIds.has(m.workId)));
     if (
       e.branchId !== this.branch(work) ||
       (![e.initiatorId, e.recipientId].includes(work.memberId) &&
@@ -162,7 +164,35 @@ export class TeamCommunication {
       .all(id);
     return { exchange, messages, reads };
   }
+  private reviewLineage(work: Work): Work[] {
+    if (!work.reviewOf) return [];
+    const lineage: Work[] = [],
+      seen = new Set<string>();
+    const branch = this.branch(work);
+    let id: string | undefined | null = work.reviewOf;
+    while (id && !seen.has(id) && lineage.length < 256) {
+      seen.add(id);
+      const target: Work = this.store.get<Work>("works", work.teamId, id);
+      if (
+        this.branch(target) !== branch ||
+        target.reviewOf ||
+        (lineage.length && target.memberId !== lineage[0]!.memberId)
+      )
+        break;
+      lineage.push(target);
+      id = target.continuationOf;
+    }
+    return lineage;
+  }
   canReadArtifact(work: Work, artifactId: string) {
+    if (
+      this.reviewLineage(work).some(
+        (target) =>
+          target.artifactIds.includes(artifactId) ||
+          target.inputs.includes(artifactId),
+      )
+    )
+      return true;
     return this.exchanges(work.teamId, this.branch(work)).some(
       (e) =>
         [e.initiatorId, e.recipientId].includes(work.memberId) &&
@@ -529,7 +559,7 @@ export class TeamCommunication {
     return {
       checkpointed: true,
       instruction:
-        "End this native turn now. Responsibility remains assigned; the scheduler resumes it at a new turn boundary. Wait for a meaningful response or deadline; do not use short waits to poll.",
+        "End this native turn now. Responsibility remains assigned; a meaningful new reply resumes it at a new turn boundary. A deadline records overdue status without starting a model turn. Do not poll.",
     };
   }
   finishYield(work: Work, attempt: Attempt) {
@@ -573,17 +603,16 @@ export class TeamCommunication {
                 m.sequence >
                 (w.continuation!.observedInbox?.[i.exchange.id] ?? 0),
             ),
-          ) ||
-          expired
+          )
         ) {
-          if (expired)
-            this.store.event(
-              teamId,
-              "exchange.wait_expired",
-              { exchangeIds: w.continuation.waitForExchangeIds },
-              w,
-            );
           this.store.setStatus(w, "queued");
+        } else if (expired && !w.continuation.timeoutReportedAt) {
+          w.continuation.timeoutReportedAt = now();
+          this.store.save("works", w);
+          this.store.event(teamId, "exchange.wait_expired", {
+            exchangeIds: w.continuation.waitForExchangeIds,
+            action: "waiting_for_new_evidence",
+          }, w);
         }
       }
       for (const e of this.store

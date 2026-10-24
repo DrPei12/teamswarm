@@ -128,7 +128,6 @@ async function existingService() {
   )
     return null;
   try {
-    process.kill(info.pid, 0);
     const response = await fetch(`http://127.0.0.1:${info.port}/api/teams`, {
       headers: { Authorization: `Bearer ${credential.token}` },
       signal: AbortSignal.timeout(1500),

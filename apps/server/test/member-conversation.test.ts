@@ -201,6 +201,13 @@ test("member HTTP input is idempotent, streams typed activity, and does not repl
     const input = JSON.parse(request.input);
     assert.equal(input.incomingMessages[0].content, body.content);
     assert.equal(request.config.access, "read-only");
+    assert(!request.tools.some((tool) => ["team_submit_result", "team_yield"].includes(tool.name)));
+    assert.match(request.instructions, /Finish with a final response/);
+    assert.match(input.collaboration, /No artifact submission or yield checkpoint/);
+    await assert.rejects(
+      request.onTool("team_yield", {summary: "End conversation", waitForExchangeIds: []}, randomUUID()),
+      /no yield checkpoint/,
+    );
     request.onEvent({
       type: "transcript.item",
       data: { id: "reason", kind: "reasoning", text: "", status: "running" },
@@ -409,6 +416,12 @@ test("durable exchanges preserve original correspondence and use actual thread p
     );
 
     communication.read(f.wb, ab, sent.exchange.id);
+    const processing = communicationExchanges(f.service.runtime, f.team.id).find((e) => e.id === sent.message.id)!;
+    assert.equal(processing.readByRecipient, true);
+    assert.equal(processing.active, true, "reading starts processing; it does not end the live communication signal");
+    f.store.setStatus(f.wb, "interrupted");
+    assert.equal(communicationExchanges(f.service.runtime, f.team.id).find((e) => e.id === sent.message.id)!.active, false);
+    f.store.setStatus(f.wb, "running");
     const commitment = {
       text: "Check after the current edit",
       dueAt: new Date(Date.now() + 60000).toISOString(),
@@ -425,6 +438,7 @@ test("durable exchanges preserve original correspondence and use actual thread p
     const received = exchanges.find((e) => e.id === sent.message.id)!;
     assert.equal(received.targetWorkId, f.wb.id);
     assert.equal(received.readByRecipient, true);
+    assert.equal(received.active, false, "an actual reply ends processing of the incoming message");
     assert.equal(received.exchangeStatus, "accepted");
     assert.deepEqual(received.commitment, commitment);
     const conversation = memberConversation(
@@ -477,6 +491,30 @@ test("durable exchanges preserve original correspondence and use actual thread p
   } finally {
     await f.close();
   }
+});
+
+test("Host collaboration summaries are available for explicit viewing without interrupting the conversation", async () => {
+  const f = await fixture();
+  try {
+    const work = f.store.createWork(f.run, f.host.id, "Discussion summary", "Summarize the member discussion", [], [], []);
+    work.kind = "collaboration";
+    f.store.save("works", work);
+    f.run.state = "active";
+    f.store.save("runs", f.run);
+    await until(() => f.harness.requests.length === 1);
+    f.harness.finish({status: "completed", text: "Members compared cancellation boundaries; keep the idea proposed."});
+    await until(() => f.store.get<Work>("works", f.team.id, work.id).status === "submitted");
+    const delivery = f.store.list<any>("deliveries", f.team.id).find((d) => d.workId === work.id);
+    assert.equal(delivery.status, "pending");
+    assert.match(delivery.content, /cancellation boundaries/);
+    const before = f.service.store.getConversationDetail(f.team.id, f.chat.id)!.messages;
+    assert(!before.some((m) => m.content === delivery.content));
+    f.service.runtime.communication.deliver(f.team.id, delivery.id, delivery.contextVersion);
+    const after = f.service.store.getConversationDetail(f.team.id, f.chat.id)!.messages;
+    assert.equal(after.filter((m) => m.content === delivery.content).length, 1);
+    f.service.runtime.communication.deliver(f.team.id, delivery.id, delivery.contextVersion);
+    assert.equal(f.service.store.getConversationDetail(f.team.id, f.chat.id)!.messages.filter((m) => m.content === delivery.content).length, 1);
+  } finally { await f.close(); }
 });
 
 test("exchange messages become branch-scoped insight sources with exact author and thread provenance", async () => {

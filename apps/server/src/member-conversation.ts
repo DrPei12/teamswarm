@@ -58,9 +58,10 @@ function durableExchanges(runtime: TeamRuntime, teamId: string): Exchange[] {
       const read =
         runtime.communication.seen(e, recipientId) >= message.sequence;
       const active =
-        !read &&
         !message.late &&
         !["resolved", "cancelled", "declined"].includes(e.status) &&
+        messages.filter((m) => m.senderId !== recipientId).at(-1)?.id === message.id &&
+        !messages.some((m) => m.senderId === recipientId && m.sequence > message.sequence) &&
         recipientWorks.some((w) => w.status === "running");
       return {
         id: message.id,

@@ -1,6 +1,8 @@
+import { Disclosure } from "./Disclosure";
 import { CanvasViewport } from "./CanvasViewport";
 import {
   useMemo,
+  useEffect,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -12,6 +14,7 @@ import {
   Handle,
   Position,
   useReactFlow,
+  useNodesState,
   type Node,
   type Edge,
   type NodeProps,
@@ -29,13 +32,24 @@ import {
   Search,
   GripVertical,
   LoaderCircle,
+  Lightbulb,
+  Users,
+  ChevronDown,
 } from "lucide-react";
-import type { ProjectNode, ProjectDocument } from "@team/contracts/runtime";
+import type {
+  ProjectNode,
+  ProjectDocument,
+  ProjectInsight,
+  Work,
+} from "@team/contracts/runtime";
+import type { InsightSource } from "@team/contracts/product";
 import type { Workspace, Team } from "./store";
 import { DetailPanel, IconButton, useMediaQuery } from "./ui";
 import { useI18n } from "./i18n";
-import { product } from "./service";
+import { api, product } from "./service";
 import { MessageContent } from "./MessageContent";
+import { SegmentedControl } from "./design-system/SegmentedControl";
+import { InsightStatus } from "./InsightStatus";
 
 type Props = {
   workspace: Workspace;
@@ -44,14 +58,79 @@ type Props = {
   onUpdate: (change: (old: Workspace) => Workspace) => boolean;
   onNavigate: (chatId: string, messageId?: string) => void;
   onDelivery: (id: string) => void;
+  onNavigateMember: (
+    memberId: string,
+    messageId: string,
+    workId?: string,
+  ) => void;
 };
+function AdoptionDocument({
+  before,
+  after,
+  documentKey,
+  open,
+  onToggle,
+}: {
+  before?: ProjectDocument;
+  after?: ProjectDocument;
+  documentKey: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <section className="adoption-document">
+      <button
+        className="adoption-document-toggle"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        <span>{after?.title ?? before?.title ?? documentKey}</span>
+        <ChevronDown size={14} />
+      </button>
+      <Disclosure open={open}>
+        <div className="adoption-comparison">
+          <div>
+            <small>{t("Before adoption")}</small>
+            <MessageContent text={before?.content ?? t("New document")} />
+          </div>
+          <div>
+            <small>{t("After adoption")}</small>
+            <MessageContent text={after?.content ?? t("Removed")} />
+          </div>
+        </div>
+      </Disclosure>
+    </section>
+  );
+}
+function historyWorkStatus(status: string) {
+  return (
+    (
+      {
+        submitted: "Submitted for review",
+        self_checked: "Self-checked",
+        accepted: "Accepted",
+        interrupted: "Paused",
+        failed: "Failed",
+        rejected: "Rejected",
+        superseded: "Superseded",
+        running: "working",
+        waiting: "waiting",
+        queued: "Queued",
+      } as Record<string, string>
+    )[status] ?? status
+  );
+}
 type HistoryNode = Node<
   {
     node: ProjectNode;
     documents: ProjectDocument[];
     branch: string;
     active: boolean;
-    open: () => void;
+    title: string;
+    description: string;
+    contributors: number;
+    open: (tab?: "overview" | "members") => void;
     carry: (id: string) => void;
     drop: (id: string) => void;
     drag: (
@@ -69,13 +148,15 @@ function HistoryCard({ data, selected }: NodeProps<HistoryNode>) {
   const { t } = useI18n();
   const [over, setOver] = useState(false);
   const Icon =
-    data.node.kind === "fork"
-      ? GitBranch
-      : data.node.kind === "definition"
-        ? FileText
-        : data.node.kind === "delivery"
-          ? Check
-          : Flag;
+    data.node.kind === "insight"
+      ? Lightbulb
+      : data.node.kind === "fork" || data.node.kind === "merge"
+        ? GitBranch
+        : data.node.kind === "definition"
+          ? FileText
+          : data.node.kind === "delivery"
+            ? Check
+            : Flag;
   return (
     <div
       className={`graph-card point ${selected ? "selected" : ""} ${data.active ? "current" : ""} ${over || data.draggingOver ? "drop-target" : ""}`}
@@ -100,12 +181,12 @@ function HistoryCard({ data, selected }: NodeProps<HistoryNode>) {
       }}
     >
       <Handle type="target" position={Position.Left} />
-      <button className="graph-card-main nodrag" onClick={data.open}>
+      <button className="graph-card-main" onClick={() => data.open("overview")}>
         <span className="graph-symbol">
           <Icon size={23} />
         </span>
         <span className="graph-copy">
-          <strong>{data.node.title}</strong>
+          <strong>{data.title}</strong>
           <span>
             {data.branch} ·{" "}
             {t(
@@ -118,11 +199,21 @@ function HistoryCard({ data, selected }: NodeProps<HistoryNode>) {
                 delivery: "Delivery",
                 "work-result": "Work result",
                 acceptance: "Independent acceptance",
+                insight: "Retained idea",
+                merge: "Adopted into mainline",
               }[data.node.kind],
             )}
           </span>
         </span>
       </button>
+      <p className="history-card-summary">{data.description}</p>
+      <div className="history-card-actions nodrag nopan">
+        <button onClick={() => data.open("overview")}>{t("Overview")}</button>
+        <button onClick={() => data.open("members")}>
+          <Users size={13} />
+          {t("Contributors")} · {data.contributors}
+        </button>
+      </div>
       <div className="point-meta">
         <time>{data.formatTime(data.node.createdAt)}</time>
         {data.active && (
@@ -156,7 +247,10 @@ function HistoryCard({ data, selected }: NodeProps<HistoryNode>) {
             </button>
           ))}
           {data.documents.length > 2 && (
-            <button className="more-definitions nodrag" onClick={data.open}>
+            <button
+              className="more-definitions nodrag"
+              onClick={() => data.open()}
+            >
               +{data.documents.length - 2}
             </button>
           )}
@@ -181,6 +275,7 @@ function HistoryContent({
   onUpdate,
   onNavigate,
   onDelivery,
+  onNavigateMember,
 }: Props) {
   const { t, locale } = useI18n();
   const reduced = useMediaQuery("(prefers-reduced-motion: reduce)");
@@ -226,6 +321,15 @@ function HistoryContent({
   const [dimensions, setDimensions] = useState<
     Record<string, { width: number; height: number }>
   >({});
+  const [positions, setPositions] = useState<
+    Record<string, { x: number; y: number }>
+  >(team.historyPositions ?? {});
+  const [expandedAdoptions, setExpandedAdoptions] = useState<
+    Record<string, boolean>
+  >({});
+  const [detailTab, setDetailTab] = useState<"overview" | "members">(
+    "overview",
+  );
   const [selected, setSelected] = useState<string | null>(null),
     [forkId, setForkId] = useState<string | null>(null),
     [carry, setCarry] = useState<string | null>(null),
@@ -248,6 +352,72 @@ function HistoryContent({
   const activeBranch =
     workspace.chats.find((c) => c.id === (chatId ?? team.lastChatId))
       ?.branchId ?? branches[0]?.id;
+  const works = workspace.executions?.[team.id]?.works ?? [];
+  const members = workspace.members.filter((m) => m.teamId === team.id);
+  const runtimeHostId = works.find(
+    (w) => w.id === members.find((m) => m.id === `host:${team.id}`)?.workId,
+  )?.memberId;
+  const memberFor = (work: Work) =>
+    members.find(
+      (m) =>
+        m.id === work.memberId ||
+        (work.memberId === runtimeHostId && m.id === `host:${team.id}`),
+    );
+  const contributorsAt = (node: ProjectNode) => {
+    const source = works.find((w) => w.id === node.source.workId);
+    if (node.kind === "insight") return source ? [source] : [];
+    const producers = works.filter((w) =>
+      w.artifactIds.some((id) => node.artifactIds.includes(id)),
+    );
+    const candidates = works.filter(
+      (w) =>
+        w.id === source?.id ||
+        (node.kind === "acceptance" && w.reviewOf === source?.id) ||
+        (node.kind === "delivery" &&
+          producers.some((p) => w.reviewOf === p.id)) ||
+        w.artifactIds.some((id) => node.artifactIds.includes(id)),
+    );
+    return candidates.filter(
+      (w) =>
+        !w.interaction &&
+        w.kind !== "collaboration" &&
+        w.createdAt <= node.createdAt,
+    );
+  };
+  const describe = (node: ProjectNode) => {
+    const work = works.find((w) => w.id === node.source.workId);
+    const actor = work ? (memberFor(work)?.name ?? "Host") : "Host";
+    if (node.kind === "merge")
+      return (
+        node.source.reason ||
+        t("Adopted ideas are now part of the mainline documents.")
+      );
+    if (node.kind === "insight")
+      return t("An idea from the conversation, kept with its original source.");
+    if (node.kind === "root") return t("The team started here.");
+    if (node.kind === "definition")
+      return node.source.reason || t("The shared plan was updated.");
+    if (node.kind === "fork")
+      return t("Explore this direction with the context from this point.");
+    if (node.kind === "selection")
+      return t("Selected definitions were brought into this direction.");
+    if (node.kind === "acceptance")
+      return t("This work passed independent review.");
+    if (node.kind === "delivery")
+      return t("Host brought the results together for delivery.");
+    if (node.kind === "work-result")
+      return t("{name}: {status}", {
+        name: actor,
+        status: t(
+          historyWorkStatus(node.source.reason || work?.status || "submitted"),
+        ),
+      });
+    return t("Files and context preserved for exploring another direction.");
+  };
+  const titleFor = (node: ProjectNode) =>
+    node.title.startsWith("Review: ")
+      ? `${t("Review")} · ${node.title.slice(8)}`
+      : node.title;
   const branch = branches.find((b) => b.id === activeBranch);
   const current = all.find((n) => n.id === selected),
     fork = all.find((n) => n.id === forkId),
@@ -269,7 +439,14 @@ function HistoryContent({
     const depth = new Map<string, number>();
     const edges: Edge[] = [];
     const nodes: HistoryNode[] = all.map((node) => {
-      const x = node.parentNodeId ? (depth.get(node.parentNodeId) ?? 0) + 1 : 0;
+      const x = node.parentNodeId
+        ? Math.max(
+            depth.get(node.parentNodeId) ?? 0,
+            node.source.adoption
+              ? (depth.get(node.source.adoption.sourceNodeId) ?? 0)
+              : 0,
+          ) + 1
+        : 0;
       depth.set(node.id, x);
       if (node.parentNodeId)
         edges.push({
@@ -280,6 +457,16 @@ function HistoryContent({
           className: node.kind === "fork" ? "branch-edge" : "",
           style: { strokeWidth: 1.5, stroke: "var(--graph-line)" },
         });
+      if (node.source.adoption)
+        edges.push({
+          id: `merge:${node.id}`,
+          source: node.source.adoption.sourceNodeId,
+          target: node.id,
+          type: "default",
+          label: t("Adopted"),
+          className: "history-merge-edge",
+          style: { stroke: "var(--accent)", strokeWidth: 2 },
+        });
       const parent = all.find((n) => n.id === node.parentNodeId);
       const changed = docsAt(node).filter(
         (d) => !parent || parent.documents[d.key] !== d.id,
@@ -287,22 +474,27 @@ function HistoryContent({
       return {
         id: node.id,
         type: "history",
-        position: {
+        position: positions[node.id] ?? {
           x: 80 + x * 390,
           y: 100 + branches.findIndex((b) => b.id === node.branchId) * 290,
         },
         measured: dimensions[node.id],
-        draggable: false,
+        draggable: true,
         selected: node.id === (selected ?? forkId),
         data: {
           node,
+          title: titleFor(node),
+          description: describe(node),
+          contributors: new Set(contributorsAt(node).map((w) => w.memberId))
+            .size,
           drag: startDrag,
           draggingOver: dragPreview?.target === node.id,
           consumeDragClick,
           branch: branches.find((b) => b.id === node.branchId)?.name ?? "",
           documents: changed,
           active: branch?.headNodeId === node.id,
-          open: () => {
+          open: (tab = "overview") => {
+            setDetailTab(tab);
             setSelected(node.id);
             setForkId(null);
             setCarry(null);
@@ -324,6 +516,38 @@ function HistoryContent({
         },
       };
     });
+    // Links represent exact reused revisions and declared dependencies, never proximity.
+    for (const node of all) {
+      const revisions = new Set(node.source.selectedRevisionIds ?? []);
+      const parent = all.find((n) => n.id === node.parentNodeId);
+      for (const doc of docsAt(node))
+        if (parent?.documents[doc.key] !== doc.id)
+          for (const dep of doc.dependencies) revisions.add(dep);
+      for (const revision of revisions) {
+        const origin = all.find(
+          (n) =>
+            n.id !== node.id && Object.values(n.documents).includes(revision),
+        );
+        if (
+          origin &&
+          origin.id !== node.parentNodeId &&
+          !edges.some((e) => e.source === origin.id && e.target === node.id)
+        )
+          edges.push({
+            id: `dependency:${origin.id}:${node.id}`,
+            source: origin.id,
+            target: node.id,
+            type: "default",
+            label: t("Context reused"),
+            className: "history-dependency-edge",
+            style: {
+              stroke: "var(--graph-line)",
+              strokeDasharray: "5 5",
+              strokeWidth: 1.3,
+            },
+          });
+      }
+    }
     return { nodes, edges };
   }, [
     workspace,
@@ -334,7 +558,23 @@ function HistoryContent({
     activeBranch,
     dimensions,
     dragPreview?.target,
+    positions,
   ]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<HistoryNode>(
+    graph.nodes,
+  );
+  useEffect(() => {
+    setNodes((previous) =>
+      graph.nodes.map((node) => {
+        const old = previous.find((item) => item.id === node.id);
+        return {
+          ...node,
+          measured: old?.measured,
+          ...(old?.dragging ? { position: old.position, dragging: true } : {}),
+        };
+      }),
+    );
+  }, [graph.nodes, setNodes]);
   const close = () => {
     setSelected(null);
     setForkId(null);
@@ -471,7 +711,10 @@ function HistoryContent({
           </span>
           <button
             className="text-button"
-            onClick={() => branch && setSelected(branch.headNodeId)}
+            onClick={() => {
+              setDetailTab("overview");
+              if (branch) setSelected(branch.headNodeId);
+            }}
           >
             {t("Current position")}
           </button>
@@ -485,9 +728,10 @@ function HistoryContent({
           </button>
         </div>
         <ReactFlow<HistoryNode>
-          nodes={graph.nodes}
+          nodes={nodes}
           edges={graph.edges}
-          onNodesChange={(changes) =>
+          onNodesChange={(changes) => {
+            onNodesChange(changes);
             setDimensions((previous) => {
               let next = previous;
               for (const change of changes)
@@ -499,8 +743,25 @@ function HistoryContent({
                 )
                   next = { ...next, [change.id]: change.dimensions };
               return next;
-            })
-          }
+            });
+          }}
+          onNodeDragStop={(_, node) => {
+            setPositions((old) => ({ ...old, [node.id]: node.position }));
+            onUpdate((w) => ({
+              ...w,
+              teams: w.teams.map((tm) =>
+                tm.id === team.id
+                  ? {
+                      ...tm,
+                      historyPositions: {
+                        ...tm.historyPositions,
+                        [node.id]: node.position,
+                      },
+                    }
+                  : tm,
+              ),
+            }));
+          }}
           nodeTypes={nodeTypes}
           fitView={!team.canvasViewports?.["project-history"]}
           defaultViewport={team.canvasViewports?.["project-history"]}
@@ -515,10 +776,9 @@ function HistoryContent({
           minZoom={0.2}
           maxZoom={1.5}
           nodesConnectable={false}
-          nodesDraggable={false}
+          nodesDraggable
           deleteKeyCode={null}
           onPaneClick={close}
-          onNodeClick={(_, node) => node.data.open()}
           onMoveEnd={(_, viewport) =>
             onUpdate((w) => ({
               ...w,
@@ -632,7 +892,7 @@ function HistoryContent({
       {(displayed || carryDoc) && (
         <DetailPanel
           label={t(
-            fork ? "Try again from here" : carryDoc ? "Carry to" : "Details",
+            fork ? "Branch from here" : carryDoc ? "Carry to" : "Details",
           )}
           className="canvas-detail history-detail"
           onClose={close}
@@ -640,13 +900,7 @@ function HistoryContent({
         >
           <header className="detail-header">
             <span>
-              {t(
-                fork
-                  ? "Try again from here"
-                  : carryDoc
-                    ? "Carry to"
-                    : "Details",
-              )}
+              {t(fork ? "Branch from here" : carryDoc ? "Carry to" : "Details")}
             </span>
             <IconButton label={t("Close details")} onClick={close}>
               <X size={18} />
@@ -683,7 +937,7 @@ function HistoryContent({
                   <p className="detail-eyebrow">
                     {branches.find((b) => b.id === displayed.branchId)?.name}
                   </p>
-                  <h2>{displayed.title}</h2>
+                  <h2>{titleFor(displayed)}</h2>
                   <time>
                     {new Date(displayed.createdAt).toLocaleString(locale)}
                   </time>
@@ -812,64 +1066,266 @@ function HistoryContent({
                     </>
                   ) : (
                     <>
-                      {sourceMessage && (
-                        <div className="history-discussion">
-                          <MessageContent text={sourceMessage.text} />
+                      <SegmentedControl
+                        value={detailTab}
+                        onChange={setDetailTab}
+                        label={t("History details")}
+                        options={[
+                          { value: "overview", label: t("Overview") },
+                          { value: "members", label: t("Contributors") },
+                        ]}
+                      />
+                      {detailTab === "members" ? (
+                        <div className="history-contributors">
+                          {!contributorsAt(displayed).length && (
+                            <p className="muted">
+                              {t(
+                                "This is a discussion or context checkpoint; no member result was attached.",
+                              )}
+                            </p>
+                          )}
+                          {contributorsAt(displayed).map((work) => {
+                            const member = memberFor(work);
+                            const at = workspace.executions?.[team.id]?.attempts
+                              .filter(
+                                (a) =>
+                                  a.workId === work.id &&
+                                  a.startedAt <= displayed.createdAt,
+                              )
+                              .at(-1);
+                            return (
+                              <article key={work.id}>
+                                <div>
+                                  <strong>{member?.name ?? "Host"}</strong>
+                                  <span>
+                                    {t(
+                                      displayed.kind === "insight"
+                                        ? "Idea recorded"
+                                        : work.status === "submitted" &&
+                                            work.reviewOf
+                                          ? "Review submitted"
+                                          : work.status === "submitted" &&
+                                              member?.id === `host:${team.id}`
+                                            ? "Results summarized"
+                                            : historyWorkStatus(
+                                                work.id ===
+                                                  displayed.source.workId &&
+                                                  displayed.kind ===
+                                                    "work-result"
+                                                  ? displayed.source.reason ||
+                                                      work.status
+                                                  : work.status,
+                                              ),
+                                    )}
+                                  </span>
+                                </div>
+                                <p>
+                                  {displayed.kind === "insight"
+                                    ? t(
+                                        "Preserved this idea from the discussion",
+                                      )
+                                    : work.title === "Host follow-up"
+                                      ? t("Reviewing team results")
+                                      : work.title.replace(
+                                          /^Review: /,
+                                          `${t("Review")} · `,
+                                        )}
+                                </p>
+                                <small>
+                                  {(
+                                    {
+                                      codex: "Codex",
+                                      "claude-code": "Claude Code",
+                                      pi: "Pi",
+                                      opencode: "OpenCode",
+                                    } as Record<string, string>
+                                  )[at?.config.harness ?? ""] ??
+                                    member?.harness}{" "}
+                                  ·{" "}
+                                  {String(
+                                    at?.actual?.model ??
+                                      at?.config.model ??
+                                      member?.model ??
+                                      "",
+                                  )}
+                                </small>
+                                <button
+                                  className="text-button"
+                                  onClick={() =>
+                                    onNavigateMember(
+                                      member?.id ?? work.memberId,
+                                      `assignment:${work.id}`,
+                                      work.id,
+                                    )
+                                  }
+                                >
+                                  <ArrowUpRight size={15} />
+                                  {t("Open work conversation")}
+                                </button>
+                              </article>
+                            );
+                          })}
                         </div>
-                      )}
-                      {sourceChat && (
-                        <button
-                          className="secondary-button history-open"
-                          onClick={() =>
-                            onNavigate(sourceChat.id, sourceMessage?.id)
-                          }
-                        >
-                          <ArrowUpRight size={17} />
-                          {t("Open conversation")}
-                        </button>
-                      )}
-                      {displayed.source.reason && (
-                        <p>{displayed.source.reason}</p>
-                      )}
-                      {docsAt(displayed).map((d) => (
-                        <details className="history-document" key={d.id}>
-                          <summary>{d.title}</summary>
-                          <MessageContent text={d.content} />
-                          <button
-                            className="text-button"
-                            onPointerDown={(e) => startDrag(d.id, d.title, e)}
-                            onClick={() => {
-                              if (consumeDragClick()) return;
-                              setCarry(d.id);
-                              setSelected(null);
-                            }}
-                          >
-                            <GripVertical size={16} />
-                            {t("Carry to")}
-                          </button>
-                        </details>
-                      ))}
-                      {displayed.kind === "delivery" && (
-                        <button
-                          className="secondary-button"
-                          onClick={() => onDelivery(displayed.id)}
-                        >
-                          <FileText size={17} />
-                          {t("Open delivery")}
-                        </button>
-                      )}
-                      {displayed.workspaceSnapshotId ? (
-                        <button
-                          className="primary-button history-fork-submit"
-                          onClick={() => beginFork(displayed)}
-                        >
-                          <GitBranch size={17} />
-                          {t("Try again from here")}
-                        </button>
                       ) : (
-                        <p className="muted">
-                          {t("No file checkpoint at this point")}
-                        </p>
+                        <div className="history-overview">
+                          <p>{describe(displayed)}</p>
+                          {displayed.source.adoption && (
+                            <section className="history-adoption">
+                              <h4>{t("Adopted ideas")}</h4>
+                              {displayed.source.adoption.insightIds.map(
+                                (id) => {
+                                  const idea =
+                                    displayed.source.adoption?.ideas.find(
+                                      (i) => i.id === id,
+                                    );
+                                  return idea ? (
+                                    <div key={id}>
+                                      <strong>{idea.title}</strong>
+                                      <MessageContent text={idea.content} />
+                                    </div>
+                                  ) : null;
+                                },
+                              )}
+                              <h4>{t("Adoption decision")}</h4>
+                              <blockquote>
+                                {displayed.source.adoption.authorizationQuote}
+                              </blockquote>
+                              <button
+                                className="text-button"
+                                onClick={() =>
+                                  setSelected(
+                                    displayed.source.adoption!.sourceNodeId,
+                                  )
+                                }
+                              >
+                                <GitBranch size={14} />
+                                {t("View source branch")}
+                              </button>
+                              <h4>{t("Changed documents")}</h4>
+                              {displayed.source.adoption.changedKeys.map(
+                                (key) => {
+                                  const previous = all.find(
+                                    (n) => n.id === displayed.parentNodeId,
+                                  );
+                                  const before = documents.find(
+                                    (d) => d.id === previous?.documents[key],
+                                  );
+                                  const after = documents.find(
+                                    (d) => d.id === displayed.documents[key],
+                                  );
+                                  return (
+                                    <AdoptionDocument
+                                      key={key}
+                                      documentKey={key}
+                                      before={before}
+                                      after={after}
+                                      open={
+                                        !!expandedAdoptions[
+                                          `${displayed.id}:${key}`
+                                        ]
+                                      }
+                                      onToggle={() =>
+                                        setExpandedAdoptions((current) => ({
+                                          ...current,
+                                          [`${displayed.id}:${key}`]:
+                                            !current[`${displayed.id}:${key}`],
+                                        }))
+                                      }
+                                    />
+                                  );
+                                },
+                              )}
+                            </section>
+                          )}
+                          {displayed.source.insightId && (
+                            <HistoryInsight
+                              key={displayed.source.insightId}
+                              teamId={team.id}
+                              insightId={displayed.source.insightId}
+                              onNavigate={onNavigate}
+                              onNavigateMember={onNavigateMember}
+                            />
+                          )}
+                          {sourceMessage && !displayed.source.insightId && (
+                            <details className="history-discussion">
+                              <summary>{t("Original discussion")}</summary>
+                              <MessageContent text={sourceMessage.text} />
+                            </details>
+                          )}
+                          {sourceChat && !displayed.source.insightId && (
+                            <button
+                              className="secondary-button history-open"
+                              onClick={() =>
+                                onNavigate(
+                                  sourceChat.id,
+                                  source?.messageIds?.[0] ?? sourceMessage?.id,
+                                )
+                              }
+                            >
+                              <ArrowUpRight size={17} />
+                              {t("Open conversation")}
+                            </button>
+                          )}
+                          {displayed.source.reason &&
+                            ![
+                              "work-result",
+                              "acceptance",
+                              "definition",
+                              "insight",
+                              "merge",
+                            ].includes(displayed.kind) && (
+                              <p>{displayed.source.reason}</p>
+                            )}
+                          {docsAt(displayed)
+                            .filter(
+                              (d) =>
+                                !displayed.source.adoption?.changedKeys.includes(
+                                  d.key,
+                                ),
+                            )
+                            .map((d) => (
+                              <details className="history-document" key={d.id}>
+                                <summary>{d.title}</summary>
+                                <MessageContent text={d.content} />
+                                <button
+                                  className="text-button"
+                                  onPointerDown={(e) =>
+                                    startDrag(d.id, d.title, e)
+                                  }
+                                  onClick={() => {
+                                    if (consumeDragClick()) return;
+                                    setCarry(d.id);
+                                    setSelected(null);
+                                  }}
+                                >
+                                  <GripVertical size={16} />
+                                  {t("Carry to")}
+                                </button>
+                              </details>
+                            ))}
+                          {displayed.kind === "delivery" && (
+                            <button
+                              className="secondary-button"
+                              onClick={() => onDelivery(displayed.id)}
+                            >
+                              <FileText size={17} />
+                              {t("Open delivery")}
+                            </button>
+                          )}
+                          {displayed.workspaceSnapshotId ? (
+                            <button
+                              className="primary-button history-fork-submit"
+                              onClick={() => beginFork(displayed)}
+                            >
+                              <GitBranch size={17} />
+                              {t("Branch from here")}
+                            </button>
+                          ) : (
+                            <p className="muted">
+                              {t("No file checkpoint at this point")}
+                            </p>
+                          )}
+                        </div>
                       )}
                     </>
                   )}
@@ -880,5 +1336,68 @@ function HistoryContent({
         </DetailPanel>
       )}
     </div>
+  );
+}
+
+function HistoryInsight({
+  teamId,
+  insightId,
+  onNavigate,
+  onNavigateMember,
+}: Pick<Props, "onNavigate" | "onNavigateMember"> & {
+  teamId: string;
+  insightId: string;
+}) {
+  const { t } = useI18n();
+  const [record, setRecord] = useState<{
+    sources: InsightSource[];
+    revisions: ProjectInsight[];
+  }>();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    void api<{ sources: InsightSource[]; revisions: ProjectInsight[] }>(
+      `/product/teams/${teamId}/insights/${insightId}/sources`,
+      undefined,
+      "GET",
+      controller.signal,
+    )
+      .then((v) => {
+        if (!controller.signal.aborted) setRecord(v);
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted) setError(e.message);
+      });
+    return () => controller.abort();
+  }, [teamId, insightId]);
+  if (error) return <p role="alert">{error}</p>;
+  const note = record?.revisions.find((r) => r.id === insightId);
+  if (!note) return <p role="status">{t("Loading…")}</p>;
+  return (
+    <section className="history-insight">
+      <InsightStatus status={note.status} />
+      <MessageContent text={note.content} />
+      <p className="muted">{note.reason}</p>
+      <h3>{t("Original discussion")}</h3>
+      {record!.sources
+        .filter((s) => note.sourceMessageIds.includes(s.id))
+        .map((source) => (
+          <blockquote key={source.id}>
+            <p>{source.content}</p>
+            <button
+              className="text-button"
+              onClick={() =>
+                source.conversationId
+                  ? onNavigate(source.conversationId, source.id)
+                  : source.memberId &&
+                    onNavigateMember(source.memberId, source.id, source.workId)
+              }
+            >
+              <ArrowUpRight size={14} />
+              {t("Go to source message")}
+            </button>
+          </blockquote>
+        ))}
+    </section>
   );
 }

@@ -74,6 +74,12 @@ export class ProjectSnapshots {
     }
     renameSync(temporary, target);
   }
+  /** Preserve just one edited file; no project inventory or extra working copy. */
+  preserveFile(bytes: Buffer): string {
+    const hash = digest(bytes);
+    this.persist(this.objectPath(hash), bytes);
+    return hash;
+  }
   capture(workspace: string): string {
     const root = realpathSync(workspace);
     const collect = (): Manifest => {

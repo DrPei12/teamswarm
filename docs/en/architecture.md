@@ -36,4 +36,4 @@ SQLite stores product facts and execution receipts. The runtime records launch i
 
 The service is local and single-user. The renderer uses a local control credential; agent-facing Team tools use separately scoped capabilities. Native tool execution retains its configured permissions and operating-system user privileges.
 
-The Host omits the current source message from its recent-history input when its message ID and full content match the request carried by the work. The eight-message selection window stays fixed, and earlier messages with identical wording remain in history.
+The Host omits the current source message from its recent-history input when its message ID and full content match the request carried by the work. Dialogue selects the latest 24 messages and background coordination selects the latest eight. Deduplication preserves each selection window and keeps earlier messages with identical wording.

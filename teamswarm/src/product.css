@@ -310,6 +310,25 @@
   background: var(--panel);
   box-shadow: var(--shadow);
   z-index: 60;
+  max-height: min(
+    560px,
+    var(--radix-popover-content-available-height, calc(100dvh - 80px))
+  );
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: 8px;
+}
+.deliveries-popover .popover-heading {
+  position: sticky;
+  top: -5px;
+  z-index: 1;
+  background: var(--panel);
+}
+.delivery-row time {
+  display: block;
+  margin-top: 3px;
+  color: var(--secondary);
+  font-size: calc(10px * var(--font-scale));
 }
 .delivery-row {
   width: 100%;
@@ -323,9 +342,30 @@
 .delivery-row:hover {
   background: var(--hover);
 }
-.delivery-row > span:nth-child(2) {
+.delivery-row > span:not(.delivery-read) {
   flex: 1;
   min-width: 0;
+}
+.progress-history-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 10px;
+  margin-top: 5px;
+  border-top: 1px solid var(--line);
+  color: var(--secondary);
+  font-size: calc(12px * var(--font-scale));
+}
+.progress-history-toggle:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.progress-history-toggle svg {
+  transition: transform 180ms ease;
+}
+.progress-history-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
 }
 .delivery-row strong {
   display: block;
@@ -874,8 +914,7 @@ body:has(.detail-resize-handle[data-dragging]) * {
   align-items: center;
   justify-content: space-between;
   padding: 10px 8px;
-  margin-left: -8px;
-  width: calc(100% + 16px);
+  width: 100%;
   min-height: 40px;
   border-radius: 6px;
   gap: 10px;

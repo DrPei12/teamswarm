@@ -188,6 +188,8 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     useState<DefinitionKind>("requirement");
   const [deliveryId, setDeliveryId] = useState<string | null>(null);
   const [deliveryOpen, setDeliveryOpen] = useState(false);
+  const [progressHistoryOpen, setProgressHistoryOpen] = useState(false);
+  const [updatesOpen, setUpdatesOpen] = useState(false);
   const [viewingDelivery, setViewingDelivery] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -199,6 +201,9 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   const uploads = useRef<HTMLInputElement>(null);
   const thread = useRef<HTMLDivElement>(null);
   const followHost = useRef(true);
+  const readingPositions = useRef(
+    new Map<string, { top: number; atBottom: boolean }>(),
+  );
   const inspectingHostActivity = useRef(false);
   const [hostAtBottom, setHostAtBottom] = useState(true);
   const navigationPanel = useRef<HTMLElement>(null);
@@ -219,18 +224,35 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 24;
     followHost.current = atBottom && !inspectingHostActivity.current;
     setHostAtBottom(atBottom);
+    if (route.chatId)
+      readingPositions.current.set(route.chatId, {
+        top: el.scrollTop,
+        atBottom,
+      });
   };
   const currentState = useRef(workspace);
   currentState.current = workspace;
   const team =
     workspace.teams.find((t) => t.id === route.teamId) || workspace.teams[0];
   const view = route.view || "host";
-  const teamDeliveries = workspace.deliveries.filter(
+  const teamDeliveries = workspace.deliveries
+    .filter((d) => d.teamId === team.id)
+    .sort((a, b) => b.createdAt - a.createdAt);
+  const teamUpdates = (workspace.updates ?? []).filter(
     (d) => d.teamId === team.id,
   );
-  const openedDelivery = teamDeliveries.find((d) => d.id === deliveryId);
+  const openedDelivery = [...teamDeliveries, ...teamUpdates].find(
+    (d) => d.id === deliveryId,
+  );
   const chat = workspace.chats.find(
     (c) => c.id === route.chatId && c.teamId === team.id,
+  );
+  const pendingUpdates = teamUpdates.filter(
+    (d) =>
+      d.chatId === chat?.id &&
+      d.hostDelivery?.status === "pending" &&
+      !d.hostDelivery.stale &&
+      !d.hostDelivery.superseded,
   );
   useEffect(() => {
     if (
@@ -374,15 +396,21 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   }, [draft.text, route]);
   useEffect(() => {
     inspectingHostActivity.current = false;
-    followHost.current = !route.messageId;
-    setHostAtBottom(!route.messageId);
+    const savedReading = chat
+      ? readingPositions.current.get(chat.id)
+      : undefined;
+    followHost.current = !route.messageId && (savedReading?.atBottom ?? true);
+    setHostAtBottom(followHost.current);
     if (route.messageId) {
       const target = document.getElementById(`message-${focusedHostMessageId}`);
       target?.scrollIntoView({ block: "center" });
       target?.focus({ preventScroll: true });
     } else
       thread.current?.scrollTo({
-        top: thread.current.scrollHeight,
+        top:
+          savedReading && !savedReading.atBottom
+            ? savedReading.top
+            : thread.current.scrollHeight,
         behavior: "instant",
       });
   }, [chat?.id, route.messageId, view, focusedHostMessageId]);
@@ -470,12 +498,19 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   };
   const openDelivery = async (id: string) => {
     if (viewingDelivery) return;
-    const delivery = teamDeliveries.find((d) => d.id === id);
+    const delivery = [...teamDeliveries, ...teamUpdates].find(
+      (d) => d.id === id,
+    );
     if (!delivery) return;
     setViewingDelivery(true);
     setNotice("");
     try {
-      if (delivery.hostDelivery) await product.viewDelivery(delivery);
+      if (
+        delivery.hostDelivery &&
+        !delivery.hostDelivery.stale &&
+        !delivery.hostDelivery.superseded
+      )
+        await product.viewDelivery(delivery);
       else if (
         !update((old) => ({
           ...old,
@@ -485,7 +520,22 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
         }))
       )
         return;
-      setDeliveryId(id);
+      if (
+        teamUpdates.some((d) => d.id === id) &&
+        !delivery.hostDelivery?.stale &&
+        !delivery.hostDelivery?.superseded
+      ) {
+        navigate({ teamId: delivery.teamId, chatId: delivery.chatId });
+        followHost.current = true;
+        requestAnimationFrame(() =>
+          thread.current?.scrollTo({
+            top: thread.current.scrollHeight,
+            behavior: matchMedia("(prefers-reduced-motion: reduce)").matches
+              ? "instant"
+              : "smooth",
+          }),
+        );
+      } else setDeliveryId(id);
       setDeliveryOpen(false);
     } catch (error) {
       setNotice((error as Error).message);
@@ -495,7 +545,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   };
   const openHost = (teamId = team.id) => {
     const target = workspace.teams.find((t) => t.id === teamId);
-    navigate({ teamId, chatId: target?.lastChatId, view: "host" });
+    navigate({ teamId, chatId: target?.mainChatId, view: "host" });
   };
   const addFiles = async (files: File[]) => {
     if (!files.length) return;
@@ -751,9 +801,11 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                         (section) => (
                           <button
                             key={section}
-                            className={`nav-row team-home ${team.id === t.id && view === section ? "active" : ""}`}
+                            className={`nav-row team-home ${team.id === t.id && view === section && (section !== "host" || chat?.id === t.mainChatId) ? "active" : ""}`}
                             aria-current={
-                              team.id === t.id && view === section
+                              team.id === t.id &&
+                              view === section &&
+                              (section !== "host" || chat?.id === t.mainChatId)
                                 ? "page"
                                 : undefined
                             }
@@ -790,17 +842,22 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 <div className="group-heading">
                   {tr("Recent conversations")}
                 </div>
-                {teamChats.slice(0, 8).map((c) => (
-                  <button
-                    key={c.id}
-                    className={`nav-row ${chat?.id === c.id && view === "host" ? "active" : ""}`}
-                    title={c.title}
-                    onClick={() => navigate({ teamId: team.id, chatId: c.id })}
-                  >
-                    <MessageSquare size={13} />
-                    <span>{c.title}</span>
-                  </button>
-                ))}
+                {teamChats
+                  .filter((c) => c.id !== team.mainChatId)
+                  .slice(0, 8)
+                  .map((c) => (
+                    <button
+                      key={c.id}
+                      className={`nav-row ${chat?.id === c.id && view === "host" ? "active" : ""}`}
+                      title={c.title}
+                      onClick={() =>
+                        navigate({ teamId: team.id, chatId: c.id })
+                      }
+                    >
+                      <MessageSquare size={13} />
+                      <span>{c.title}</span>
+                    </button>
+                  ))}
               </section>
             )}
           </nav>
@@ -980,7 +1037,22 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                             />
                             <span>
                               <strong>{d.title}</strong>
+                              <time
+                                dateTime={new Date(d.createdAt).toISOString()}
+                              >
+                                {new Date(d.createdAt).toLocaleString(locale, {
+                                  month: "short",
+                                  day: "numeric",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })}
+                              </time>
                               <small>{d.summary}</small>
+                              {d.version > 1 && (
+                                <small>
+                                  {tr("Version")} {d.version}
+                                </small>
+                              )}
                             </span>
                             <ArrowUpRight size={13 * ICON_SCALE} />
                           </button>
@@ -989,6 +1061,46 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                         <div className="menu-empty">
                           {tr("No deliveries yet")}
                         </div>
+                      )}
+                      {!!teamUpdates.length && (
+                        <>
+                          <button
+                            className="progress-history-toggle"
+                            aria-expanded={progressHistoryOpen}
+                            onClick={() =>
+                              setProgressHistoryOpen((value) => !value)
+                            }
+                          >
+                            {tr("Progress history")} · {teamUpdates.length}
+                            <ChevronDown size={14} />
+                          </button>
+                          <Disclosure open={progressHistoryOpen}>
+                            {[...teamUpdates].reverse().map((d) => (
+                              <button
+                                className="delivery-row"
+                                key={d.id}
+                                onClick={() => {
+                                  setDeliveryId(d.id);
+                                  setDeliveryOpen(false);
+                                }}
+                              >
+                                <span>
+                                  <strong>{d.title}</strong>
+                                  <small>
+                                    {d.hostDelivery?.superseded
+                                      ? tr("Later result available")
+                                      : d.hostDelivery?.stale
+                                        ? tr("Earlier context")
+                                        : d.hostDelivery?.status === "pending"
+                                          ? tr("Not yet viewed")
+                                          : tr("Viewed")}
+                                  </small>
+                                </span>
+                                <ArrowUpRight size={13} />
+                              </button>
+                            ))}
+                          </Disclosure>
+                        </>
                       )}
                     </Popover.Content>
                   </Popover.Portal>
@@ -1066,7 +1178,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                   workspace={workspace}
                   team={team}
                   mode={view}
-                  chatId={team.lastChatId}
+                  chatId={route.chatId ?? team.lastChatId ?? team.mainChatId}
                   memberAnchor={
                     route.memberId
                       ? {
@@ -1085,6 +1197,15 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                     })
                   }
                   onAddMember={() => setScreen("member")}
+                  onNavigateMember={(memberId, messageId, workId) =>
+                    navigate({
+                      teamId: team.id,
+                      view: "collaboration",
+                      memberId,
+                      messageId,
+                      workId,
+                    })
+                  }
                   onDelivery={openDelivery}
                 />
               </Suspense>
@@ -1332,6 +1453,52 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                       {tr("Latest")}
                     </button>
                   )}
+                  {!!pendingUpdates.length && (
+                    <Popover.Root
+                      open={updatesOpen}
+                      onOpenChange={setUpdatesOpen}
+                    >
+                      <Popover.Trigger asChild>
+                        <button className="conversation-updates-trigger">
+                          <span>
+                            {tr("Updates to review")} · {pendingUpdates.length}
+                          </span>
+                          <span>{pendingUpdates.at(-1)?.title}</span>
+                          <ChevronDown size={14} />
+                        </button>
+                      </Popover.Trigger>
+                      <Popover.Portal>
+                        <Popover.Content
+                          className="deliveries-popover"
+                          side="top"
+                          align="end"
+                          sideOffset={8}
+                          aria-label={tr("Updates to review")}
+                        >
+                          <div className="popover-heading">
+                            {tr("Updates to review")}
+                          </div>
+                          {pendingUpdates.map((d) => (
+                            <button
+                              key={d.id}
+                              className="delivery-row"
+                              disabled={viewingDelivery}
+                              onClick={() => {
+                                setUpdatesOpen(false);
+                                void openDelivery(d.id);
+                              }}
+                            >
+                              <span>
+                                <strong>{d.title}</strong>
+                                <small>{d.summary}</small>
+                              </span>
+                              <ArrowDown size={14} />
+                            </button>
+                          ))}
+                        </Popover.Content>
+                      </Popover.Portal>
+                    </Popover.Root>
+                  )}
                   <ExecutionActivity
                     workspace={workspace}
                     teamId={team.id}
@@ -1508,7 +1675,9 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 <header>
                   <Package size={16 * ICON_SCALE} />
                   <strong>{openedDelivery.title}</strong>
-                  <span>v{openedDelivery.version}</span>
+                  {openedDelivery.version > 1 && (
+                    <span>v{openedDelivery.version}</span>
+                  )}
                   <IconButton
                     label={tr("Close delivery")}
                     onClick={() => setDeliveryId(null)}
@@ -1517,6 +1686,16 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                   </IconButton>
                 </header>
                 <div className="detail-scroll">
+                  {(openedDelivery.hostDelivery?.superseded ||
+                    openedDelivery.hostDelivery?.stale) && (
+                    <span className="muted">
+                      {tr(
+                        openedDelivery.hostDelivery.superseded
+                          ? "Later result available"
+                          : "Earlier context",
+                      )}
+                    </span>
+                  )}
                   <details className="delivery-host-note">
                     <summary>{tr("Host notes")}</summary>
                     <MessageContent

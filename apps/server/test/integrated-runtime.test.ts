@@ -532,3 +532,43 @@ test("a successfully checked continuation completes linked work without discardi
     f.close();
   }
 });
+
+
+test("a continuation finishing in a later run settles its still-active owner run", () => {
+  const f = linkedContinuationFixture();
+  try {
+    f.run.state = "active";
+    delete f.run.continuedWorkIds;
+    f.store.save("runs", f.run);
+    const continuation = f.store.get<Work>("works", f.team.id, f.failed.id);
+    f.store.setStatus(continuation, "queued");
+    f.records.bindOutputs(continuation);
+    const attempt = f.store.start(continuation, f.writer.config);
+    f.history.bind(attempt, f.nextRun);
+    writeFileSync(path.join(f.workspace, "result.md"), "Current result\n");
+    continuation.artifactIds = f.store.capture(continuation, "Current result", ["result.md"]).map(a => a.id);
+    f.store.recordSelfChecks(continuation, [{ criterion: "Change is correct", evidence: "Read current result", evidenceEventIds: [] }]);
+    f.store.setStatus(continuation, "self_checked");
+    (f.runtime as any).followUp(f.nextHost, f.host);
+    assert.equal(f.store.get<Run>("runs", f.team.id, f.nextRun.id).state, "completed");
+    assert.equal(f.store.get<Run>("runs", f.team.id, f.run.id).state, "completed");
+    assert.equal(f.records.outputs(f.team.id, f.branch.id)[0].current.workId, continuation.id);
+    assert.equal(f.store.get<Work>("works", f.team.id, f.original.id).status, "self_checked");
+  } finally { f.close(); }
+});
+
+
+test("a failed later continuation coordinates repair only in its current run", () => {
+  const f = linkedContinuationFixture();
+  try {
+    f.run.state = "active";
+    delete f.run.continuedWorkIds;
+    f.store.save("runs", f.run);
+    (f.runtime as any).followUp(f.nextHost, f.host);
+    const queuedHosts = f.store.list<Work>("works", f.team.id).filter(w => w.memberId === f.host.id && w.status === "queued");
+    assert.equal(queuedHosts.length, 1);
+    assert.equal(queuedHosts[0].runId, f.nextRun.id);
+    assert.equal(f.store.get<Run>("runs", f.team.id, f.run.id).state, "active");
+    assert.equal(f.store.events(f.team.id).filter(e => e.type === "run.completed").length, 0);
+  } finally { f.close(); }
+});

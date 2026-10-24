@@ -188,13 +188,16 @@ export function ProjectRecords({
                       name="status"
                       defaultValue={current?.status ?? "proposed"}
                     >
-                      {["proposed", "adopted", "rejected", "superseded"].map(
-                        (s) => (
-                          <option key={s} value={s}>
-                            {t(`insight.${s}`)}
-                          </option>
-                        ),
-                      )}
+                      {[
+                        "proposed",
+                        ...(current?.status === "adopted" ? ["adopted"] : []),
+                        "rejected",
+                        "superseded",
+                      ].map((s) => (
+                        <option key={s} value={s}>
+                          {t(`insight.${s}`)}
+                        </option>
+                      ))}
                     </select>
                   </label>
                 </div>

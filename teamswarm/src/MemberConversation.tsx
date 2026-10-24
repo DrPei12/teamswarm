@@ -340,7 +340,10 @@ function ConversationThread({
           if (cancelled.current) return;
           locatingUntil.current = performance.now() + 900;
           target.scrollIntoView({
-            block: "center",
+            block:
+              target.offsetHeight > container.clientHeight * 0.7
+                ? "start"
+                : "center",
             behavior: reduced ? "instant" : "smooth",
           });
           target.focus({ preventScroll: true });

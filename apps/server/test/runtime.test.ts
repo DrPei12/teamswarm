@@ -609,7 +609,7 @@ test("artifact acceptance rejects changed files, self-review and unassigned revi
     ];
     assert.throws(
       () => store.accept(review, target.id, "accepted", unobserved),
-      /finished command/,
+      /complete id returned by team_review_evidence/,
     );
     store.event(
       team.id,

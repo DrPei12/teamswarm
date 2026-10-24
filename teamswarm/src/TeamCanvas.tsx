@@ -71,6 +71,7 @@ type Data = {
   detail: string;
   kind: "member" | "point" | "branch";
   status?: string;
+  conversationStatus?: "paused" | "error";
   time?: string;
   definitions?: Definition[];
   deliveries?: number;
@@ -214,7 +215,9 @@ function CanvasNode({ data, selected }: NodeProps<CardNode>) {
                 )}
                 {data.title}
               </strong>
-              <span>{data.detail}</span>
+              <span>
+                {data.detail.replace(/^Review: /, `${tr("Review")} · `)}
+              </span>
             </span>
             {data.status && data.kind !== "member" && (
               <span
@@ -241,6 +244,20 @@ function CanvasNode({ data, selected }: NodeProps<CardNode>) {
           </Tooltip.Content>
         </Tooltip.Portal>
       </Tooltip.Root>
+      {data.kind === "member" && (
+        <div className="member-result-line">
+          <span>{tr(data.status || "idle")}</span>
+          {data.conversationStatus && (
+            <span className="member-conversation-warning">
+              {tr(
+                data.conversationStatus === "paused"
+                  ? "Last conversation paused"
+                  : "Last conversation failed",
+              )}
+            </span>
+          )}
+        </div>
+      )}
       {data.kind === "member" && (
         <div className="member-caption">
           <span className="node-harness">{data.harness}</span>
@@ -360,6 +377,11 @@ type Props = {
   onNavigate: (chatId: string, messageId?: string) => void;
   onAddMember: () => void;
   onDelivery: (id: string) => void;
+  onNavigateMember: (
+    memberId: string,
+    messageId: string,
+    workId?: string,
+  ) => void;
 };
 export function TeamCanvas(props: Props) {
   if (props.mode === "history" && props.workspace.service)
@@ -473,6 +495,7 @@ function CanvasContent({
             model: modelLabel(tr(m.model), m.effort),
             harness: m.harness,
             status: m.status,
+            conversationStatus: m.conversationStatus,
             onOpen: () => setSelection({ kind: "member", id: m.id }),
           },
         }),

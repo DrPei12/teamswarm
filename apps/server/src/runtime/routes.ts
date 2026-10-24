@@ -25,7 +25,7 @@ import {
   setWorkAllocation,
 } from "./allocation.js";
 import { definitionInput, selectionInput } from "./project-history.js";
-import { key, memberInput, parse, runtimeSettings } from "./validation.js";
+import { key, memberInput, parse, runtimeSettings, executionRequirements } from "./validation.js";
 import type {
   ArtifactVersion,
   Attempt,
@@ -735,6 +735,7 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       expectedRevision: z.number().int().positive(),
       reviewerMemberId: key,
       instructions: z.string().trim().min(1).max(20000),
+      executionRequirements: executionRequirements.optional(),
     }).strict(), req.body);
     res.json(runtime.requestReview(param(req.params.teamId), param(req.params.workId), input));
   });

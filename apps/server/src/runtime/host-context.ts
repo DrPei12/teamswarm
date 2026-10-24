@@ -1,3 +1,4 @@
+import { hostMode } from "./host-communication.js";
 import { conflict, notFound } from "../errors.js";
 import { RuntimeStore, activeStates, hash } from "./store.js";
 import { TeamCatalog } from "./catalog.js";
@@ -203,6 +204,7 @@ export class HostContext {
     const details = project.documents.filter((d) => !mandatory.includes(d));
     const input = {
       ...collaborationInput,
+      turnPurpose: hostMode(work.kind),
       inbox,
       member: {
         name: "Host",
@@ -287,10 +289,7 @@ export class HostContext {
         "host_context_capacity",
         "Current required context exceeds hostContextMaxBytes; no requirement was silently truncated. Increase the configured budget or narrow current definitions.",
       );
-    for (const message of eligible.slice(-8).reverse()) {
-      // The source request is already present in work.instructions. Keep the
-      // existing history window, but do not serialize that exact message twice.
-      // Equal text from other turns and follow-up instructions remain distinct.
+    for (const message of eligible.slice(hostMode(work.kind) === "dialogue" ? -24 : -8).reverse()) {
       if (message.id === run.sourceMessageId && message.content === work.instructions)
         continue;
       const item = {

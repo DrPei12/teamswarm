@@ -26,6 +26,7 @@ import type {
   RuntimeSettings,
   ArtifactVersion,
   HostDelivery,
+  TeamExchange,
 } from "@team/contracts/runtime";
 import { saveProductCredential } from "./product-credentials.js";
 import { stageAttachment } from "./attachments.js";
@@ -123,6 +124,15 @@ const pluginInput = z
   .strict();
 
 /** Product-specific presentation state, attachments and read models share the durable service. */
+function readableSummary(value: string) {
+  return value.replace(/```[\s\S]*?```/g, " ").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[*#`>]/g, "").replace(/\s+/g, " ").trim().slice(0, 180);
+}
+function readableTitle(value: string) {
+  const summary = readableSummary(value);
+  const sentence = summary.match(/^.*?(?:[。！？]|\.(?=\s|$))/u)?.[0] ?? summary;
+  return sentence.length > 64 ? `${sentence.slice(0, 61).trimEnd()}…` : sentence;
+}
+
 export class ProductStore {
   constructor(readonly runtime: TeamRuntime) {
     this.db
@@ -266,6 +276,7 @@ export class ProductStore {
       members: [],
       connections: [],
       deliveries: [],
+      updates: [],
       service: { revision, migrated: true },
       executions: {},
       projectNodes: [],
@@ -280,6 +291,7 @@ export class ProductStore {
       workspace.insights!.push(...state.insights);
       const settings = state.settings;
       const prefs = p.teams[team.id] ?? {};
+      const mainChatId = this.runtime.history.mainConversation(team.id);
       const attempts = this.runtime.store.list<Attempt>("attempts", team.id);
       const hostDeliveries = this.runtime.store.list<HostDelivery>(
         "deliveries",
@@ -335,6 +347,7 @@ export class ProductStore {
       );
       workspace.teams.push({
         ...prefs,
+        mainChatId,
         id: team.id,
         name: team.name,
         color: prefs.color ?? "#7774cf",
@@ -554,6 +567,8 @@ export class ProductStore {
           );
           workspace.deliveries.push({
             id: node.id,
+            outcome: true,
+            branchId: node.branchId,
             teamId: team.id,
             chatId: chat?.id ?? "",
             messageId: message?.id ?? "",
@@ -561,14 +576,14 @@ export class ProductStore {
               artifacts
                 .filter((a) => a.path !== "@result")
                 .map((a) => a.path)
-                .join(", ") || node.title,
-            summary: message?.text ?? "",
+                .join(", ") || readableTitle(message?.text ?? artifacts.find(a => a.path === "@result")?.content ?? node.title),
+            summary: readableSummary(message?.text ?? node.title),
             content:
               artifacts
                 .filter((a) => a.path !== "@result")
                 .map((a) => `### ${a.path}\n\n${a.content}`)
                 .join("\n\n") ||
-              message?.text ||
+              artifacts.find(a => a.path === "@result")?.content || message?.text ||
               node.title,
             artifactIds: artifacts
               .filter((a) => a.path !== "@result")
@@ -597,17 +612,19 @@ export class ProductStore {
           .filter((a) => a.path !== "@result");
         workspace.deliveries.push({
           id: delivery.id,
+          outcome: !!node,
+          branchId: delivery.branchId,
           teamId: team.id,
           chatId: delivery.conversationId,
           messageId: message?.id ?? "",
           title:
             artifacts.map((a) => a.path).join(", ") ||
-            node?.title ||
+            (node ? readableTitle(delivery.content) : "") ||
             (p.language === "zh-CN" ? "团队进展" : "Team update"),
-          summary: delivery.content,
+          summary: readableSummary(delivery.content),
           content:
             artifacts
-              .map((a) => `### ${a.path}\n\n${a.content}`)
+              .map((a) => artifacts.length === 1 ? a.content : `### ${a.path}\n\n${a.content}`)
               .join("\n\n") || delivery.content,
           artifactIds: artifacts.map((a) => ({ id: a.id, name: a.path })),
           createdAt: Date.parse(delivery.createdAt),
@@ -618,6 +635,10 @@ export class ProductStore {
           version: 1,
           hostDelivery: {
             status: delivery.status,
+            superseded: !node && !!work && nodes.some(n =>
+              n.kind === "delivery" && n.branchId === delivery.branchId &&
+              Date.parse(n.createdAt) >= Date.parse(delivery.createdAt) &&
+              state.works.find(w => w.id === n.source.workId)?.runId === work.runId),
             contextVersion: delivery.contextVersion,
             workId: delivery.workId,
             attemptId: delivery.attemptId,
@@ -631,10 +652,25 @@ export class ProductStore {
           },
         });
       }
+      const candidates = workspace.deliveries.filter(d => d.teamId === team.id);
+      workspace.deliveries = workspace.deliveries.filter(d => d.teamId !== team.id);
+      const outcomes = new Map<string, typeof candidates[number]>();
+      for (const delivery of candidates.sort((a,b) => a.createdAt - b.createdAt)) {
+        if (!delivery.outcome) {
+          workspace.updates!.push({ ...delivery, title: readableTitle(delivery.summary) });
+          continue;
+        }
+        const identity = `${delivery.branchId}:${delivery.artifactIds?.length ? delivery.artifactIds.map(a => a.name).sort().join("|") : delivery.id}`;
+        const prior = outcomes.get(identity);
+        outcomes.set(identity, { ...delivery, version: (prior?.version ?? 0) + 1 });
+      }
+      workspace.deliveries.push(...outcomes.values());
       for (const member of state.members) {
         const works = state.works.filter((w) => w.memberId === member.id);
+        const substantive = works.filter((w) => !w.interaction && w.kind !== "collaboration");
+        const latestConversation = works.filter((w) => w.interaction || w.kind === "collaboration").at(-1);
         const work =
-          works.filter((w) => active.has(w.status)).at(-1) ?? works.at(-1);
+          works.filter((w) => active.has(w.status)).at(-1) ?? substantive.at(-1) ?? works.at(-1);
         const id = member.kind === "host" ? `host:${team.id}` : member.id;
         const latestAttempt = attempts
           .filter((a) => a.memberId === member.id)
@@ -647,7 +683,7 @@ export class ProductStore {
             : work.status === "queued" ||
                 work.status === "waiting" ||
                 work.status === "stopping" ||
-                (work.kind === "host-followup" &&
+                (member.kind === "host" &&
                   work.status === "submitted" &&
                   state.runs.find((r) => r.id === work.runId)?.state ===
                     "active")
@@ -670,7 +706,9 @@ export class ProductStore {
           name: member.kind === "host" ? "Host" : member.name,
           responsibility: member.responsibility,
           task:
-            work?.interaction || work?.kind === "collaboration"
+            work?.collaborationExchangeId
+              ? (this.runtime.store.get<TeamExchange>("exchanges", team.id, work.collaborationExchangeId).topic)
+              : work?.interaction || work?.kind === "collaboration"
               ? (works
                   .filter((w) => !w.interaction && w.kind !== "collaboration")
                   .at(-1)?.title ?? member.responsibility)
@@ -678,6 +716,11 @@ export class ProductStore {
                 ? "Reviewing team results"
                 : (work?.title ?? ""),
           status,
+          conversationStatus: latestConversation && latestConversation !== work &&
+            latestConversation.updatedAt > (work?.updatedAt ?? "")
+            ? latestConversation.status === "interrupted" ? "paused"
+              : ["failed", "rejected", "recovery_required"].includes(latestConversation.status) ? "error" : undefined
+            : undefined,
           harness: harnessLabels[config.harness] ?? config.harness,
           model: String(
             latestAttempt?.actual?.model ?? config.model ?? "Default model",
@@ -1265,6 +1308,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
                   hostPosition: z
                     .object({ x: z.number().finite(), y: z.number().finite() })
                     .optional(),
+                  historyPositions: z.record(z.string().max(200), z.object({ x: z.number().finite(), y: z.number().finite() })).optional(),
                 })
                 .strict(),
             )

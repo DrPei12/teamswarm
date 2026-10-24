@@ -24,7 +24,7 @@ Download a package from [Releases](https://github.com/DrPei12/teamswarm/releases
 
 | Platform | Package | Support |
 |---|---|---|
-| Windows x64 | `.exe` | 0.4.3 download |
+| Windows x64 | `.exe` | 0.5.0 download |
 | Linux x64 | `.deb`, `.AppImage` | Build from source |
 | macOS Apple Silicon | `.dmg`, `.zip` | Build from source |
 

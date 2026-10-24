@@ -12,7 +12,7 @@ import type {
   Attempt,
 } from "../src/runtime/types.js";
 
-/** Controlled Host context boundary fixture. */
+/** Only a controlled boundary fixture; native verification is a separate script. */
 class ContextHarness implements Harness {
   id = "context-fixture";
   sessionScope: string | undefined;
@@ -55,7 +55,6 @@ async function setup(harness = new ContextHarness()) {
         method,
         headers: {
           "content-type": "application/json",
-          // Bulk synchronous fixture writes can outlast an idle keep-alive socket.
           connection: "close",
           authorization: `Bearer ${service.controlToken}`,
         },
@@ -295,9 +294,10 @@ test("bounded long history, exact frame identity, searchable originals and recov
       app.team.id,
       first.attemptId!,
     );
-    assert.ok(frame.inputBytes < 24000);
-    assert.equal(frame.input.history.length, 7);
-    assert.equal(frame.input.historyAccess.omittedMessages, 996);
+    assert.ok(frame.inputBytes < 48000);
+    assert.equal(frame.input.history.length, 23);
+    assert.equal(frame.input.turnPurpose, "dialogue");
+    assert.equal(frame.input.historyAccess.omittedMessages, 980);
     assert.equal(
       frame.inputBytes,
       Buffer.byteLength(app.harness.requests.at(-1)!.input),
