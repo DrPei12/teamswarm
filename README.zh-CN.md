@@ -1,48 +1,167 @@
 # TeamSwarm
 
-**在本地组织多个 AI 编程代理，持续协作并交付成果。**
+**在本地组织多个 AI 代理，持续协作并交付成果。**
 
-向团队提出目标，查看执行过程，并把讨论、任务与交付文件保存在同一个工作空间。TeamSwarm 连接各自独立运行的 Harness，在多轮工作中保留项目上下文，记录每次交付对应的文件和检查结果。
+TeamSwarm 面向需要跨成员、会话和多轮修改推进代码与文本项目的 AI builders。通过 Host 讨论目标，让成员在各自独立的 Harness 中执行，并把当前决定、任务与成果保存在同一个工作空间。
 
-[English](README.md) · [安装](docs/zh-CN/installation.md) · [第一个项目](docs/zh-CN/getting-started.md) · [Harness 配置](docs/zh-CN/harnesses.md) · [参与贡献](CONTRIBUTING.md)
+[English](README.md) · [安装](#install) · [第一个项目](#first-project) · [Harness 与模型](#harnesses-and-models) · [数据与恢复](#data-and-recovery)
 
-![TeamSwarm 工作空间](docs/assets/workspace.png)
+- **保持项目决定一致。** 维护带来源的当前项目定义。明确决定采用讨论分支后，将内容融入主线，并在历史中查看文档变化。
+- **接续同一项工作。** 在原工作线程修改成果，跨会话保留要求、文件归属与历史版本。
+- **组织独立代理。** 使用 Codex、Claude Code、Grok、Pi、DeepSeek Harness 或 OpenCode。成员相互交流，重复责任复用已有工作，等待中的成员在新信息到达后继续。
+- **查看实际交付。** 打开和下载保存的文件版本，区分进展与完成成果，查看提交所关联的自检或独立审查。
+- **通过两张画布了解项目。** 协作画布显示成员与实际通信；历史画布连接讨论、决定、工作、文档变化及交付。
 
-## 主要能力
+TeamSwarm 面向本地单用户场景。Harness 使用你配置的账号或 API 连接，模型用量由提供方计费。原生工具以当前操作系统账号和你授予的权限运行。
 
-- **持续的项目对话。** 通过 Host 讨论目标，成员在各自的责任范围内执行工作。
-- **独立的原生 Harness。** 接入 Codex、Claude Code、Grok、Pi、DeepSeek Harness 和 OpenCode，保留各自的工具与执行循环。
-- **跨回合继续工作。** 追问过程、提出修改，并在同一工作线程查看之前的交付。
-- **可查看的成果。** 打开和下载文件、比较历史版本，核对自检或独立审查结果。
-- **持久的项目历史。** 保存项目决定、讨论、任务和可恢复的本地文件快照。
-
-TeamSwarm 面向本地单用户的代码与文本项目。所选 Harness 使用你配置的模型服务。你需要准备相应账号或 API 凭据，模型用量由提供方计费。
-
+<a id="install"></a>
 ## 安装
 
-从 [Releases](https://github.com/DrPei12/teamswarm/releases) 选择安装包，并阅读[安装指南](docs/zh-CN/installation.md)。桌面包包含 Electron、Node.js 和 Codex；其他 Harness 在选择使用时安装到本机。
+从同一个 [GitHub Release](https://github.com/DrPei12/teamswarm/releases) 下载 Windows x64 安装器和 `SHA256SUMS.txt`。桌面包内置 Electron、Node.js、npm 和 Codex，其他 Harness 单独安装到本机。
 
-| 平台 | 安装形式 | 支持状态 |
+| 平台 | 格式 | 可用范围 |
 |---|---|---|
-| Windows x64 | `.exe` | 0.5.0 下载包 |
-| Linux x64 | `.deb`、`.AppImage` | 从源码构建 |
-| macOS Apple Silicon | `.dmg`、`.zip` | 从源码构建 |
+| Windows x64 | NSIS `.exe` | Release 下载包，已验证安装与升级 |
+| Linux x64 | AppImage、DEB | 源码构建，原生安装与运行待验证 |
+| macOS Apple Silicon | DMG、ZIP | 源码构建，原生安装与运行待验证 |
 
-架构与构建格式见[平台说明](docs/zh-CN/platforms.md)。当前通过下载安装新版本进行升级。迁移设备前请阅读[数据与恢复](docs/zh-CN/data-and-privacy.md)。
+Windows 安装器未签名，系统会显示未知发布者。将文件哈希与同版校验文件比较：
 
+```powershell
+Get-FileHash .\TeamSwarm-0.5.0-Windows-x64.exe -Algorithm SHA256
+```
+
+运行安装器，从开始菜单打开 **TeamSwarm**。默认按用户安装。升级时先关闭应用、[备份服务数据](#data-and-recovery)，然后在同一系统账号和安装目录运行新版安装器。更新通过手动安装完成，卸载保留服务数据和项目文件。
+
+<a id="first-project"></a>
 ## 第一个项目
 
-1. 打开 TeamSwarm，创建团队，并选择一个空项目目录。
-2. 打开团队的执行设置，选择 Codex 并连接账号，或配置使用官方 API 的 Harness。
-3. 把[任务报告示例](examples/task-report/README.md)复制到项目目录。
-4. 将示例中的任务发送给 Host，查看交付文件与验证结果。
-5. 提出后续修改，比较新旧版本。
+使用合成数据的[任务报告示例](https://github.com/DrPei12/teamswarm/tree/main/examples/task-report)，完成任务、检查输出，再继续同一项工作。
 
-[完整教程](docs/zh-CN/getting-started.md)提供了准确的任务文本、预期结果和检查方法。
+1. 将示例中的 `tasks.json`、`verify.mjs` 和 `verify-followup.mjs` 复制到项目目录。
+2. 打开 TeamSwarm，创建团队，在执行设置中选择该项目目录。
+3. 连接已有的受支持账号，或配置 [API 连接](#harnesses-and-models)。检查所选 Harness 与资源的可用状态。
+4. 向 Host 发送以下任务：
 
+此示例的命令检查需要可用的 Codex 资源。其他 Harness 可以创建和修改文件，由 Codex 成员运行检查。
+
+```text
+仅使用 Node.js 标准库创建 report.mjs。
+用法：node report.mjs <json-file>。
+输入必须是数组，每条记录包含唯一且非空的字符串 id、
+非空的字符串 title，以及 open、done、blocked 三者之一的 status。
+完整验证每条记录，拒绝非法 JSON、非法记录、重复 ID 和缺少或多余的命令行参数。
+成功时仅向 stdout 输出一个 JSON 值，包含 total 和 byStatus，
+始终包含三种状态的计数，包括零。空数组返回全部为零的计数。
+失败时以非零退出码结束，向 stderr 输出有用的错误，stdout 保持为空。
+保持 tasks.json 和两个验证脚本不变。
+创建 summary.md，说明用法、所给数据的结果和验证命令。
+由 Codex 成员运行 node verify.mjs，处理失败，交付 report.mjs 和 summary.md。
+```
+
+打开交付文件和检查结果。所给数据的预期输出为：
+
+```json
+{"total":6,"byStatus":{"open":3,"done":2,"blocked":1}}
+```
+
+可在项目目录运行 `node verify.mjs`，检查真实进程输出、退出状态和非法输入处理。
+
+在已交付工作上选择“继续修改”，或让 Host 接续该线程：
+
+```text
+继续修改同一个 report.mjs，支持：
+node report.mjs <json-file> --status open|done|blocked
+保留原有不带筛选参数的行为。先完整验证输入，再筛选，
+包括不匹配筛选条件的记录。仅统计匹配记录，其他状态的计数保持为零。
+未知、缺少或重复参数应以非零退出码失败，stdout 保持为空。
+更新 summary.md，保持所给数据和检查脚本不变。
+运行 node verify.mjs 和 node verify-followup.mjs。
+交付 report.mjs 和 summary.md 的更新版本。
+```
+
+打开“成果与想法”，展开文件并选择历史版本和当前版本。关闭并重新打开 TeamSwarm，回到原团队，对该工作提出只读问题。兼容的 Harness 可以恢复原生会话；需要新会话时，从保存的项目事实接续。
+
+<a id="harnesses-and-models"></a>
+## Harness 与模型
+
+Harness 执行代理工具与运行循环，模型连接提供模型 API。执行资源将 Harness、模型、连接、权限和受支持的推理设置组合起来。
+
+| Harness | 安装方式 | 原生会话接续 |
+|---|---|---|
+| Codex | 桌面包内置，也支持已安装 CLI | 配置与上下文兼容时支持 |
+| Claude Code | 本机单独安装 | 支持 |
+| Grok | 本机单独安装 | 支持 |
+| Pi | 本机单独安装 | 支持 |
+| DeepSeek Harness | 本机单独安装 | 新原生会话读取保存的 TeamSwarm 工作 |
+| OpenCode | 本机单独安装 | 支持 |
+
+兼容性取决于安装版本、模型和协议。集成版本固定在 [config/harnesses.json](config/harnesses.json)，原生工具负责自己的账号登录与会话状态。
+
+在执行设置中选择 Harness，连接或检查已有账号。配置 API 时：
+
+1. 安装支持该提供方协议的 Harness。
+2. 填写官方 API 地址和账号可用的模型。
+3. 选择双方支持的协议，例如 Chat Completions 或 Anthropic Messages。
+4. 通过桌面凭据存储保存 Key，或填写环境变量引用。
+5. 检查可用状态，并运行包含实际工具调用的小任务。
+
+例如，DeepSeek 连接使用 `https://api.deepseek.com`、其支持的 Chat Completions 协议，以及 Pi 或 OpenCode 等兼容 Harness。模型以提供方当前账号目录为准。
+
+使用环境变量时，在启动服务前设置 `DEEPSEEK_API_KEY` 等变量，资源中只填写变量名。`TEAM_CREDENTIAL_FILES` 接受一个 JSON 映射，将环境变量名关联到包含单行密钥的绝对文件路径。
+
+“执行资源与分配”中的任务资源优先于成员默认。每次执行保存实际配置，编辑影响后续工作。资源导入导出携带配置与密钥引用，目标设备需要单独配置对应凭据。
+
+Pi 和 OpenCode 支持“最大输出 token 数”（`maxOutputTokens`，默认 8192）和“上下文 token 数”（`contextWindowTokens`，默认 131072）。设置为模型支持的值，输入、推理和输出共享上下文容量，输出限制包含推理 tokens。达到长度限制的失败保留供恢复处理，其他 Harness 拒绝这两项覆盖参数。
+
+Pi 的 Chat Completions 支持提供方允许的 `minimal`、`low`、`medium`、`high`、`xhigh` 或 `max` 推理强度；留空使用提供方默认。Pi 其他协议及 OpenCode 要求该字段留空。Pi 通过原生上下文加载器读取适用的项目指令，该入口不启用扩展代码。
+
+<a id="work-and-results"></a>
+## 工作与成果
+
+向 Host 说明目标、相关文件和完成条件。成员负责明确的文件或目录范围，范围互不重叠的有界任务可以并行；文件工具写入前核对当前哈希。修改成果时接续原线程，保留要求、文件范围和尚未发布的候选内容。
+
+向成员提问前选择具体工作线程。只读追问查看已有工作，“继续修改”创建保留原验证要求的后续执行。修改相同文件前，先暂停或停止冲突工作，等待实际状态收束。
+
+小范围可逆修改可以由生产者自检。需要独立接受时，明确另一个审查者及其针对提交版本执行的检查。文件审查可以直接比较提交内容；命令类验收当前需要支持原生检查的 Codex 审查者。审查指令变化后，审查者先读取新要求，再重新运行所需命令后验收。
+
+采用讨论分支时，在该分支向 Host 明确决定和范围。Host 比较来源分支、分支起点与当前主线，更新选定的项目文档。在历史采纳节点中查看决定、来源、想法和文档差异；需要落实到代码时，另行提出实施要求。
+
+进展消息与完成交付分别显示。即使没有完整工作区快照，保存的成果版本仍可下载。恢复文件版本会形成新的当前版本，操作前先解决活动写入、未提交本地修改或当前版本已变化等冲突。从历史创建工作区分支需要已保存的文件快照，外部动作保留各自状态。
+
+<a id="data-and-recovery"></a>
+## 数据与恢复
+
+团队、对话、工作、成果版本和项目历史保存在本机，项目文件留在你选择的目录。
+
+| 平台 | 默认服务数据目录 |
+|---|---|
+| Windows | `%LOCALAPPDATA%\TeamSwarm\data` |
+| macOS | `~/Library/Application Support/TeamSwarm/data` |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/TeamSwarm/data` |
+
+`TEAM_DATA_DIR` 可指定其他服务目录。窗口状态和未提交输入保存在 Electron 的 TeamSwarm 用户数据目录，Windows 上为 `%APPDATA%\TeamSwarm`。项目文件与未提交输入需要单独备份。
+
+所选 Harness 会将提示和相关项目内容发送给配置的提供方，也可能保留自身原生会话记录。本地 API 监听 `127.0.0.1`，使用本机控制凭据；`control.json`、数据库和账号会话记录应保密。
+
+Windows 保存的 Key 使用当前账号的 DPAPI。macOS 桌面版使用 Keychain 加密，Linux 桌面版要求受支持且已解锁的系统密钥环，并拒绝明文回退。macOS/Linux 的源码 Web 服务使用环境变量或启动密钥文件引用。更换设备或系统账号后重新连接凭据。
+
+备份或恢复前关闭应用及服务。从源码目录执行：
+
+```sh
+node scripts/data-tools.mjs diagnostics --data-dir "/absolute/data-directory" --output "/absolute/diagnostics.json"
+node scripts/data-tools.mjs backup --data-dir "/absolute/data-directory" --output "/absolute/new-backup-directory"
+node scripts/data-tools.mjs restore --backup "/absolute/backup-directory" --data-dir "/absolute/new-data-directory"
+```
+
+将示例路径换成实际路径，有空格时保留引号。安装包在 `resources/product` 提供 Windows 的 `TeamSwarm-Tools.cmd` 和 macOS/Linux 的 `TeamSwarm-Tools.sh`，Mac 应用内路径为 `Contents/Resources/product`，命令参数相同。
+
+诊断包含构建身份、记录数量、工作状态和 SQLite 完整性，省略对话正文、项目路径与凭据值。备份包含服务数据库、附件及服务所属配置和原生会话文件，应保存在私有位置。恢复校验文件哈希且要求新目录；将 `TEAM_DATA_DIR` 指向该目录，核对恢复后的团队再继续。结果不明的原生执行仍需恢复核对。
+
+<a id="run-from-source"></a>
 ## 从源码运行
 
-安装 Node.js 24，下载或克隆仓库，在根目录运行：
+使用 Node.js 24，在仓库根目录运行：
 
 ```sh
 npm ci
@@ -50,14 +169,61 @@ npm run build
 npm start
 ```
 
-启动器会打开已连接的浏览器工作空间，默认地址为 `http://127.0.0.1:4317`。桌面打包方法见[开发指南](docs/zh-CN/development.md)。macOS/Linux 的源码 Web 服务使用环境变量凭据；桌面版接入系统密钥存储。
+启动器在 `http://127.0.0.1:4317` 打开已连接的浏览器工作空间。`TEAM_API_PORT` 指定其他端口，`TEAM_DATA_DIR` 指定独立工作空间，同一数据目录由一个服务管理。`npm run dev` 在 4318 启动 API，在 4317 启动 Vite。
 
-## 文档
+构建后安装、检查指定 Harness：
 
-[团队使用](docs/zh-CN/usage.md) · [故障排查](docs/zh-CN/troubleshooting.md) · [数据与隐私](docs/zh-CN/data-and-privacy.md) · [运行架构](docs/zh-CN/architecture.md) · [版本变化](CHANGELOG.md)
+```sh
+npm run harness:install -- pi opencode
+npm run harness:check -- pi opencode
+```
 
-## 贡献与许可
+本机安装需要可用的 Node/npm，且全局 npm 前缀位于项目和应用目录之外。省略 Harness ID 可检查所有登记工具；所选工具不可用时命令以非零退出码结束。
 
-欢迎提交问题、文档改进和聚焦的代码变更。参与方法见 [CONTRIBUTING.md](CONTRIBUTING.md)，漏洞报告方法见 [SECURITY.md](SECURITY.md)。
+源码检查命令：
+
+```sh
+npm run check
+npm run build
+npm run test:smoke
+```
+
+这些检查使用本地夹具，不调用付费模型。在目标系统和架构运行 `npm run desktop:build` 构建桌面安装包，或用 `npm run desktop:unpacked` 生成未打包应用。Windows 安装器验证还需要 Python 3，源码路径宜较短；Linux 需要 Electron 桌面依赖、`tar` 和标准构建工具；macOS arm64 需要 Apple Silicon Mac。
+
+构建覆盖相应的 `release/win32-x64`、`release/linux-x64` 或 `release/darwin-arm64` 输出目录。发布清单和包内清单记录源码与文件哈希。[config/desktop-runtime.json](https://github.com/DrPei12/teamswarm/blob/main/config/desktop-runtime.json) 固定运行时下载来源，内置 npm 归档的来源与完整性见 [vendor/npm-runtime.json](https://github.com/DrPei12/teamswarm/blob/main/vendor/npm-runtime.json)，用 `python -B scripts/rebuild-npm-runtime.py --check` 核对重建结果。
+
+<a id="offline-audit"></a>
+## 离线事件审计
+
+可选 CLI 仅使用 Node.js 24 内置模块，无需联网即可分析导出的事件数组：
+
+```sh
+node tools/offline-audit/audit.mjs events.json
+node tools/offline-audit/audit.mjs events.json --format markdown --team team-id
+```
+
+每条事件必须包含 `sequence,id,teamId,runId,workId,attemptId,type,data,createdAt`。sequence 是正整数，ID 和类型为字符串，run/work/attempt ID 允许显式 null；data 为非 null 对象，不能为数组。时间戳需要有效 ISO 日期、含秒时间和时区，额外字段保留。相同事件重放会去重，ID 冲突则失败；先验证并排序整个输入，再按团队筛选。
+
+报告包含事件数、峰值占用工作数、最新终态、交流计数、暂停恢复配对和定义变化。等待与不明恢复状态继续计入占用，交流解决记录成员声明。未知事件类型单独列出。空数组或不存在的团队返回零指标；错误写入 stderr、退出码为 1，stdout 不输出部分结果。文件名以连字符开头时，在前面加 `--`。
+
+<a id="troubleshooting"></a>
+## 故障排查与反馈
+
+| 现象 | 处理方式 |
+|---|---|
+| 未安装 Harness | 安装工具，检查本机 Node/npm 和全局前缀。 |
+| 账号或 Key 不可用 | 重新连接账号，或配置资源所引用的确切环境变量。 |
+| 模型、协议或提供方限制 | 核对双方支持的组合或账号额度，状态收束后继续。 |
+| 需要恢复 | 核对原生执行结果，再重试可能产生文件冲突的工作。 |
+| 桌面无法启动 | 查看诊断和端口；Windows 未打包应用可尝试较短路径。 |
+| Linux 无法保存 Key | 解锁桌面密钥环，或在源码服务使用环境变量引用。 |
+| 桌面提示浏览器服务占用工作空间 | 先停止该服务，再用同一数据目录打开桌面应用。 |
+
+通过 [Issues](https://github.com/DrPei12/teamswarm/issues) 反馈可复现问题，附上版本、系统、Harness/模型、启动方式和脱敏诊断。漏洞使用可用的 **Security → Report a vulnerability** 入口；若未开放，在 issue 中请求私下联系渠道，不公开漏洞细节。反馈中排除凭据、私有对话与个人项目文件。
+
+欢迎提交聚焦的 PR。针对行为变化运行相关检查，保留数据与执行恢复路径，维护两份 README 的一致性；界面变化检查中英文和相关窗口尺寸。提交供项目收录的贡献按 Apache-2.0 提供，并保留第三方署名。
+
+<a id="license"></a>
+## 许可
 
 TeamSwarm 使用 [Apache-2.0](LICENSE)，允许商用、修改和再分发。第三方软件保留各自的许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

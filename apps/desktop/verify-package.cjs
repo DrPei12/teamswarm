@@ -12,7 +12,7 @@ function verifyProduct(product) {
   }
   const runtime = JSON.parse(fs.readFileSync(path.join(product, "runtime-manifest.json"), "utf8"));
   for (const relative of [runtime.nodeFile, runtime.codexFile, "runtime/node_modules/npm/bin/npm-cli.js", "scripts/install-harnesses.mjs",
-    "scripts/platform.cjs", "config/harnesses.json", "teamswarm/dist/index.html", "node_modules/express/package.json", "LICENSE", "NOTICE"])
+    "scripts/platform.cjs", "config/harnesses.json", "teamswarm/dist/index.html", "node_modules/express/package.json", "LICENSE", "NOTICE", "README.md", "README.zh-CN.md", "THIRD_PARTY_NOTICES.md"])
     if (!fs.existsSync(path.join(product, relative))) throw new Error(`Missing packaged dependency: ${relative}`);
   if (runtime.platform !== process.platform || runtime.arch !== process.arch) throw new Error("Verify this package on its target platform and architecture.");
   const run = (args) => {

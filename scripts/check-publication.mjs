@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const excluded = new Set(['node_modules','.git','.local','.codex-local','release','dist','coverage','test-results']);
-const denied = /(^|\/)(archive|research|auth\.json|credentials\.json|control\.json|\.env(?:\..*)?)(\/|$)|\.(sqlite3?|pem|p12|pfx|log)$/i;
+const denied = /(^|\/)(archive|research|docs|artifacts|auth\.json|credentials\.json|control\.json|\.env(?:\..*)?)(\/|$)|\.(sqlite3?|pem|p12|pfx|log)$/i;
 const patterns = [/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/, /gh[pousr]_[A-Za-z0-9]{30,}/, /sk-(?:proj-)?[A-Za-z0-9_-]{30,}/];
 const secrets = (JSON.parse(process.env.TEAMSWARM_RELEASE_SECRET_FILES || '[]')).flatMap(file => {
   const text = readFileSync(file,'utf8');
