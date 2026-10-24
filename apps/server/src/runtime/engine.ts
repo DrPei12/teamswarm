@@ -2456,12 +2456,15 @@ export class TeamRuntime {
             "criteria_required",
             "Production work needs acceptance criteria.",
           );
+        const continuationBase = input.continuationOf
+          ? this.store.get<Work>("works", teamId, input.continuationOf) : undefined;
         const identity = delegationIdentity(input);
         const delegationFingerprint = identity.fingerprint;
         const priorDelegation = this.store.list<Work>("works", teamId).find((w) => w.runId === run.id &&
           w.delegationFingerprint === delegationFingerprint && !["failed", "interrupted", "superseded", "rejected"].includes(w.status));
         const responsibility = identity.key ? this.store.list<Work>("works", teamId).find((w) =>
-          w.requirementId === run.requirementId && w.responsibilityKey === identity.key && !this.isSuperseded(w)) : undefined;
+          w.requirementId === run.requirementId && w.responsibilityKey === identity.key && !this.isSuperseded(w) &&
+          (!continuationBase || w.continuationOf === continuationBase.id || threadOf(w) !== threadOf(continuationBase))) : undefined;
         if (responsibility && responsibility.delegationContract !== identity.contract)
           throw conflict("responsibility_changed", `Work ${responsibility.id} already owns responsibility ${identity.key}. Update or continue that thread explicitly; its member, criteria, inputs and permissions cannot change through duplicate delegation.`);
         const reused = priorDelegation ?? responsibility;
@@ -2502,11 +2505,7 @@ export class TeamRuntime {
           ? "independent"
           : input.verification;
         if (input.continuationOf) {
-          const base = this.store.get<Work>(
-            "works",
-            teamId,
-            input.continuationOf,
-          );
+          const base = continuationBase!;
           if (
             base.memberId !== recipient.id ||
             base.reviewOf ||

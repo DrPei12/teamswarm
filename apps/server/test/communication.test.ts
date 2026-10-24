@@ -136,6 +136,58 @@ test("responsibility retries reuse work across wording and ordering changes with
   } finally { await t.close(); }
 });
 
+test("explicit repairs retain their responsibility key while retries remain idempotent", async () => {
+  const t = await setup();
+  try {
+    t.harness.finish(t.works[0].id);
+    await until(() => t.state(t.works[0].id).status === "failed");
+    const args = {
+      memberId: t.members[0].id, title: "Catalog", instructions: "Create the catalog.",
+      acceptanceCriteria: ["Reject invalid entries"], inputArtifactIds: [], dependsOn: [],
+      writePaths: ["catalog.txt"], responsibilityKey: "catalog", verification: "independent",
+    };
+    const first = await t.tool(t.hostId, "team_delegate", args);
+    await until(() => t.harness.call(first.id));
+    const file = path.join(t.workspace, "catalog.txt");
+    writeFileSync(file, "candidate");
+    await t.tool(first.id, "team_submit_result", { summary: "Candidate", files: ["catalog.txt"], usedArtifactIds: [] });
+    t.harness.finish(first.id);
+    await until(() => t.state(first.id).status === "submitted");
+    t.service.runtime.store.setStatus(t.state(first.id), "rejected");
+    const repairArgs = {
+      ...args, instructions: "Reject sparse entries too.", continuationOf: first.id,
+      inputArtifactIds: t.state(first.id).artifactIds, verification: "self-check",
+    };
+    const repair = await t.tool(t.hostId, "team_delegate", repairArgs);
+    assert.notEqual(repair.id, first.id);
+    assert.equal(repair.threadId, first.threadId ?? first.id);
+    assert.equal(repair.continuationOf, first.id);
+    assert.equal(repair.responsibilityKey, "catalog");
+    assert.equal(repair.verification, "independent");
+    assert.deepEqual(repair.writePaths, ["catalog.txt"]);
+    const retry = await t.tool(t.hostId, "team_delegate", { ...repairArgs, title: "Repair catalog", instructions: "Please reject sparse entries too." });
+    assert.equal(retry.id, repair.id);
+    await assert.rejects(t.tool(t.hostId, "team_delegate", { ...repairArgs, acceptanceCriteria: ["Only inspect output"] }), { code: "responsibility_changed" });
+    await assert.rejects(t.tool(t.hostId, "team_delegate", {
+      ...repairArgs, memberId: t.members[1].id, continuationOf: t.works[1].id,
+    }), { code: "responsibility_changed" });
+    await until(() => t.harness.call(repair.id));
+    writeFileSync(file, "repaired");
+    await t.tool(repair.id, "team_submit_result", { summary: "Repaired", files: ["catalog.txt"], usedArtifactIds: repair.inputs });
+    t.harness.finish(repair.id);
+    await until(() => t.state(repair.id).status === "submitted");
+    t.service.runtime.store.setStatus(t.state(repair.id), "accepted");
+    const next = await t.tool(t.hostId, "team_delegate", {
+      ...args, instructions: "Trim returned titles.", continuationOf: repair.id,
+      inputArtifactIds: t.state(repair.id).artifactIds,
+    });
+    assert.equal(next.threadId, first.threadId ?? first.id);
+    assert.equal(next.continuationOf, repair.id);
+    assert.equal(next.responsibilityKey, "catalog");
+    assert.equal(t.service.runtime.store.list<Work>("works", t.team.id).filter(w => w.responsibilityKey === "catalog").length, 3);
+  } finally { await t.close(); }
+});
+
 test("review instruction updates reuse the running review and require new acknowledgment and command evidence", async () => {
   const t = await setup();
   try {
