@@ -695,3 +695,43 @@ test("Host follow-ups keep the last eight messages when the source is outside th
     await app.close();
   }
 });
+
+
+test("capability changes make saved Host resource claims advisory pending recheck", async () => {
+  const app = await setup();
+  try {
+    app.harness.action = async (r) => {
+      const input = JSON.parse(r.input);
+      if (input.work.instructions === "Remember resource claim")
+        await r.onTool("team_host_note", {key:"resource-count", expectedVersion:0,
+          content:"Only one model remains; earlier models were exhausted.", status:"open",
+          sourceMessageIds:[input.requirement.sourceMessageId]}, randomUUID());
+      return {status:"completed", text:"Recorded."};
+    };
+    await app.send("Remember resource claim");
+    const catalog = app.service.runtime.catalog;
+    const before = catalog.capabilities.read(app.team.id);
+    const originalNote = app.service.runtime.hostContext.notes(app.team.id, app.branch.id)[0];
+    assert.equal(originalNote.capabilityVersion, before.version);
+    catalog.capabilities.save(app.team.id, {expectedVersion:before.version,
+      enabledHarnesses:before.enabledHarnesses, connections:before.connections,
+      preferences:{...before.preferences, instructions:"Configured catalogue changed; quota remains unknown."}});
+    const checked = await app.send("Check current resource facts");
+    const run = app.service.runtime.store.get<any>("runs", app.team.id, checked.runId);
+    const notes = app.service.runtime.hostContext.read(run, {kind:"notes",query:"",offset:0,limit:10});
+    assert.equal((notes.items[0] as any).requiresRecheck, true);
+    const input = JSON.parse(app.harness.requests.at(-1)!.input);
+    assert.equal(input.current.notes[0].requiresRecheck, true);
+    assert.equal(input.current.notes[0].capabilityVersion, before.version);
+    assert.equal(input.current.notes[0].content, "Only one model remains; earlier models were exhausted.");
+    for (const kind of ["resources", "models"] as const) {
+      const page = catalog.list(app.team.id, app.branch.id, {kind,query:"",offset:0,limit:10});
+      assert.equal(page.catalogue?.scope, "configured_enabled_choices");
+      assert.equal(page.catalogue?.remainingQuota, "unknown");
+      assert.equal(page.catalogue?.capabilityVersion, before.version + 1);
+      const empty = catalog.list(app.team.id, app.branch.id, {kind,query:"no-such-configured-choice",offset:0,limit:10});
+      assert.equal(empty.total, 0);
+      assert.equal(empty.catalogue?.remainingQuota, "unknown");
+    }
+  } finally { await app.close(); }
+});
