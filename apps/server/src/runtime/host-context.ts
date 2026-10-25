@@ -15,6 +15,7 @@ export interface HostNote {
   version: number;
   sourceMessageIds: string[];
   contextVersion: string;
+  capabilityVersion?: number;
   attemptId: string;
 }
 
@@ -121,6 +122,7 @@ export class HostContext {
       version: expectedVersion + 1,
       contextVersion: this.history.context(work.teamId, branch.id)
         .contextVersion,
+      capabilityVersion: this.catalog.capabilities.read(work.teamId).version,
       attemptId: attempt.id,
     };
     this.store.db
@@ -198,6 +200,7 @@ export class HostContext {
     // Changes apply at the next Host attempt and are recorded; they do not alter execution permissions or Run policy.
     const contextSettings = this.store.settings(work.teamId) ?? run.settings;
     const maxBytes = contextSettings.hostContextMaxBytes ?? 96000;
+    const capabilityVersion = this.catalog.capabilities.read(work.teamId).version;
     const mandatory = project.documents.filter(
       (d) => d.kind === "goal" || d.kind === "requirement",
     );
@@ -235,7 +238,7 @@ export class HostContext {
           activeMemberAttempts: this.store.list<Attempt>("attempts", work.teamId)
             .filter(a => activeStates.has(a.status) && this.store.get<Member>("members", work.teamId, a.memberId).kind !== "host").length,
           resourceSharing: "Multiple independent members may reuse the same resource and Harness. Concurrency is a Team scheduling ceiling, not a per-Harness member limit.",
-          decisions: "Read resource details for full advisory descriptions and native usage observations. Apply sourced user preferences; choose member count, Harness, model and effort for this task without fixed rankings. Unknown prices and quota remain unknown.",
+          decisions: "Read resource details for full advisory descriptions and native usage observations. Apply sourced user preferences; choose member count, Harness, model and effort for this task without fixed rankings. Unknown prices and quota remain unknown. Catalogue totals count configured enabled choices, not provider inventory or remaining free allocations. Missing or disabled entries do not prove quota exhaustion. Recheck advisory notes against current capability versions and recorded observations.",
         },
         activeRuns: activeRuns.slice(-20).map((r) => ({
           id: r.id,
@@ -257,7 +260,8 @@ export class HostContext {
         activeRunCount: activeRuns.length,
         notes: notes.slice(0, 8).map((n) => ({
           ...n,
-          requiresRecheck: n.contextVersion !== project.contextVersion,
+          requiresRecheck: n.contextVersion !== project.contextVersion ||
+            n.capabilityVersion !== capabilityVersion,
         })),
         openNoteCount: notes.length,
         resources: this.catalog.list(work.teamId, project.branchId, {
@@ -401,7 +405,13 @@ export class HostContext {
   ) {
     const branch = this.history.forRun(run);
     let items: unknown[];
-    if (input.kind === "notes") items = this.notes(run.teamId, branch.id);
+    if (input.kind === "notes") {
+      const contextVersion = this.history.context(run.teamId, branch.id).contextVersion;
+      const capabilityVersion = this.catalog.capabilities.read(run.teamId).version;
+      items = this.notes(run.teamId, branch.id).map(n => ({ ...n,
+        requiresRecheck: n.contextVersion !== contextVersion || n.capabilityVersion !== capabilityVersion,
+      }));
+    }
     else {
       const id = input.conversationId ?? run.conversationId;
       if (this.history.forConversation(run.teamId, id).id !== branch.id)
