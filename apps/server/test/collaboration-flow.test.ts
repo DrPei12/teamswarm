@@ -1,3 +1,4 @@
+import { judgmentEvidence } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
@@ -133,6 +134,7 @@ async function fixture() {
       [],
       [],
     );
+    work.acceptanceEvidence = judgmentEvidence(work.acceptanceCriteria);
     work.verification = "self-check";
     store.save("works", work);
     service.runtime.records.bindOutputs(work);
@@ -152,6 +154,11 @@ async function fixture() {
     branch,
     member,
     create,
+    resolve(work: Work) {
+      const current = store.get<Work>("works", team.id, work.id);
+      current.acceptanceEvidence = judgmentEvidence(current.acceptanceCriteria);
+      store.save("works", current);
+    },
     async close() {
       await service.close();
       rmSync(directory, { recursive: true, force: true });
@@ -167,6 +174,7 @@ test("lightweight task delivers real bytes, continuation keeps its thread, snaps
       { length: 20 },
       (_, i) => `Guide criterion ${i + 1}`,
     );
+    first.acceptanceEvidence = judgmentEvidence(first.acceptanceCriteria);
     f.store.save("works", first);
     await until(
       () => f.store.get<Run>("runs", f.team.id, f.run.id).state === "completed",
@@ -188,6 +196,7 @@ test("lightweight task delivers real bytes, continuation keeps its thread, snaps
       key,
       done.revision,
     );
+    f.resolve(result.work);
     assert.deepEqual(
       f.service.runtime.continueWork(
         f.team.id,
@@ -343,6 +352,7 @@ test("continuing an empty failed turn retains the original thread's saved artifa
       randomUUID(),
       failed.revision,
     ).work;
+    f.resolve(next);
     assert.equal(next.threadId, first.id);
     assert.equal(next.continuationOf, failed.id);
     assert(
@@ -467,6 +477,7 @@ test("a continued lightweight task can submit the exact criterion ending at a wh
       randomUUID(),
       done.revision,
     );
+    f.resolve(continued.work);
     const criterion = continued.work.acceptanceCriteria.at(-1)!;
     assert.equal(criterion.length, 1000);
     assert.equal(criterion.slice(-2), "\n ");

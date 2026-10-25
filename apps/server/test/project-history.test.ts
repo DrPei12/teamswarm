@@ -1,3 +1,4 @@
+import { judgmentEvidence, withJudgmentEvidence } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -216,7 +217,7 @@ const doc = (key: string, content: string, dependencies: string[] = []) => ({
   dependencies,
 });
 const tool = (request: HarnessRequest, name: string, args: unknown = {}) =>
-  request.onTool(name, args, randomUUID());
+  request.onTool(name, withJudgmentEvidence(name, args), randomUUID());
 const code = (expected: string) => (error: unknown) =>
   (error as { code?: string })?.code === expected;
 

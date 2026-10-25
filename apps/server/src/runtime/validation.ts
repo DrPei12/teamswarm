@@ -1,3 +1,4 @@
+import { MAX_ACCEPTANCE_CRITERIA } from "./acceptance-evidence.js";
 import { adoptionContextInput, adoptionInput } from "./branch-adoption.js";
 import { z } from "zod";
 import { badRequest } from "../errors.js";
@@ -10,6 +11,10 @@ export const executionRequirements = z.object({
   nativeCommands: z.boolean().optional(), childProcesses: z.boolean().optional(),
   scratchWrite: z.boolean().optional(), loopback: z.boolean().optional(), fileLinks: z.boolean().optional(),
 }).strict();
+const acceptanceEvidence = z.array(z.object({
+  criterion: z.string().min(1).max(1000),
+  evidenceType: z.enum(["review_judgment", "native_check"]),
+}).strict()).max(MAX_ACCEPTANCE_CRITERIA);
 const nullableName = z.string().trim().min(1).max(200).nullable().default(null);
 export const executionConfig = z
   .object({
@@ -317,13 +322,14 @@ export const tools = {
   },
   team_delegate: {
     description:
-      "Host only. Assign owned work with exact acceptance criteria, versioned input IDs and dependencies. Use one stable responsibilityKey per responsibility and reuse it on retries; declared writePaths also deduplicate repeated ownership. Reused work retains its original instructions: if delegationReuse.instructionsApplied=false, send necessary changes to that thread instead of assigning it again. Changed criteria, inputs or permissions require explicit continuation. Set verification=self-check for small reversible work; independent for complex/high-impact work or explicit independent review. Use continuationOf to continue the exact existing work thread. Production dependencies and input producers must satisfy their verification policy: self-check work must be self_checked and independent work must be ACCEPTED; submitted is insufficient. Stale inputs fail before creating work; read current files or continue the original responsibility rather than retrying stale versions. For independent review use team_review. Shared integration of isolated sources requires every deliverable source work ID in integratesWorkIds and dependsOn plus every source artifact in inputArtifactIds.",
+      "Host only. Declare acceptanceEvidence for every exact criterion: native_check for required execution, review_judgment for semantic inspection. Omitted declarations remain unresolved and cannot be accepted. Review and continuation inherit pinned expectations. Assign owned work with exact acceptance criteria, versioned input IDs and dependencies. Use one stable responsibilityKey per responsibility and reuse it on retries; declared writePaths also deduplicate repeated ownership. Reused work retains its original instructions: if delegationReuse.instructionsApplied=false, send necessary changes to that thread instead of assigning it again. Changed criteria, inputs or permissions require explicit continuation. Set verification=self-check for small reversible work; independent for complex/high-impact work or explicit independent review. Use continuationOf to continue the exact existing work thread. Production dependencies and input producers must satisfy their verification policy: self-check work must be self_checked and independent work must be ACCEPTED; submitted is insufficient. Stale inputs fail before creating work; read current files or continue the original responsibility rather than retrying stale versions. For independent review use team_review. Shared integration of isolated sources requires every deliverable source work ID in integratesWorkIds and dependsOn plus every source artifact in inputArtifactIds.",
     schema: z
       .object({
         memberId: key,
         title: z.string().min(1).max(160),
         instructions: text,
-        acceptanceCriteria: z.array(z.string().trim().min(1).max(1000)).max(20),
+        acceptanceCriteria: z.array(z.string().min(1).max(1000)).max(MAX_ACCEPTANCE_CRITERIA),
+        acceptanceEvidence: acceptanceEvidence.optional(),
         inputArtifactIds: z.array(key).max(128),
         dependsOn: z.array(key).max(30),
         reviewOf: key.nullable().default(null),
@@ -339,9 +345,13 @@ export const tools = {
       })
       .strict(),
   },
+  team_set_acceptance_evidence: {
+    description: "Host only. Classify unresolved acceptance criteria on unfinished production work from its original requirements, or strengthen judgment to native_check. Read the exact criteria and current revision first. Pinned native checks cannot be weakened. Existing acceptance history is immutable.",
+    schema: z.object({ workId: key, expectedRevision: z.number().int().positive(), acceptanceEvidence, reason: text }).strict(),
+  },
   team_review: {
     description:
-      "Host only. Assign an independent read-only reviewer to a submitted production work. The service binds reviewOf, EVERY exact artifact version, target workspace, dependencies and original acceptance criteria automatically. Reviewer must read the artifacts and call team_accept_work; an A2A answer is not acceptance. Use this for formal review instead of creating a generic production task.",
+      "Host only. Assign an independent read-only reviewer to a submitted production work. The service binds reviewOf, EVERY exact artifact version, target workspace, dependencies and original acceptance criteria and evidence requirements automatically. Native-check criteria require a capable executor even when executionRequirements is omitted. Reviewer must read the artifacts and call team_accept_work; an A2A answer is not acceptance. Use this for formal review instead of creating a generic production task.",
     schema: z
       .object({ workId: key, reviewerMemberId: key, instructions: text, executionRequirements: executionRequirements.optional() })
       .strict(),
@@ -402,7 +412,7 @@ export const tools = {
               })
               .strict(),
           )
-          .max(21)
+          .max(MAX_ACCEPTANCE_CRITERIA)
           .optional(),
       })
       .strict(),
@@ -414,7 +424,7 @@ export const tools = {
   },
   team_accept_work: {
     description:
-      "Record independent acceptance or rejection. Read every target artifact and check every exact criterion. For actual executable checks use native_check with event IDs from team_review_evidence. For semantic inspection use review_judgment with an explicit reason and no event IDs. Never present a judgment as observed command execution.",
+      "Record independent acceptance or rejection. Each passed native_check criterion must cite successful current-attempt command events; review_judgment cannot satisfy a pinned native_check requirement. Read every target artifact and check every exact criterion. For actual executable checks use native_check with event IDs from team_review_evidence. For semantic inspection use review_judgment with an explicit reason and no event IDs. Never present a judgment as observed command execution.",
     schema: z
       .object({
         workId: key,
@@ -431,7 +441,7 @@ export const tools = {
               })
               .strict(),
           )
-          .max(21),
+          .max(MAX_ACCEPTANCE_CRITERIA),
       })
       .strict(),
   },

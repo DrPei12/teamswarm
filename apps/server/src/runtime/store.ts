@@ -1,3 +1,4 @@
+import { bindEvidence, evidenceFor, resolvedEvidence, reviewEvidenceContext } from "./acceptance-evidence.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
@@ -154,6 +155,15 @@ export class RuntimeStore {
           }
           this.db.prepare("INSERT INTO runtime_migrations VALUES (3, ?)").run(timestamp());
         }
+        if (!this.db.prepare("SELECT 1 FROM runtime_migrations WHERE version = 4").get()) {
+          for (const team of teams.listTeams()) for (const work of this.list<Work>("works", team.id)) {
+            if (work.acceptanceEvidence === undefined) {
+              work.acceptanceEvidence = evidenceFor(work);
+              this.save("works", work);
+            }
+          }
+          this.db.prepare("INSERT INTO runtime_migrations VALUES (4, ?)").run(timestamp());
+        }
       });
       // An interrupted service never turns an unknown execution into success or replays it.
       for (const team of teams.listTeams())
@@ -233,6 +243,11 @@ export class RuntimeStore {
     work?: Work,
     attemptId?: string,
   ): void {
+    if (type === "execution.item" && data.type === "commandExecution" && work?.reviewOf) {
+      const id = attemptId ?? work.attemptId;
+      const attempt = id ? this.get<Attempt>("attempts", teamId, id) : undefined;
+      data = { ...data, reviewEvidenceContext: attempt?.reviewEvidenceContext };
+    }
     this.db
       .prepare(
         "INSERT INTO runtime_events(id, team_id, run_id, work_id, attempt_id, type, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -494,6 +509,7 @@ export class RuntimeStore {
       title,
       instructions,
       acceptanceCriteria,
+      acceptanceEvidence: bindEvidence(acceptanceCriteria),
       inputs,
       dependsOn,
       reviewOf,
@@ -601,6 +617,8 @@ export class RuntimeStore {
       usage: null,
       actual: null,
     };
+    if (work.reviewOf)
+      attempt.reviewEvidenceContext = reviewEvidenceContext(work, this.get<Work>("works", work.teamId, work.reviewOf));
     this.transaction(() => {
       work.round = (work.round ?? 0) + 1;
       this.save("attempts", attempt);
@@ -811,7 +829,10 @@ export class RuntimeStore {
         "incomplete_self_check",
         "Provide a factual self-check for every exact work criterion, in order.",
       );
-    for (const check of checks)
+    const required = resolvedEvidence(work);
+    for (const [index, check] of checks.entries()) {
+      if (required[index].evidenceType === "native_check" && !check.evidenceEventIds.length)
+        throw badRequest("missing_check", "This criterion requires successful command evidence from the producer attempt.");
       for (const id of check.evidenceEventIds) {
         const row = this.db
           .prepare(
@@ -819,12 +840,13 @@ export class RuntimeStore {
           )
           .get(id, work.teamId, work.attemptId!);
         const event = row ? JSON.parse(String(row.data)) : null;
-        if (!event || event.type !== "commandExecution" || event.exitCode !== 0)
+        if (!event || event.type !== "commandExecution" || event.exitCode !== 0 || event.status !== "completed")
           throw conflict(
             "invalid_check",
             "Self-check evidence must reference a successful command from this attempt.",
           );
       }
+    }
     work.selfChecks = checks;
     this.event(
       work.teamId,
@@ -922,10 +944,16 @@ export class RuntimeStore {
         "incomplete_evidence",
         "Provide one evidenced result for every exact acceptance criterion.",
       );
+    const required = verdict === "accepted" ? resolvedEvidence(target) : evidenceFor(target);
+    if (reviewer.inputs.length !== target.artifactIds.length ||
+        target.artifactIds.some(id => !reviewer.inputs.includes(id)))
+      throw conflict("review_binding_changed", "Assign a review bound to every current artifact version before recording acceptance.");
     if (verdict === "accepted" && reviewer.executionRequirements?.nativeCommands &&
         !criteria.some((criterion) => criterion.evidenceType === "native_check" && criterion.passed))
       throw badRequest("missing_check", "This review requires an observed native command check before acceptance.");
-    for (const criterion of criteria) {
+    for (const [index, criterion] of criteria.entries()) {
+      if (criterion.passed && required[index].evidenceType === "native_check" && criterion.evidenceType !== "native_check")
+        throw badRequest("missing_check", `Criterion ${index + 1} requires successful command evidence from this review attempt.`);
       if (criterion.evidenceType === "native_check") {
         if (!criterion.evidenceEventIds.length)
           throw badRequest(
@@ -939,8 +967,9 @@ export class RuntimeStore {
             )
             .get(id, reviewer.teamId, reviewer.attemptId);
           const check = event ? JSON.parse(String(event.data)) : null;
+          const startedAt = Date.parse(String(check?.startedAt ?? ""));
           if (reviewing.reviewInstructionsAcknowledgedAt &&
-              (!check?.startedAt || check.startedAt < reviewing.reviewInstructionsAcknowledgedAt))
+              (!Number.isFinite(startedAt) || startedAt < Date.parse(reviewing.reviewInstructionsAcknowledgedAt)))
             throw conflict("review_check_outdated", "Run the required command after reading the updated review instructions; earlier command evidence is retained as history.");
           if (!check)
             throw conflict(
@@ -950,12 +979,15 @@ export class RuntimeStore {
           if (
             check.type !== "commandExecution" ||
             !Number.isInteger(check.exitCode) ||
+            check.status !== "completed" ||
             (criterion.passed && check.exitCode !== 0)
           )
             throw conflict(
               "invalid_check",
               "Check evidence must reference a finished command from this review attempt with an appropriate exit status.",
             );
+          if (check.reviewEvidenceContext !== reviewEvidenceContext(reviewer, target))
+            throw conflict("review_check_outdated", "Run the check against the current artifact versions, evidence requirements and review instructions.");
         }
       } else if (
         criterion.evidenceType !== "review_judgment" ||
@@ -980,6 +1012,7 @@ export class RuntimeStore {
         );
     }
     const acceptance: Acceptance = {
+      acceptanceEvidence: required,
       id: randomUUID(),
       teamId: target.teamId,
       workId: target.id,

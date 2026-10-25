@@ -1,3 +1,4 @@
+import { judgmentEvidence, withJudgmentEvidence } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
@@ -205,7 +206,7 @@ test("review instruction updates reuse the running review and require new acknow
     for (const id of review.inputs) await t.tool(review.id, "team_read_artifact", { artifactId: id });
     const store = t.service.runtime.store;
     store.event(t.team.id, "execution.item",
-      { type: "commandExecution", exitCode: 0, startedAt: new Date(0).toISOString() }, t.state(review.id), t.state(review.id).attemptId!);
+      { type: "commandExecution", status: "completed", exitCode: 0, startedAt: new Date(0).toISOString() }, t.state(review.id), t.state(review.id).attemptId!);
     const oldCheck = store.db.prepare("SELECT id FROM runtime_events WHERE attempt_id=? AND type='execution.item' ORDER BY sequence DESC LIMIT 1").get(t.state(review.id).attemptId!)!;
     const updated = await t.tool(t.hostId, "team_review", { ...args, instructions: "Also verify invalid input." });
     assert.equal(updated.id, review.id);
@@ -220,7 +221,7 @@ test("review instruction updates reuse the running review and require new acknow
     }));
     await assert.rejects(t.tool(review.id, "team_accept_work", { workId: source.id, verdict: "accepted", criteria }), { code: "review_check_outdated" });
     store.event(t.team.id, "execution.item",
-      { type: "commandExecution", exitCode: 0, startedAt: new Date().toISOString() }, t.state(review.id), t.state(review.id).attemptId!);
+      { type: "commandExecution", status: "completed", exitCode: 0, startedAt: new Date().toISOString() }, t.state(review.id), t.state(review.id).attemptId!);
     const fresh = store.db.prepare("SELECT id FROM runtime_events WHERE attempt_id=? AND type='execution.item' ORDER BY sequence DESC LIMIT 1").get(t.state(review.id).attemptId!)!;
     const accepted = await t.tool(review.id, "team_accept_work", {
       workId: source.id, verdict: "accepted", criteria: criteria.map(c => ({ ...c, evidenceEventIds: [fresh.id] })),
@@ -298,7 +299,7 @@ async function until(check: () => unknown) {
 /** Deterministic scheduling/failure injection only; SQLite, HTTP, artifact files and locking are real. */
 class ControlledHarness implements Harness {
   id = config.harness;
-  capabilities = { fixture: true, resume: true };
+  capabilities = { fixture: true, resume: true, nativeChecks: true };
   calls: {
     work: Work;
     request: HarnessRequest;
@@ -407,7 +408,7 @@ async function setup() {
     name: string,
     input: unknown,
     callId = randomUUID(),
-  ) => harness.call(workId).request.onTool(name, input, callId) as Promise<any>;
+  ) => harness.call(workId).request.onTool(name, withJudgmentEvidence(name, input), callId) as Promise<any>;
   await tool(hostId, "team_define_requirements", {
     content: "Produce three coordinated results and independently review them.",
     affectedWorkIds: [],

@@ -28,7 +28,7 @@ Download the Windows x64 installer and `SHA256SUMS.txt` from the same [GitHub Re
 The Windows installer is unsigned and Windows displays an unknown publisher. Compare its hash with the release checksum file:
 
 ```powershell
-Get-FileHash .\TeamSwarm-0.5.0-Windows-x64.exe -Algorithm SHA256
+Get-FileHash .\TeamSwarm-0.5.1-Windows-x64.exe -Algorithm SHA256
 ```
 
 Run the installer, then open **TeamSwarm** from the Start menu. Installation is per user. For upgrades, close the application, [back up service data](#data-and-recovery), and run the new installer using the same OS account and installation directory. Updates are installed manually. Uninstalling preserves service data and your project files.
@@ -127,6 +127,8 @@ Give the Host a goal, relevant files and completion conditions. Members own expl
 Select a work thread before asking a member a question. Read-only questions inspect existing work; **Continue modifying** creates a subsequent execution with the original verification requirements. Pause or stop conflicting work and wait for its actual state to settle before editing the same files.
 
 Small reversible changes can use a producer self-check. For independent acceptance, specify a separate reviewer and checks against the submitted version. File reviews can compare submitted content directly. Command-based acceptance currently requires a Codex reviewer with native check support. When review instructions change, the reviewer must read them and rerun the required commands before accepting the result.
+
+Each acceptance criterion records whether it needs semantic inspection or observed command execution. Required command checks stay attached to the work across continuations and resource changes. Every execution criterion must cite successful events from the current review attempt against the submitted artifact versions and current instructions. Unclassified criteria remain pending until the Host sets their evidence requirements; previous acceptance records remain in history.
 
 To adopt a discussion branch, state the decision and scope to the Host in that branch. The Host compares the source, branch base and current mainline, then updates the selected project documents. Open the adoption node in history to inspect the decision, sources, ideas and document differences. Request code implementation separately when needed.
 
