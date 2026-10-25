@@ -1,3 +1,4 @@
+import { judgmentEvidence, withJudgmentEvidence } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
@@ -152,7 +153,7 @@ async function setup() {
   const hostId = sent.workId;
   await until(() => harness.call(hostId));
   const tool = (workId: string, name: string, input: unknown, callId = randomUUID()) =>
-    harness.call(workId).request.onTool(name, input, callId) as Promise<any>;
+    harness.call(workId).request.onTool(name, withJudgmentEvidence(name, input), callId) as Promise<any>;
   await tool(hostId, "team_define_requirements", {
     content: "Deliver the scoped file with the requested verification policy.",
     affectedWorkIds: [],
@@ -561,4 +562,35 @@ test("preflight scratch preparation failure never starts the native process", as
     await delay(200);
     assert.equal(existsSync(marker), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// Characterization for the review-evidence contract proposal described in the PR.
+// This does not treat text inspection as sufficient evidence for the stated runtime criterion.
+test("pinned execution criteria require capable review even when review options are omitted", async () => {
+  for (const explicit of [false, true]) {
+    const t = await setup();
+    try {
+      const producer = await t.addMember("Producer");
+      const reviewer = await t.addMember("Reviewer", { access: "read-only" });
+      const criterion = "Run the HTTP regression and show its successful execution output";
+      const source = await t.tool(t.hostId, "team_delegate", {
+        memberId: producer.id, title: "HTTP implementation", instructions: "Implement the HTTP behavior.",
+        acceptanceCriteria: [criterion], acceptanceEvidence: [{ criterion, evidenceType: "native_check" }],
+        inputArtifactIds: [], dependsOn: [], writePaths: ["implementation.txt"], verification: "independent",
+      }) as Work;
+      await until(() => t.harness.call(source.id));
+      await t.tool(source.id, "team_write_file", { path: "implementation.txt", text: "Synthetic HTTP implementation", expectedSha256: null });
+      await t.tool(source.id, "team_submit_result", { summary: "Implementation ready", files: ["implementation.txt"], usedArtifactIds: [] });
+      t.harness.finish(source.id);
+      await until(() => t.state(source.id).status === "submitted");
+      const review = await t.tool(t.hostId, "team_review", { workId: source.id, reviewerMemberId: reviewer.id,
+        instructions: "Run the regression independently.", ...(explicit ? { executionRequirements: { nativeCommands: true } } : {}),
+      }) as Work;
+      await until(() => t.state(review.id).status === "failed");
+      assert.equal(t.harness.executions(review.id), 0);
+      assert.equal(t.state(review.id).executionRequirements?.nativeCommands, true);
+      assert.equal(t.state(source.id).status, "submitted");
+      assert.equal(t.service.runtime.store.list("acceptances", t.team.id).length, 0);
+    } finally { await t.close(); }
+  }
 });

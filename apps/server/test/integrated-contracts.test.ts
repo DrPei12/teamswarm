@@ -1,3 +1,4 @@
+import { judgmentEvidence } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -57,6 +58,7 @@ function fixture() {
   );
   work.workspace = isolated;
   work.workspaceMode = "isolated";
+  work.acceptanceEvidence = judgmentEvidence(work.acceptanceCriteria);
   work.verification = "self-check";
   work.threadId = "existing-thread";
   work.continuationOf = "previous-work";
@@ -166,7 +168,7 @@ test("isolated artifact capture keeps canonical identity and own-attempt self-ch
     f.store.event(
       f.team.id,
       "execution.item",
-      { type: "commandExecution", exitCode: 0 },
+      { type: "commandExecution", status: "completed", exitCode: 0 },
       f.work,
       "other-attempt",
     );
@@ -184,7 +186,7 @@ test("isolated artifact capture keeps canonical identity and own-attempt self-ch
     f.store.event(
       f.team.id,
       "execution.item",
-      { type: "commandExecution", exitCode: 0 },
+      { type: "commandExecution", status: "completed", exitCode: 0 },
       f.work,
       f.attempt.id,
     );

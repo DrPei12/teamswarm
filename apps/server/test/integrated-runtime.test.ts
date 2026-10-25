@@ -1,3 +1,4 @@
+import { judgmentEvidence } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
@@ -81,7 +82,10 @@ function fixture() {
     branch.id,
   );
   function task(member: Member, title: string) {
-    return store.createWork(run, member.id, title, title, [title], [], []);
+    const work = store.createWork(run, member.id, title, title, [title], [], []);
+    work.acceptanceEvidence = judgmentEvidence(work.acceptanceCriteria);
+    store.save("works", work);
+    return work;
   }
   return {
     directory,
@@ -488,6 +492,7 @@ test("a successfully checked continuation completes linked work without discardi
     );
     repaired.threadId = f.original.id;
     repaired.continuationOf = f.failed.id;
+    repaired.acceptanceEvidence = judgmentEvidence(repaired.acceptanceCriteria);
     repaired.verification = "self-check";
     f.records.bindOutputs(repaired);
     const attempt = f.store.start(repaired, f.writer.config);
@@ -547,6 +552,7 @@ test("a continuation finishing in a later run settles its still-active owner run
     f.history.bind(attempt, f.nextRun);
     writeFileSync(path.join(f.workspace, "result.md"), "Current result\n");
     continuation.artifactIds = f.store.capture(continuation, "Current result", ["result.md"]).map(a => a.id);
+    continuation.acceptanceEvidence = judgmentEvidence(continuation.acceptanceCriteria);
     f.store.recordSelfChecks(continuation, [{ criterion: "Change is correct", evidence: "Read current result", evidenceEventIds: [] }]);
     f.store.setStatus(continuation, "self_checked");
     (f.runtime as any).followUp(f.nextHost, f.host);

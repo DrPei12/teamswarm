@@ -89,6 +89,10 @@ export interface Run {
   branchId?: string;
   contextNodeId?: string;
 }
+export interface AcceptanceEvidence {
+  criterion: string;
+  evidenceType: "review_judgment" | "native_check" | "unresolved";
+}
 export interface Work {
   id: string;
   teamId: string;
@@ -98,6 +102,7 @@ export interface Work {
   title: string;
   instructions: string;
   acceptanceCriteria: string[];
+  acceptanceEvidence?: AcceptanceEvidence[];
   inputs: string[];
   dependsOn: string[];
   reviewOf: string | null;
@@ -207,6 +212,7 @@ export interface ProjectInsight {
   createdAt: string;
 }
 export interface Attempt {
+  reviewEvidenceContext?: string;
   reviewInstructionsRevision?: number;
   reviewInstructionsAcknowledgedAt?: string;
   instructionsSha256?: string;
@@ -321,6 +327,7 @@ export interface RuntimeEvent {
   createdAt: string;
 }
 export interface Acceptance {
+  acceptanceEvidence?: AcceptanceEvidence[];
   id: string;
   teamId: string;
   workId: string;

@@ -1,3 +1,4 @@
+import { withJudgmentEvidence } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -63,7 +64,7 @@ async function setup() {
     async close() { await service.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
   };
 }
-const call = (r: HarnessRequest, name: string, args: unknown) => r.onTool(name, args, randomUUID());
+const call = (r: HarnessRequest, name: string, args: unknown) => r.onTool(name, withJudgmentEvidence(name, args), randomUUID());
 
 async function until(check: () => boolean) {
   const start = Date.now();

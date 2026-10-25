@@ -1,3 +1,4 @@
+import { judgmentEvidence, withJudgmentEvidence } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -139,7 +140,7 @@ test("durable delegation, artifact receipt and independent acceptance over real 
   const harness = new FixtureHarness(async (request) => {
     const { work } = JSON.parse(request.input) as { work: Work };
     const tool = (name: string, args: unknown) =>
-      request.onTool(name, args, randomUUID());
+      request.onTool(name, withJudgmentEvidence(name, args), randomUUID());
     if (work.title === "Host") {
       await tool("team_define_requirements", {
         content: "Create answer.txt containing 42.",
@@ -549,6 +550,7 @@ test("artifact acceptance rejects changed files, self-review and unassigned revi
       [],
       [],
     );
+    target.acceptanceEvidence = judgmentEvidence(target.acceptanceCriteria);
     const a = store.start(target, config);
     store.recordSession(a, "producer-session", {});
     writeFileSync(path.join(workspace, "result.txt"), "correct");
