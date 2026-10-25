@@ -439,5 +439,5 @@ export const tools = {
 export const toolSpecs = Object.entries(tools).map(([name, value]) => ({
   name,
   description: value.description,
-  inputSchema: z.toJSONSchema(value.schema) as Record<string, unknown>,
+  inputSchema: z.toJSONSchema(value.schema, { io: "input" }) as Record<string, unknown>,
 }));

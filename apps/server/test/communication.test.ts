@@ -2425,3 +2425,34 @@ test("file-only recovery revokes old tool authority without inventing native ter
     assert.equal(store.list("acceptances",t.team.id).length,0);
   }finally{await t.close();}
 });
+
+
+test("missing delegation references identify the field without coercion or creating work", async () => {
+  const t = await setup();
+  try {
+    const store = t.service.runtime.store;
+    const works = store.list<Work>("works", t.team.id).map(w => w.id);
+    const attempts = store.list<Attempt>("attempts", t.team.id).map(a => a.id);
+    const base = { memberId: t.members[0].id, title: "Check reference", instructions: "Use exact existing inputs.",
+      acceptanceCriteria: ["Inputs are valid"], inputArtifactIds: [], dependsOn: [], verification: "self-check" };
+    for (const [field, value, message] of [
+      ["memberId", "missing-member", "memberId"],
+      ["reviewOf", "null", "reviewOf"],
+      ["continuationOf", "null", "continuationOf"],
+      ["inputArtifactIds", ["missing-artifact"], "inputArtifactIds[0]"],
+      ["dependsOn", ["missing-work"], "dependsOn[0]"],
+      ["integratesWorkIds", ["missing-work"], "integratesWorkIds[0]"],
+    ] as const) {
+      await assert.rejects(t.tool(t.hostId, "team_delegate", { ...base, [field]: value }), (error: any) => {
+        assert.equal(error.status, 404);
+        assert.equal(error.code, "not_found");
+        assert.ok(error.message.includes(message), error.message);
+        return true;
+      });
+      assert.deepEqual(store.list<Work>("works", t.team.id).map(w => w.id), works);
+      assert.deepEqual(store.list<Attempt>("attempts", t.team.id).map(a => a.id), attempts);
+    }
+    const valid = await t.tool(t.hostId, "team_delegate", { ...base, reviewOf: null });
+    assert.equal(valid.reviewOf, null);
+  } finally { await t.close(); }
+});

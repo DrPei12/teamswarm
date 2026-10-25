@@ -276,6 +276,12 @@ export class TeamCatalog {
       });
     items = items.filter((item) => matches(item, input.query));
     return {
+      ...(input.kind === "resources" || input.kind === "models" ? { catalogue: {
+        scope: "configured_enabled_choices" as const,
+        capabilityVersion: this.capabilities.read(teamId).version,
+        remainingQuota: "unknown" as const,
+        guidance: "Counts describe configured enabled choices matching this query, not provider inventory or free-quota balances. Omission or disabling does not establish exhaustion; use explicit provider evidence. Installation and execution compatibility require separate observations.",
+      } } : {}),
       items: items.slice(input.offset, input.offset + input.limit),
       total: items.length,
       nextOffset:
