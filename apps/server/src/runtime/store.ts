@@ -200,11 +200,11 @@ export class RuntimeStore {
       )
       .run(id, value.teamId, JSON.stringify(value));
   }
-  get<T extends Entity>(table: Table, teamId: string, id: string): T {
+  get<T extends Entity>(table: Table, teamId: string, id: string, missingMessage?: string): T {
     const row = this.db
       .prepare(`SELECT data FROM runtime_${table} WHERE id = ? AND team_id = ?`)
       .get(id, teamId);
-    if (!row) throw notFound();
+    if (!row) throw notFound(missingMessage);
     return JSON.parse(String(row.data)) as T;
   }
   list<T extends Entity>(table: Table, teamId: string): T[] {
@@ -461,12 +461,12 @@ export class RuntimeStore {
         "branch_scope",
         "A member's responsibilities belong to its project branch.",
       );
-    for (const artifactId of inputs) {
-      this.get<ArtifactVersion>("artifacts", run.teamId, artifactId);
+    for (const [index, artifactId] of inputs.entries()) {
+      this.get<ArtifactVersion>("artifacts", run.teamId, artifactId, `inputArtifactIds[${index}] does not refer to an artifact in this Team. Read the current work for exact artifact IDs.`);
       this.history?.assertArtifact(run, artifactId);
     }
-    for (const workId of dependsOn) {
-      const dependency = this.get<Work>("works", run.teamId, workId);
+    for (const [index, workId] of dependsOn.entries()) {
+      const dependency = this.get<Work>("works", run.teamId, workId, `dependsOn[${index}] does not refer to a work in this Team. Read the current work list for exact IDs.`);
       if (
         this.history &&
         this.history.forRun(this.get<Run>("runs", run.teamId, dependency.runId))
