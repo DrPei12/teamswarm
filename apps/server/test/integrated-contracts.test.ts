@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { TeamStore } from "../src/store.js";
 import { RuntimeStore } from "../src/runtime/store.js";
-import { runtimeSettings, tools } from "../src/runtime/validation.js";
+import { runtimeSettings, tools, toolSpecs } from "../src/runtime/validation.js";
 import type { Run, Work } from "../src/runtime/types.js";
 
 function fixture() {
@@ -237,4 +237,19 @@ test("stable filenames and the total submission limit both remain enforced befor
   } finally {
     f.close();
   }
+});
+
+
+test("published delegation input schema permits server-defaulted fields to be omitted", () => {
+  const schema = toolSpecs.find(t => t.name === "team_delegate")!.inputSchema;
+  const required = schema.required as string[];
+  for (const field of ["reviewOf", "verification", "workspaceMode", "integratesWorkIds"])
+    assert.ok(!required.includes(field), `${field} is defaulted by the input parser`);
+  for (const field of ["memberId", "title", "instructions", "acceptanceCriteria", "inputArtifactIds", "dependsOn"])
+    assert.ok(required.includes(field), `${field} must still be supplied`);
+  const input = { memberId: "writer", title: "Execute checks", instructions: "Use current artifacts.",
+    acceptanceCriteria: ["Checks pass"], inputArtifactIds: [], dependsOn: [] };
+  assert.equal(tools.team_delegate.schema.parse(input).reviewOf, null);
+  assert.equal(tools.team_delegate.schema.safeParse({ ...input, reviewOf: "" }).success, false);
+  assert.equal(tools.team_delegate.schema.safeParse({ ...input, reviewOf: "null" }).data?.reviewOf, "null");
 });
