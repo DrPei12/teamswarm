@@ -735,3 +735,42 @@ test("capability changes make saved Host resource claims advisory pending rechec
     }
   } finally { await app.close(); }
 });
+
+for (const legacy of [false, true]) {
+  test(`${legacy ? "legacy" : "unchanged"} Host notes preserve their recheck state after restart`, async () => {
+    const app = await setup();
+    try {
+      app.harness.action = async (r) => {
+        const input = JSON.parse(r.input);
+        if (input.work.instructions === "Remember configuration")
+          await r.onTool("team_host_note", {
+            key: "selected-model", expectedVersion: 0, content: "Use the configured review model.",
+            status: "open", sourceMessageIds: [input.requirement.sourceMessageId],
+          }, randomUUID());
+        return { status: "completed", text: "Recorded." };
+      };
+      await app.send("Remember configuration");
+      const original = app.service.runtime.hostContext.notes(app.team.id, app.branch.id)[0];
+      if (legacy) {
+        const { capabilityVersion, ...oldNote } = original;
+        assert.equal(typeof capabilityVersion, "number");
+        app.service.runtime.store.db.prepare("UPDATE host_notes SET data=? WHERE team_id=? AND branch_id=? AND key=?")
+          .run(JSON.stringify(oldNote), app.team.id, app.branch.id, original.key);
+      }
+      await app.restart();
+      const work = await app.send("Continue with the same configuration");
+      const run = app.service.runtime.store.get<any>("runs", app.team.id, work.runId);
+      const page = app.service.runtime.hostContext.read(run, { kind: "notes", query: "", offset: 0, limit: 10 });
+      const assembled = JSON.parse(app.harness.requests.at(-1)!.input).current.notes;
+      for (const note of [page.items[0], assembled[0]] as any[]) {
+        assert.equal(note.requiresRecheck, legacy);
+        assert.equal(note.capabilityVersion, legacy ? undefined : original.capabilityVersion);
+        assert.equal(note.content, original.content);
+        assert.equal(note.contextVersion, original.contextVersion);
+        assert.equal(note.version, original.version);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+}
