@@ -12,6 +12,7 @@ export function delegationIdentity(input: Record<string, any>) {
   const contract = {
     memberId: input.memberId, acceptanceCriteria: set(input.acceptanceCriteria),
     acceptanceEvidence: input.acceptanceEvidence?.slice().sort((a: any, b: any) => a.criterion.localeCompare(b.criterion)) ?? null,
+    contextRefs: set(input.contextRefs),
     inputs: set(input.inputArtifactIds), dependsOn: set(input.dependsOn),
     reviewOf: input.reviewOf ?? null, verification: input.verification ?? "independent",
     continuationOf: input.continuationOf ?? null, writePaths: paths ? set(paths) : null,

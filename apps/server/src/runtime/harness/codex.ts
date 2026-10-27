@@ -13,6 +13,7 @@ import { sessionStoreScope } from "./session-scope.js";
 import { deviceEntry } from "./device-tools.js";
 import { preflight, probeCodexExecution, type PreflightInput } from "./preflight.js";
 import { prepareExecutionEnvironment } from "./execution-environment.js";
+import { contextObservation } from "../context-budget.js";
 
 type Obj = Record<string, any>;
 type Pending = {
@@ -181,6 +182,7 @@ export class CodexHarness implements Harness {
     dynamicTools: true,
     interrupt: true,
     usage: true,
+    contextCompaction: true,
     customModel: true,
     customProvider: true,
     nativeChecks: true,
@@ -405,11 +407,16 @@ export class CodexHarness implements Harness {
         data: { itemId: key, delta: String(params.delta ?? "") },
       });
     }
-    if (message.method === "thread/tokenUsage/updated")
+    if (message.method === "thread/tokenUsage/updated") {
       execution.request.onEvent({
         type: "usage",
         data: params.tokenUsage ?? {},
       });
+      const context = contextObservation("codex", params.tokenUsage ?? {});
+      if (context) execution.request.onEvent({ type: "context.usage", data: { ...context } });
+    }
+    if (message.method === "thread/compacted" || message.method === "item/completed" && params.item?.type === "contextCompaction")
+      execution.request.onEvent({ type: "context.compacted", data: {} });
     if (message.method === "item/completed") {
       const item = params.item ?? {};
       if (item.type === "agentMessage")
@@ -677,6 +684,8 @@ export class CodexHarness implements Harness {
     };
     // A new review attempt has a new scratch grant; never resume a session with
     // a different permission boundary, even when its model and harness match.
+    if (request.sessionId && verificationDirectory)
+      request.input = request.onContextRebuild?.() ?? request.input;
     let started = request.sessionId && !verificationDirectory
       ? await this.rpc("thread/resume", {
           ...common,
@@ -699,6 +708,7 @@ export class CodexHarness implements Harness {
         if (!(error instanceof Error) || !/list_turns is not supported yet/i.test(error.message)) throw error;
         if (this.stopped) return {status: "interrupted", text: "", error: "Harness closed before the native turn was started."};
         const previousSessionId = started.thread.id;
+        request.input = request.onContextRebuild?.() ?? request.input;
         started = await this.rpc("thread/start", {
           ...common,
           dynamicTools: request.tools.map((t) => ({type: "function", ...t})),

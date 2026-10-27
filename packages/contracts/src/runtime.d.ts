@@ -25,7 +25,9 @@ export interface RuntimeSettings {
   maxWorksPerRun: number;
   maxTurnsPerWork?: number;
   timeoutSeconds: number;
+  /** Legacy persisted setting; context selection now uses model-aware token budgets. */
   hostContextMaxBytes?: number;
+  /** Legacy persisted setting; session reuse now follows context pressure. */
   hostSessionMaxTurns?: number;
   allowIsolatedWorkspaces?: boolean;
   policyVersion: string;
@@ -104,6 +106,8 @@ export interface Work {
   acceptanceCriteria: string[];
   acceptanceEvidence?: AcceptanceEvidence[];
   inputs: string[];
+  /** Branch-local material references selected by the assigning Host. */
+  contextRefs?: string[];
   dependsOn: string[];
   reviewOf: string | null;
   artifactIds: string[];
@@ -375,6 +379,8 @@ export interface HarnessRequest {
   onTurn: (id: string) => void;
   /** Adapters advertising dispatchTracking call this before any native execution can start. */
   onDispatch?: (native?: Record<string, unknown>) => void;
+  /** Recompose input when a native adapter must replace a resumed session before dispatch. */
+  onContextRebuild?: () => string;
   onEvent: (event: HarnessEvent) => void;
   onTool: (name: string, args: unknown, callId: string) => Promise<unknown>;
 }

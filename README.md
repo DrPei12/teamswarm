@@ -124,6 +124,10 @@ For Pi Chat Completions, **Effort** accepts `minimal`, `low`, `medium`, `high`, 
 
 Give the Host a goal, relevant files and completion conditions. Members own explicit file or directory scopes; non-overlapping bounded work can run in parallel. File tools compare the current hash before writing. For revisions, continue the original thread so it retains its requirements, file scope and unpublished candidate work.
 
+The Host and members start with a project overview, current responsibilities and a searchable material index. They retrieve task-related definitions, decisions and original messages as needed; handoffs carry references to the relevant material and its dependencies. Long documents and source lists support version-bound pagination. Project notes retain their original sources and flag changed definitions, work or files for rechecking.
+
+Context selection uses the model's configured or observed capacity, recent native token usage and task relevance. It reserves space for replies and tools, preserves native compaction, and rebuilds a session from saved project material when necessary. Unknown capacity and usage use explicit estimates. Legacy message-count, byte and turn-count limits no longer control Host context selection or session reuse.
+
 Select a work thread before asking a member a question. Read-only questions inspect existing work; **Continue modifying** creates a subsequent execution with the original verification requirements. Pause or stop conflicting work and wait for its actual state to settle before editing the same files.
 
 Small reversible changes can use a producer self-check. For independent acceptance, specify a separate reviewer and checks against the submitted version. File reviews can compare submitted content directly. Command-based acceptance currently requires a Codex reviewer with native check support. When review instructions change, the reviewer must read them and rerun the required commands before accepting the result.

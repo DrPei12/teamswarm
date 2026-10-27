@@ -19,6 +19,7 @@ import type {
 import { redact } from "../redact.js";
 import { sessionStoreScope } from "./session-scope.js";
 import { NativeUsage } from "./native-usage.js";
+import { contextObservation } from "../context-budget.js";
 import { preflight, type PreflightInput } from "./preflight.js";
 import { grokModelConfig, isolateGrokEnvironment } from "./grok-config.js";
 import { accountHome, subscriptionEnvironment, subscriptionInspection, subscriptionAccounts, subscriptionScope, claudeSubscriptionFlags } from "./subscriptions.js";
@@ -57,6 +58,8 @@ export class NativeHarness implements Harness {
       dynamicTools: true,
       interrupt: true,
       usage: true,
+      contextCompaction: id === "pi" || id === "claude-code" || id === "opencode",
+      contextCompactionEvents: id !== "opencode",
       customModel: true,
       customProvider: true,
       nativeChecks: false,
@@ -467,6 +470,10 @@ export class NativeHarness implements Harness {
         const observation = usageTotal.observe(u, replace);
         if (observation) emit("usage", observation);
       };
+      const context = (u: any) => {
+        const observation = contextObservation(this.id, u);
+        if (observation) emit("context.usage", { ...observation });
+      };
       lines.on("line", (line) => {
         let event: any;
         try {
@@ -479,6 +486,8 @@ export class NativeHarness implements Harness {
           event = redact(event, c.credentialEnv);
           emit("native.event", { harness: this.id, event });
           if (this.id === "pi" || this.id === "grok") {
+            if (event.type === "pi.event" && event.event.type === "compaction_end" && event.event.result && !event.event.aborted)
+              emit("context.compacted", {});
             if (event.type === "session") nativeSession = event.id;
             if (event.type === "grok.event") {
               const update = event.event;
@@ -499,6 +508,7 @@ export class NativeHarness implements Harness {
               const message = event.event.message;
               if (message.role === "assistant") {
                 usage(message.usage ?? {});
+                context(message.usage ?? {});
                 emit("model.observed", {
                   model: message.model,
                   provider: message.provider,
@@ -507,11 +517,13 @@ export class NativeHarness implements Harness {
             }
             if (event.type === "result") terminal = event;
           } else if (this.id === "claude-code") {
+            if (event.type === "system" && event.subtype === "compact_boundary") emit("context.compacted", {});
             if (event.type === "system" && event.subtype === "init") {
               nativeSession = event.session_id;
               emit("model.observed", { model: event.model });
             }
             if (event.type === "assistant") {
+              context(event.message?.usage ?? {});
               text += (event.message?.content ?? [])
                 .filter((b: any) => b.type === "text")
                 .map((b: any) => b.text)
@@ -550,6 +562,7 @@ export class NativeHarness implements Harness {
               };
             if (event.type === "step_finish") {
               usage(event.part?.tokens ?? {});
+              context(event.part?.tokens ?? {});
               if (["stop", "end_turn"].includes(event.part?.reason))
                 terminal = { status: "completed", text };
               else if (event.part?.reason === "length")
