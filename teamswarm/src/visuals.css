@@ -2,11 +2,13 @@
 .swarm-mark {
   width: 24px;
   height: 24px;
-  flex: 0 0 24px;
+  flex: 0 0 auto;
+  object-fit: contain;
+  display: block;
 }
 .avatar .swarm-mark {
-  width: 25px;
-  height: 25px;
+  width: 24px;
+  height: 24px;
 }
 .chat-switch > .host-heading-mark {
   color: var(--accent);
@@ -188,7 +190,6 @@
   background: var(--surface-bottom);
 }
 .menu,
-.runtime-popover,
 .deliveries-popover,
 .history-popover,
 .skill-popover {
@@ -196,7 +197,6 @@
   animation: popover-in 180ms var(--ease-out);
 }
 .menu[data-state="closed"],
-.runtime-popover[data-state="closed"],
 .deliveries-popover[data-state="closed"],
 .history-popover[data-state="closed"],
 .skill-popover[data-state="closed"] {
@@ -215,7 +215,7 @@
   border-radius: 7px;
   position: relative;
   overflow: hidden;
-  background: linear-gradient(90deg, #e5eaf3 24%, #fbfcff 24%);
+  background: linear-gradient(90deg, #f9f9f7 24%, #fcfcfb 24%);
   box-shadow: inset 0 0 0 5px #ffffff30;
 }
 .theme-preview::before {
@@ -228,17 +228,17 @@
   border: 1px solid #98a5bf44;
   border-radius: 4px;
   background: #fff;
-  box-shadow: 0 -14px 0 -5px #ccd6e9;
+  box-shadow: 0 -14px 0 -5px #eae9e4;
 }
 .theme-preview.dark {
-  background: linear-gradient(90deg, #15181f 24%, #1a1e27 24%);
+  background: linear-gradient(90deg, #0b0b0b 24%, #151515 24%);
 }
 .theme-preview.dark::before {
-  background: #2c3546;
-  box-shadow: 0 -14px 0 -5px #4b5b7b;
+  background: #20201f;
+  box-shadow: 0 -14px 0 -5px #383835;
 }
 .theme-preview.system {
-  background: linear-gradient(90deg, #e5eaf3 24%, #fbfcff 24% 50%, #1a1e27 50%);
+  background: linear-gradient(90deg, #f9f9f7 24%, #fcfcfb 24% 50%, #151515 50%);
 }
 .theme-label {
   display: flex;

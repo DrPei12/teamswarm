@@ -4,9 +4,13 @@ TeamSwarm's own code is licensed under Apache-2.0. The following software and as
 
 | Component | Use | License and notice |
 |---|---|---|
-| [open-claude-ui](https://github.com/Caho1/open-claude-ui/tree/f4947c62a459f6413ed44b289a8d495962add1a2) | Adapted design tokens, layout and interaction patterns in `teamswarm/src/design-system/` | [MIT notice](https://github.com/DrPei12/teamswarm/blob/main/teamswarm/licenses/open-claude-ui-MIT.txt) |
-| Inter Variable | Application font | [SIL Open Font License 1.1](https://github.com/DrPei12/teamswarm/blob/main/teamswarm/public/fonts/LICENSE.txt) |
+| [open-claude-ui](https://github.com/Caho1/open-claude-ui/tree/c1f923ae0051a871941b98a0e2e3183a545e6a85) | Adapted design tokens, layout and interaction patterns in `teamswarm/src/design-system/` | [MIT notice](https://github.com/DrPei12/teamswarm/blob/main/teamswarm/licenses/open-claude-ui-MIT.txt) |
+| Inter Variable | Bundled application font | [SIL Open Font License 1.1](https://github.com/DrPei12/teamswarm/blob/main/teamswarm/public/fonts/LICENSE.txt) |
 | React, Radix UI, Lucide, React Flow, Motion and Markdown packages | Application interface | Their package license files are included in desktop package inventories |
+| CodeMirror 6 | Code and text editing | MIT; included in desktop dependency inventory |
+| office-kit DOCX, XLSX, PPTX and PPTX preview | Office parsing, editing and slide rendering | MIT; included in desktop dependency inventory |
+| docx-preview and PDF.js | Word and PDF page rendering | Apache-2.0; included in desktop dependency inventory |
+| DOMPurify, fflate and idb-keyval | Document sanitization, ZIP limits and drafts | Apache-2.0 or MPL-2.0, MIT, and Apache-2.0 respectively; included in desktop dependency inventory |
 | Node.js | Bundled service runtime | [Node.js notice](https://github.com/DrPei12/teamswarm/blob/main/apps/desktop/licenses/node-LICENSE.txt) |
 | Codex CLI | Bundled native harness | [Apache-2.0 notice](https://github.com/DrPei12/teamswarm/blob/main/apps/desktop/licenses/codex-LICENSE.txt) |
 | Electron | Desktop shell | Electron and Chromium licenses ship with the desktop runtime |
@@ -16,7 +20,7 @@ Every desktop package includes `resources/product/package-inventory.json` (insid
 
 Claude Code, Grok, Pi, DeepSeek Harness and OpenCode are separately installed tools. Their own licenses, service terms and authentication requirements apply. They are not bundled into TeamSwarm.
 
-The TeamSwarm mark in `teamswarm/public/favicon.svg` is project artwork. Third-party product names identify compatible software and services.
+The approved TeamSwarm marks in `teamswarm/branding/` are project artwork. Public builds bundle Inter under the SIL Open Font License. Anthropic Sans and Serif are optional locally installed font preferences; their font files are not redistributed. Third-party product names identify compatible software and services.
 
 ## Modified npm runtime
 

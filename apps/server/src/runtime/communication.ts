@@ -288,11 +288,7 @@ export class TeamCommunication {
       input.requestKey,
       input,
       () => {
-        const recipient = this.store.get<Member>(
-          "members",
-          work.teamId,
-          input.recipientId,
-        );
+        const recipient = this.store.activeMember(work.teamId, input.recipientId);
         const branchId = this.branch(work);
         if (
           recipient.id === work.memberId ||

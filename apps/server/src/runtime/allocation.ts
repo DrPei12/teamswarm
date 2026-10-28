@@ -113,7 +113,7 @@ export function deleteResource(
     // selection, but it must not lock the resource forever.
     const usedByMember = deps.store
       .list<Member>("members", teamId)
-      .some((m) => m.selection?.resourceId === resourceId || Object.values(m.hostSelections ?? {}).some(s => s.selection?.resourceId === resourceId));
+      .some((m) => !m.removedAt && (m.selection?.resourceId === resourceId || Object.values(m.hostSelections ?? {}).some(s => s.selection?.resourceId === resourceId)));
     const usedByOpenWork = deps.store
       .list<Work>("works", teamId)
       .some(
@@ -215,7 +215,7 @@ export function setMemberAllocation(
   memberId: string,
   input: AllocationRequest,
 ): Member {
-  const member = deps.store.get<Member>("members", teamId, memberId);
+  const member = deps.store.activeMember(teamId, memberId);
   if (member.kind === "host")
     throw conflict(
       "invalid_state",
@@ -445,7 +445,7 @@ export function exportAllocationPackage(
     .list<Member>("members", teamId)
     .filter(
       (member) =>
-        member.selection &&
+        !member.removedAt && member.selection &&
         versions.get(member.selection.resourceId) ===
           member.selection.resourceVersion,
     )

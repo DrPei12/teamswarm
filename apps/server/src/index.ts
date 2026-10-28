@@ -1,5 +1,4 @@
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createApp } from './app.js';
 import { loadHarnesses } from './runtime/harness/registry.js';
 import { loadCredentialFiles } from './runtime/credentials.js';
@@ -18,13 +17,13 @@ if (!['127.0.0.1', 'localhost', '::1'].includes(host)) {
   throw new Error('The Team service only listens on a loopback host.');
 }
 
-const serverDirectory = path.dirname(fileURLToPath(import.meta.url));
 const controlToken = process.env.TEAM_CONTROL_TOKEN;
 delete process.env.TEAM_CONTROL_TOKEN;
 const service = createApp({
   controlToken,
   apiPort: port || DEFAULT_PORT,
-  webDistDir: process.env.TEAM_WEB_DIST ? path.resolve(process.env.TEAM_WEB_DIST) : path.resolve(serverDirectory, '../../web/dist'),
+  // createApp shares the current frontend with the desktop launcher.
+  ...(process.env.TEAM_WEB_DIST ? { webDistDir: path.resolve(process.env.TEAM_WEB_DIST) } : {}),
   harnesses: await loadHarnesses(),
 });
 const server = service.app.listen(port, host, () => {

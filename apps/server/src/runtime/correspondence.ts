@@ -45,6 +45,8 @@ export class Correspondence {
     targetWorkId?: string,
   ): MemberMessage {
     const recipient = this.member(teamId, recipientId);
+    this.store.activeMember(teamId, recipient.id);
+    if (senderId !== "user") this.store.activeMember(teamId, this.member(teamId, senderId).id);
     const works = this.store.list<Work>("works", teamId);
     const parent = replyTo
       ? this.list(teamId).find((m) => m.id === replyTo)

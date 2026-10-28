@@ -44,7 +44,7 @@ function defaultDataDir(): string {
 }
 
 function defaultWebDistDir(): string {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../web/dist');
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../teamswarm/dist');
 }
 
 function sendError(response: express.Response, error: ServiceError): void {
@@ -342,10 +342,20 @@ export function createApp(options: CreateAppOptions = {}): TeamService {
   });
 
   if (fs.existsSync(webDistDir)) {
-    app.use(express.static(webDistDir, { index: 'index.html', fallthrough: true }));
+    app.use(express.static(webDistDir, {
+      index: 'index.html',
+      fallthrough: true,
+      setHeaders(response, file) {
+        if (path.basename(file) === 'index.html') response.setHeader('Cache-Control', 'no-cache');
+      },
+    }));
+    app.use(['/assets', '/fonts'], (_request, response) => {
+      response.status(404).type('text/plain').send('Resource not found.');
+    });
     app.get(/.*/, (_request, response) => {
       const indexPath = path.join(webDistDir, 'index.html');
       if (fs.existsSync(indexPath)) {
+        response.setHeader('Cache-Control', 'no-cache');
         response.type('html').send(fs.readFileSync(indexPath, 'utf8'));
       } else {
         response.status(404).type('text/plain').send('Web build does not contain index.html.');

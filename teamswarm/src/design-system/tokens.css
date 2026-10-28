@@ -1,21 +1,55 @@
-/* Adapted from Caho1/open-claude-ui, f4947c6 (MIT).
-   Surface/radius/easing tokens are shared; brand and contrast are TeamSwarm's. */
+/* Adapted from Caho1/open-claude-ui c1f923a (MIT): cds-theme.css and
+   docs/v2/03 compact density. See licenses/open-claude-ui-MIT.txt. */
 :root {
-  --cds-surface-0: #f5f5f3;
+  --cds-surface-0: #f9f9f7;
   --cds-surface-1: #fcfcfb;
   --cds-surface-2: #ffffff;
   --cds-surface-3: #ffffff;
   --cds-clay: #d97757;
   --cds-clay-hover: #cc5a36;
+  --cds-brand: #c6613f;
   --cds-border: rgb(21 21 21 / 10%);
   --cds-border-strong: rgb(21 21 21 / 20%);
   --cds-hairline: 1px;
-  --cds-radius-control: 8px;
+  --cds-radius-control: 6px;
   --cds-radius-panel: 10px;
   --cds-radius-dialog: 16px;
   --cds-radius-bubble: 18px;
   --cds-radius-composer: 20px;
-  --cds-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --composer-font-size: 15px;
+  --composer-line-height: 20px;
+  --cds-h-control: 24px;
+  --cds-h-control-nested: 18px;
+  --cds-icon: 16px;
+  --cds-gap-xs: 6px;
+  --cds-gap-sm: 8px;
+  --cds-gap-md: 12px;
+  --cds-gap-lg: 20px;
+  --cds-gap-xl: 32px;
+  --cds-ease: cubic-bezier(0.165, 0.84, 0.44, 1);
+  --cds-ease-snap: cubic-bezier(0.32, 0.72, 0, 1);
+  --cds-dur-fast: 60ms;
+  --cds-dur-snap: 120ms;
+  --cds-dur-base: 200ms;
+  --cds-dur-sheet: 300ms;
+  --cds-dur-slow: 450ms;
+  --cds-btn-spring: linear(
+    0,
+    0.2459,
+    0.6526,
+    0.9468,
+    1.0764,
+    1.0915,
+    1.0585,
+    1.0219,
+    0.9993,
+    0.9914,
+    0.9921,
+    0.9957,
+    0.9988,
+    1.0004,
+    1
+  );
   --cds-shadow-popover:
     0 0 0 1px var(--cds-border), 0 8px 24px rgb(0 0 0 / 10%),
     0 2px 6px rgb(0 0 0 / 5%);
@@ -27,11 +61,11 @@
   --surface-top: var(--cds-surface-1);
   --surface-bottom: var(--cds-surface-1);
   --panel: var(--cds-surface-2);
-  --text: #252523;
-  --secondary: #62625d;
+  --text: #151515;
+  --secondary: #525252;
   --subtle: #73736c;
-  --hover: rgb(21 21 21 / 4.5%);
-  --active: #e9e9e4;
+  --hover: rgb(21 21 21 / 5%);
+  --active: rgb(21 21 21 / 10%);
   --line: var(--cds-border);
   --accent: var(--cds-clay);
   --accent-ink: #a7492e;
@@ -45,7 +79,7 @@
   --warning: #8b651e;
   --danger: #b54c53;
   --ease-out: var(--cds-ease);
-  --bubble: #f0f1ee;
+  --bubble: var(--hover);
   --graph-bg: var(--cds-surface-0);
   --graph-line: #babbb3;
   --graph-dot: #dbdcd5;
@@ -53,26 +87,26 @@
   color-scheme: light;
 }
 :root[data-theme="dark"] {
-  --cds-surface-0: #151514;
-  --cds-surface-1: #1b1b19;
-  --cds-surface-2: #222220;
-  --cds-surface-3: #282825;
+  --cds-surface-0: #0b0b0b;
+  --cds-surface-1: #151515;
+  --cds-surface-2: #1a1a19;
+  --cds-surface-3: #20201f;
   --cds-border: rgb(255 255 255 / 9%);
-  --cds-border-strong: rgb(255 255 255 / 20%);
+  --cds-border-strong: rgb(255 255 255 / 18%);
   --cds-shadow-popover:
     inset 0 0 0 1px var(--cds-border), 0 8px 28px rgb(0 0 0 / 35%);
   --cds-shadow-composer:
     inset 0 0 0 1px var(--cds-border), 0 4px 20px rgb(0 0 0 / 12%);
   --cds-shadow-composer-focus:
     inset 0 0 0 1px var(--cds-border-strong), 0 4px 24px rgb(0 0 0 / 16%);
-  --text: #ecece7;
-  --secondary: #b4b4aa;
+  --text: #f5f5f5;
+  --secondary: #a3a3a3;
   --subtle: #9a9a91;
   --hover: rgb(255 255 255 / 5%);
-  --active: #30302c;
+  --active: rgb(255 255 255 / 9%);
   --accent-ink: #eba389;
   --accent-wash: #33251f;
-  --bubble: #2b2b27;
+  --bubble: var(--hover);
   --card-shadow: 0 2px 4px rgb(0 0 0 / 12%);
   --success: #8ac6a8;
   --warning: #d2b175;

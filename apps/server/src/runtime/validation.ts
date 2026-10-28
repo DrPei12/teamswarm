@@ -309,6 +309,11 @@ export const tools = {
       })
       .strict(),
   },
+  team_remove_member: {
+    description:
+      "Host only. Delete a member from this branch's active roster, preserving its conversations, work and results. The member must have no unfinished work, pending review, open exchanges or pending messages. The Host cannot be deleted. Use after the user asks to remove that member.",
+    schema: z.object({ memberId: key }).strict(),
+  },
   team_continue_work: {
     description:
       "Host only. Explicitly bind an effective user request to existing production responsibilities in this branch when those works already carry its requirements. No duplicate work is created and verification policies remain. Omit runId for this Run, or select another Run in the same branch. A failed Run whose Host has since submitted a successful reply can resume coordination through this binding; paused Runs stay paused. The Run waits for every linked responsibility and shared integration to satisfy its required verification policy.",

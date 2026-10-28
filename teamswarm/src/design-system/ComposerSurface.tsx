@@ -1,6 +1,10 @@
-import { forwardRef, type ComponentPropsWithoutRef } from "react";
+import {
+  forwardRef,
+  type ComponentPropsWithoutRef,
+  type ReactNode,
+} from "react";
 
-/** Shared single-boundary composer: all inner controls remain borderless. */
+/** Shared editor shell for Host and member conversations. */
 export const ComposerSurface = forwardRef<
   HTMLFormElement,
   ComponentPropsWithoutRef<"form">
@@ -11,3 +15,23 @@ export const ComposerSurface = forwardRef<
     </form>
   );
 });
+
+/** ChatComposerChin structure from open-claude-ui c1f923a (MIT). */
+export function ComposerChin({
+  className = "",
+  notice,
+  children,
+}: {
+  className?: string;
+  notice?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="composer-chin" data-cds="ChatComposerChin">
+      {notice && <div className="composer-notice">{notice}</div>}
+      <div className={`composer-chin-row ${className}`} data-touch-size>
+        {children}
+      </div>
+    </div>
+  );
+}

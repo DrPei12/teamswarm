@@ -390,6 +390,35 @@ export class RuntimeStore {
     this.event(teamId, "member.created", { memberId: member.id, name });
     return member;
   }
+  activeMember(teamId: string, memberId: string): Member {
+    const member = this.get<Member>("members", teamId, memberId);
+    if (member.removedAt)
+      throw conflict("member_removed", "This member has been deleted.");
+    return member;
+  }
+  removeMember(teamId: string, memberId: string): Member {
+    return this.transaction(() => {
+      const member = this.get<Member>("members", teamId, memberId);
+      if (member.kind === "host")
+        throw conflict("host_member", "The Host cannot be deleted.");
+      if (member.removedAt) return member;
+      if (this.list<Work>("works", teamId).some(w =>
+        w.memberId === memberId && ["queued", "waiting", "yielded", "running", "stopping", "recovery_required", "submitted"].includes(w.status)))
+        throw conflict("member_busy", "Finish or stop this member's work and complete any pending review before deleting it.");
+      if (this.list<TeamExchange>("exchanges", teamId).some(e =>
+        [e.initiatorId, e.recipientId].includes(memberId) && !["resolved", "cancelled", "declined"].includes(e.status)))
+        throw conflict("member_exchange_pending", "Resolve or cancel this member's open exchanges before deleting it.");
+      const mailTable = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='runtime_correspondence'").get();
+      if (mailTable && this.db.prepare(`SELECT id FROM runtime_correspondence WHERE team_id=?
+        AND (json_extract(data, '$.recipientId')=? OR json_extract(data, '$.senderId')=?)
+        AND json_extract(data, '$.status') IN ('queued','processing') LIMIT 1`).get(teamId, memberId, memberId))
+        throw conflict("member_messages_pending", "Wait for this member's pending messages to finish before deleting it.");
+      member.removedAt = timestamp();
+      this.save("members", member);
+      this.event(teamId, "member.removed", { memberId, name: member.name });
+      return member;
+    });
+  }
   enqueueHost(
     teamId: string,
     conversationId: string,
@@ -465,7 +494,7 @@ export class RuntimeStore {
     dependsOn: string[],
     reviewOf: string | null = null,
   ): Work {
-    const recipient = this.get<Member>("members", run.teamId, memberId);
+    const recipient = this.activeMember(run.teamId, memberId);
     if (
       this.history &&
       recipient.kind !== "host" &&
@@ -628,6 +657,8 @@ export class RuntimeStore {
     return attempt;
   }
   setStatus(work: Work, status: WorkStatus, error: string | null = null): void {
+    if (["queued", "waiting", "running"].includes(status))
+      this.activeMember(work.teamId, work.memberId);
     work.status = status;
     work.error = error;
     work.updatedAt = timestamp();

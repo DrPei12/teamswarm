@@ -24,6 +24,8 @@ function load(text, globals, dependencies) {
   return exports;
 }
 const outbox = load(source("preferences-outbox"), {}, {});
+const modelCatalog = load(source("modelCatalog"), {}, {});
+const modelCatalogCache = load(source("modelCatalogCache"), {}, {});
 const service = source("service");
 function scenario() {
   const values = new Map();
@@ -98,7 +100,12 @@ function scenario() {
         setTimeout: () => 1,
         clearTimeout() {},
       },
-      { "./preferences-outbox": outbox, react: { useSyncExternalStore() {} } },
+      {
+        "./preferences-outbox": outbox,
+        "./modelCatalog": modelCatalog,
+        "./modelCatalogCache": modelCatalogCache,
+        react: { useSyncExternalStore() {} },
+      },
     );
     return {
       product,

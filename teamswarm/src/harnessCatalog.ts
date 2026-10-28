@@ -29,6 +29,14 @@ export function harnessId(name: string) {
   );
 }
 
+export function harnessLabel(id: string) {
+  return (
+    ["Codex", "Claude Code", "Grok", "pi", "DeepSeek Harness", "OpenCode"].find(
+      (name) => harnessId(name) === id,
+    ) ?? id
+  );
+}
+
 export function supportedEfforts(
   inspection: HarnessInspection | null,
   model?: string | null,

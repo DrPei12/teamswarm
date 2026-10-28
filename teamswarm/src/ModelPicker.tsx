@@ -8,9 +8,9 @@ import {
   Search,
 } from "lucide-react";
 import { useI18n } from "./i18n";
-import type { HarnessInspection } from "./harnessCatalog";
+import type { ModelChoice } from "./modelCatalog";
 
-type Model = NonNullable<HarnessInspection["models"]>[number];
+type Model = ModelChoice;
 export function modelProvider(model: Model) {
   if (model.provider) return model.provider;
   // Model identity, not harness identity, determines the provider.
@@ -31,47 +31,62 @@ export function ModelPicker({
   loading,
   error,
   compact = false,
+  disabled = false,
   onOpenChange,
   label,
-  allowDefault = true,
+  selectedKey,
+  open: controlledOpen,
+  onConfigure,
+  onCloseAutoFocus,
+  onRetry,
 }: {
   value: string | null;
   models?: Model[];
-  onChange: (value: string | null) => void;
+  onChange: (value: string | null, choice?: Model) => void;
   loading?: boolean;
   error?: string;
   compact?: boolean;
+  disabled?: boolean;
   onOpenChange?: (open: boolean) => void;
   label?: string;
-  allowDefault?: boolean;
+  selectedKey?: string;
+  open?: boolean;
+  onConfigure?: () => void;
+  onCloseAutoFocus?: (event: Event) => void;
+  onRetry?: () => void;
 }) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
   const [provider, setProvider] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [custom, setCustom] = useState(false);
   const [customId, setCustomId] = useState("");
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  const configuring = useRef(false);
   const labelId = useId();
   const catalog = [
-    ...new Map(models.map((model) => [model.model, model])).values(),
+    ...new Map(
+      models.map((model) => [model.key ?? model.model, model]),
+    ).values(),
   ];
   const groups = [...new Set(catalog.map(modelProvider))].sort();
   const filtered = catalog.filter(
     (model) =>
       (!provider || modelProvider(model) === provider) &&
-      `${model.name} ${model.model}`
+      `${model.name} ${model.model} ${model.detail ?? ""}`
         .toLowerCase()
         .includes(query.trim().toLowerCase()),
   );
-  const select = (next: string | null) => {
-    onChange(next);
+  const select = (next: string | null, choice?: Model) => {
+    onChange(next, choice);
     changeOpen(false);
   };
   const changeOpen = (next: boolean) => {
     setOpen(next);
     if (next) {
+      configuring.current = false;
       setProvider(null);
       setQuery("");
       setCustom(false);
@@ -80,13 +95,14 @@ export function ModelPicker({
     onOpenChange?.(next);
   };
   useEffect(() => {
-    if (open) input.current?.focus();
+    if (open) input.current?.focus({ preventScroll: true });
   }, [provider, custom, open]);
   return (
     <Popover.Root open={open} onOpenChange={changeOpen}>
       <Popover.Trigger asChild>
         <button
           type="button"
+          disabled={disabled}
           className={
             compact
               ? "runtime-choice model-picker-trigger compact"
@@ -98,7 +114,7 @@ export function ModelPicker({
             {label ||
               catalog.find((model) => model.model === value)?.name ||
               value ||
-              t("Default model")}
+              t("Choose model")}
           </span>
           <ChevronDown size={14} />
         </button>
@@ -111,6 +127,17 @@ export function ModelPicker({
           sideOffset={6}
           collisionPadding={12}
           aria-labelledby={labelId}
+          onInteractOutside={(event) => {
+            if (
+              compact &&
+              (event.target as Element).closest?.(".runtime-choice")
+            )
+              event.preventDefault();
+          }}
+          onCloseAutoFocus={(event) => {
+            if (configuring.current) event.preventDefault();
+            onCloseAutoFocus?.(event);
+          }}
           onEscapeKeyDown={(event) => {
             if (provider || custom) {
               event.preventDefault();
@@ -121,7 +148,7 @@ export function ModelPicker({
           }}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
-            input.current?.focus();
+            input.current?.focus({ preventScroll: true });
           }}
           onKeyDown={(event) => {
             if (
@@ -220,16 +247,6 @@ export function ModelPicker({
                 />
               </div>
               <div className="model-picker-list" ref={list}>
-                {allowDefault && !provider && !query && (
-                  <button
-                    type="button"
-                    className="model-picker-option"
-                    onClick={() => select(null)}
-                  >
-                    <span>{t("Default model")}</span>
-                    {!value && <Check size={14} />}
-                  </button>
-                )}
                 {!provider && !query
                   ? groups.map((group) => (
                       <button
@@ -255,10 +272,20 @@ export function ModelPicker({
                   : filtered.map((model) => (
                       <button
                         type="button"
-                        key={model.model}
+                        key={model.key ?? model.model}
                         className="model-picker-option"
-                        onClick={() => select(model.model)}
-                        aria-pressed={value === model.model}
+                        onClick={() => select(model.model, model)}
+                        disabled={!!model.unavailable}
+                        title={
+                          model.unavailable
+                            ? t(model.unavailable)
+                            : model.detail
+                        }
+                        aria-pressed={
+                          selectedKey
+                            ? selectedKey === model.key
+                            : value === model.model && !model.unavailable
+                        }
                       >
                         <span>
                           {model.name || model.model}
@@ -268,40 +295,61 @@ export function ModelPicker({
                               {model.model}
                             </small>
                           )}
+                          {model.detail && <small>{model.detail}</small>}
+                          {model.unavailable && (
+                            <small>{t(model.unavailable)}</small>
+                          )}
                         </span>
-                        {value === model.model && <Check size={14} />}
+                        {(selectedKey
+                          ? selectedKey === model.key
+                          : value === model.model && !model.unavailable) && (
+                          <Check size={14} />
+                        )}
                       </button>
                     ))}
-                {loading && (
+                {loading && !catalog.length && (
                   <p className="menu-note" role="status">
                     {t("Loading models…")}
                   </p>
                 )}
-                {error && (
+                {error && !loading && (
                   <p className="menu-note" role="alert">
                     {t(error)}
+                    {onRetry && (
+                      <button
+                        type="button"
+                        className="model-picker-link"
+                        onClick={onRetry}
+                      >
+                        {t("Retry")}
+                      </button>
+                    )}
                   </p>
                 )}
                 {!loading && !error && !filtered.length && (
                   <p className="menu-note">
-                    {t(
-                      query
-                        ? "No matching models"
-                        : "This harness has not provided a model list. You can enter a model ID.",
-                    )}
+                    {t(query ? "No matching models" : "No configured models")}
                   </p>
                 )}
               </div>
-              <div className="model-picker-footer">
+              <div
+                className={`model-picker-footer ${onConfigure ? "configuration-link" : ""}`}
+              >
                 <button
                   type="button"
-                  className="text-button"
+                  className={onConfigure ? "model-picker-link" : "text-button"}
                   onClick={() => {
-                    setCustom(true);
-                    setCustomId("");
+                    if (onConfigure) {
+                      configuring.current = true;
+                      changeOpen(false);
+                      onConfigure();
+                    } else {
+                      setCustom(true);
+                      setCustomId("");
+                    }
                   }}
                 >
-                  {t("Enter model ID…")}
+                  {t(onConfigure ? "Configure models" : "Enter model ID…")}
                 </button>
               </div>
             </>

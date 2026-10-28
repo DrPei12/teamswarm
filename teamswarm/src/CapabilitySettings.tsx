@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   Check,
   ChevronDown,
-  Cpu,
   KeyRound,
   Layers,
   LoaderCircle,
@@ -28,12 +27,12 @@ import type { HarnessInspection } from "./harnessCatalog";
 import "./capabilities.css";
 
 const harnesses = [
-  { id: "codex", name: "Codex", mark: "C" },
-  { id: "claude-code", name: "Claude Code", mark: "✳" },
-  { id: "grok", name: "Grok", mark: "G" },
-  { id: "pi", name: "Pi", mark: "π" },
-  { id: "opencode", name: "OpenCode", mark: "O" },
-  { id: "deepseek-harness", name: "DeepSeek Harness", mark: "D" },
+  { id: "codex", name: "Codex" },
+  { id: "claude-code", name: "Claude Code" },
+  { id: "grok", name: "Grok" },
+  { id: "pi", name: "Pi" },
+  { id: "opencode", name: "OpenCode" },
+  { id: "deepseek-harness", name: "DeepSeek Harness" },
 ];
 const protocols: ConnectionProtocol[] = [
   "chat-completions",
@@ -62,12 +61,14 @@ export function CapabilitySettings({
   teamId,
   workspace,
   onAdvanced,
+  initialTab = "harnesses",
 }: {
   open: boolean;
   onClose: () => void;
   teamId: string;
   workspace: Workspace;
   onAdvanced: () => void;
+  initialTab?: Tab;
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState<TeamCapabilities | null>(null),
@@ -89,7 +90,7 @@ export function CapabilitySettings({
     setError("");
     setNotice("");
     setEditor(null);
-    setTab("harnesses");
+    setTab(initialTab);
     void api<TeamCapabilities>(`/teams/${teamId}/capabilities`)
       .then((v) => {
         if (live) {
@@ -101,7 +102,7 @@ export function CapabilitySettings({
     return () => {
       live = false;
     };
-  }, [open, teamId]);
+  }, [open, teamId, initialTab]);
   useEffect(() => {
     if (!open) return;
     let live = true;
@@ -136,9 +137,7 @@ export function CapabilitySettings({
       );
       setDraft(next);
       setSaved(JSON.stringify(next));
-      setNotice(
-        t("Team choices saved. Host will use them when planning new work."),
-      );
+      setNotice(t("Saved"));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -248,13 +247,8 @@ export function CapabilitySettings({
               <>
                 <div className="cap-intro">
                   <h3>{t("Choose the tools your team can use")}</h3>
-                  <p>
-                    {t(
-                      "Select any number of Harnesses. Host chooses how to use them for each task.",
-                    )}
-                  </p>
                 </div>
-                <div className="cap-harness-grid">
+                <div className="cap-harness-list">
                   {harnesses.map((h) => {
                     const selected = draft.enabledHarnesses.includes(h.id),
                       status = installations[h.id];
@@ -263,69 +257,61 @@ export function CapabilitySettings({
                         key={h.id}
                         className={`cap-harness ${selected ? "selected" : ""}`}
                       >
-                        <button
-                          className="cap-harness-select"
-                          aria-pressed={selected}
-                          onClick={() => toggle(h.id)}
-                          aria-label={t("Allow {name}", { name: h.name })}
-                        >
-                          <span className="cap-harness-mark" aria-hidden>
-                            {h.mark}
-                          </span>
-                          <span className="cap-harness-check" aria-hidden>
-                            {selected && <Check size={13} />}
-                          </span>
-                          <strong>{h.name}</strong>
-                          <span className="cap-install-status">
-                            {!status ? (
-                              t("Checking…")
-                            ) : status.installed ? (
-                              <>
-                                <i />
-                                {t("Installed")}
-                                {status.version && ` · ${status.version}`}
-                              </>
-                            ) : (
-                              t("Not installed")
+                        <div className="cap-harness-row">
+                          <button
+                            className="cap-harness-select"
+                            aria-pressed={selected}
+                            onClick={() => toggle(h.id)}
+                            aria-label={t("Allow {name}", { name: h.name })}
+                          >
+                            <span className="cap-harness-check" aria-hidden>
+                              {selected && <Check size={13} />}
+                            </span>
+                            <span className="cap-harness-copy">
+                              <strong>{h.name}</strong>
+                              <span className="cap-install-status">
+                                {!status ? (
+                                  t("Checking…")
+                                ) : status.installed ? (
+                                  <>
+                                    <i />
+                                    {t("Installed")}
+                                    {status.version && ` · ${status.version}`}
+                                  </>
+                                ) : (
+                                  t("Not installed")
+                                )}
+                              </span>
+                            </span>
+                          </button>
+                          <button
+                            className="cap-manage"
+                            aria-expanded={manage === h.id}
+                            onClick={() =>
+                              setManage(manage === h.id ? null : h.id)
+                            }
+                          >
+                            {t(
+                              status?.installed
+                                ? "Manage installation"
+                                : "Install on device",
                             )}
-                          </span>
-                        </button>
-                        <button
-                          className="cap-manage"
-                          aria-expanded={manage === h.id}
-                          onClick={() =>
-                            setManage(manage === h.id ? null : h.id)
-                          }
-                        >
-                          {t(
-                            status?.installed
-                              ? "Manage installation"
-                              : "Install on device",
-                          )}
-                          <ChevronDown size={12} />
-                        </button>
+                            <ChevronDown size={12} />
+                          </button>
+                        </div>
+                        <Disclosure open={manage === h.id}>
+                          <div className="cap-install-detail">
+                            {manage === h.id && (
+                              <HarnessInstallation
+                                harness={h.id}
+                                onInstalled={() => refresh((v) => v + 1)}
+                              />
+                            )}
+                          </div>
+                        </Disclosure>
                       </div>
                     );
                   })}
-                </div>
-                <Disclosure open={!!manage}>
-                  <div className="cap-install-detail">
-                    {manage && (
-                      <HarnessInstallation
-                        key={manage}
-                        harness={manage}
-                        onInstalled={() => refresh((v) => v + 1)}
-                      />
-                    )}
-                  </div>
-                </Disclosure>
-                <div className="cap-footnote">
-                  <Cpu size={16} />
-                  <p>
-                    {t(
-                      "Harnesses run on this device. Add subscriptions and API models separately in Models and connections.",
-                    )}
-                  </p>
                 </div>
                 {!draft.enabledHarnesses.length && (
                   <p role="alert" className="form-error">
@@ -339,11 +325,6 @@ export function CapabilitySettings({
                 <div className="cap-intro cap-intro-row">
                   <div>
                     <h3>{t("Give your team access to models")}</h3>
-                    <p>
-                      {t(
-                        "Add subscriptions or your own API connections. One connection can include several models.",
-                      )}
-                    </p>
                   </div>
                   <button
                     className="primary-button"
@@ -384,13 +365,13 @@ export function CapabilitySettings({
                           {t("Edit")}
                         </button>
                       </div>
-                      <div className="cap-model-chips">
-                        {c.models.length ? (
-                          c.models.map((m) => <span key={m}>{m}</span>)
-                        ) : (
-                          <span>{t("Account default model")}</span>
-                        )}
-                      </div>
+                      {!!c.models.length && (
+                        <div className="cap-model-chips">
+                          {c.models.map((m) => (
+                            <span key={m}>{m}</span>
+                          ))}
+                        </div>
+                      )}
                       <div className="cap-connection-footer">
                         <span>
                           {t("Works with")}:{" "}
@@ -446,14 +427,6 @@ export function CapabilitySettings({
             )}
             {tab === "preferences" && (
               <>
-                <div className="cap-intro">
-                  <h3>{t("Tell Host what matters to you")}</h3>
-                  <p>
-                    {t(
-                      "These preferences guide each decision. Host still considers task complexity, context and available tools.",
-                    )}
-                  </p>
-                </div>
                 <fieldset className="cap-priority">
                   <legend>{t("When choosing models")}</legend>
                   <div>
@@ -553,7 +526,7 @@ export function CapabilitySettings({
                     <p>
                       {harnesses.find((h) => h.id === current?.harness)?.name ??
                         current?.harness}{" "}
-                      · {current?.model ?? t("Account default model")}
+                      {current?.model && ` · ${current.model}`}
                     </p>
                   </div>
                   <button
@@ -589,13 +562,7 @@ export function CapabilitySettings({
                   {notice}
                 </span>
               ) : (
-                <span>
-                  {dirty
-                    ? t("Unsaved changes")
-                    : t(
-                        "Host combines enabled tools and models for each task.",
-                      )}
-                </span>
+                <span>{dirty ? t("Unsaved changes") : null}</span>
               )}
             </div>
             <button
@@ -1000,7 +967,6 @@ function ConnectionEditor({
           </div>
           <ModelPicker
             label={t("Add model…")}
-            allowDefault={false}
             value={null}
             models={catalog}
             onChange={(model) => {

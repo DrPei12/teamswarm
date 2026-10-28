@@ -143,6 +143,39 @@
   max-height: 65dvh;
   overflow: auto;
 }
+.execution-form,
+.capability-modal,
+.runtime-popover,
+.model-picker-popover {
+  font-family: var(--font-ui);
+}
+.history-context-menu {
+  min-width: 200px;
+}
+.checkpoint-delete-modal .form-body p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.checkpoint-delete-modal .danger-button {
+  background: var(--danger, #b64f50);
+}
+.execution-form small {
+  font-family: var(--font-ui);
+  font-size: var(--font-caption-size);
+  font-weight: 400;
+  line-height: 1.5;
+}
+.activity-summary-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-block: 6px;
+  color: var(--secondary);
+  font: 13px/20px var(--font-ui);
+}
+.activity-summary-row svg {
+  flex-shrink: 0;
+}
 .menu-note {
   font-size: 13px;
   line-height: 1.6;
@@ -202,7 +235,7 @@
   color: var(--secondary);
 }
 .markdown code {
-  font-family: Consolas, "Cascadia Code", monospace;
+  font-family: var(--font-mono);
   font-size: 0.87em;
   background: var(--hover);
   padding: 0.15em 0.35em;
@@ -398,10 +431,9 @@
   flex: 1;
 }
 .history-detail h2 {
-  font-size: 21px;
+  font-size: 18px;
   font-weight: 550;
-  letter-spacing: -0.5px;
-  line-height: 1.45;
+  line-height: 26px;
   overflow-wrap: anywhere;
   margin: 8px 0 12px;
 }
@@ -432,6 +464,24 @@
   cursor: pointer;
   font-size: 14px;
   line-height: 1.5;
+}
+.history-detail summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  list-style: none;
+}
+.history-detail summary::-webkit-details-marker {
+  display: none;
+}
+.history-detail summary > svg {
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 3px;
+  transform: rotate(-90deg);
+}
+.history-detail details[open] > summary > svg {
+  transform: none;
 }
 .history-document .markdown {
   padding-top: 14px;
@@ -716,6 +766,14 @@
 }
 .project-history .definition-chip {
   touch-action: none;
+  border: 0;
+  background: transparent;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 18px;
+}
+.project-history .definition-chip:hover {
+  background: var(--hover);
 }
 .project-history.carrying-definition .graph-card[data-history-node] {
   outline: 1px dashed var(--accent);
@@ -1081,11 +1139,11 @@
 }
 .model-picker-trigger.compact {
   width: auto;
-  min-height: 0;
+  min-height: var(--cds-h-control);
   max-width: 220px;
   background: none;
   border: 0;
-  padding: 4px 6px;
+  padding: 2px 5px;
 }
 .model-picker-trigger svg {
   flex-shrink: 0;
@@ -1094,6 +1152,7 @@
   z-index: 350;
   width: min(340px, calc(100vw - 32px));
   max-height: var(--radix-popover-content-available-height);
+  height: min(360px, var(--radix-popover-content-available-height));
   display: flex;
   flex-direction: column;
   background: var(--panel);
@@ -1102,7 +1161,7 @@
   border-radius: 12px;
   overflow: hidden;
   font-size: 13px;
-  animation: model-menu-in 150ms var(--ease-out);
+  animation: appear 100ms ease-out;
 }
 .model-picker-heading {
   display: flex;
@@ -1137,6 +1196,7 @@
   border-color: var(--accent);
 }
 .model-picker-list {
+  flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
   max-height: 290px;
@@ -1177,6 +1237,26 @@
 .model-picker-footer {
   padding: 8px 14px;
   border-top: 1px solid var(--line);
+}
+.model-picker-footer.configuration-link {
+  border: 0;
+  padding: 8px 16px 14px;
+}
+.model-picker-link {
+  display: inline;
+  font: inherit;
+  color: var(--secondary);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--line);
+}
+.model-picker-link:hover {
+  color: var(--text);
+  text-decoration-color: currentColor;
 }
 .model-picker-custom {
   padding: 0 14px 14px;
@@ -1246,16 +1326,6 @@
   min-height: 0 !important;
   padding: 0 !important;
   accent-color: var(--accent-solid);
-}
-@keyframes model-menu-in {
-  from {
-    opacity: 0;
-    transform: translateY(-3px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 @media (prefers-reduced-motion: reduce) {
   .model-picker-popover {
@@ -1388,9 +1458,7 @@
 }
 .device-code strong {
   letter-spacing: 2px;
-  font:
-    600 18px ui-monospace,
-    monospace;
+  font: 600 18px var(--font-mono);
 }
 .device-code small {
   flex-basis: 100%;
@@ -1454,7 +1522,7 @@
   background: transparent;
   color: var(--secondary);
   border-radius: 6px;
-  font-size: 11px;
+  font-size: 12px;
   padding: 5px;
   cursor: pointer;
 }
