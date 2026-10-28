@@ -926,7 +926,7 @@ function HostAllocation({
             .map((resource) => (
               <option key={resource.id} value={resource.id}>
                 {resource.name} · {resource.config.harness} ·{" "}
-                {resource.config.model ?? t("Default model")}
+                {resource.config.model ?? t("Choose model")}
               </option>
             ))}
         </select>

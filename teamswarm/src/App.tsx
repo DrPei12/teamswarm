@@ -2064,7 +2064,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                   harness:
                     ids[String(data.get("harness"))] ??
                     String(data.get("harness")),
-                  model: model === "Default model" ? null : model,
+                  model: !model || model === "Default model" ? null : model,
                 },
               });
               setScreen(null);

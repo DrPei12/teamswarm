@@ -1152,8 +1152,20 @@ function CanvasContent({
                   className="member-header-model"
                   title={selectedMember.model}
                 >
-                  {selectedMember.harness} ·{" "}
-                  {modelLabel(tr(selectedMember.model), selectedMember.effort)}
+                  {selectedMember.harness}
+                  {modelLabel(
+                    tr(selectedMember.model),
+                    selectedMember.effort,
+                  ) && (
+                    <>
+                      {" "}
+                      ·{" "}
+                      {modelLabel(
+                        tr(selectedMember.model),
+                        selectedMember.effort,
+                      )}
+                    </>
+                  )}
                 </small>
               </div>
             ) : (

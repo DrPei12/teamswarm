@@ -203,7 +203,7 @@ function ConversationThread({
   const runtimeConfig = executionConfig
     ? {
         harness: harnessLabel(executionConfig.harness),
-        model: executionConfig.model ?? "Default model",
+        model: executionConfig.model ?? "",
         effort: executionConfig.effort ?? "Default",
       }
     : {

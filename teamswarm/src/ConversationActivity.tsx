@@ -299,6 +299,7 @@ export const ConversationActivity = memo(function ConversationActivity({
 });
 
 export function modelLabel(model: string, effort?: string) {
+  if (!model || model === "Default model" || model === "默认模型") return "";
   const display = model
     .replace(/^gpt-/i, "GPT-")
     .replace(

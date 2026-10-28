@@ -99,7 +99,7 @@ export function RuntimeControls({
               onChange(
                 {
                   ...config,
-                  model: model || "Default model",
+                  model: model || "",
                   effort: "Default",
                 },
                 choice,

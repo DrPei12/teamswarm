@@ -358,7 +358,7 @@ export class ProductStore {
             harnessLabels[hostConfig?.harness ?? ""] ??
             hostConfig?.harness ??
             "Codex",
-          model: hostAllocation?.selectionCurrent === false && !hostAllocation.selectionRetained ? "Reselect resource" : hostConfig?.model ?? "Default model",
+          model: hostAllocation?.selectionCurrent === false && !hostAllocation.selectionRetained ? "Reselect resource" : hostConfig?.model ?? "",
           effort: hostConfig?.effort ?? "Default",
         },
         ...(Number.isFinite(used) && limit > 0
@@ -729,7 +729,7 @@ export class ProductStore {
             : undefined,
           harness: harnessLabels[config.harness] ?? config.harness,
           model: String(
-            displayedAttempt?.actual?.model ?? config.model ?? "Default model",
+            displayedAttempt?.actual?.model ?? config.model ?? "",
           ),
           effort: String(
             displayedAttempt?.actual?.requestedTurnEffort ??

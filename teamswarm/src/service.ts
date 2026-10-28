@@ -807,7 +807,8 @@ class ProductClient {
     choice?: ModelChoice,
   ) {
     const harness = harnessIds[config.harness] ?? config.harness;
-    const model = config.model === "Default model" ? null : config.model;
+    const model =
+      !config.model || config.model === "Default model" ? null : config.model;
     let next = previous;
     if (harness !== next.harness) {
       const capabilities = await api<TeamCapabilities>(

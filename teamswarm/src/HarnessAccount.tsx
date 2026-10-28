@@ -324,7 +324,7 @@ export function HarnessAccount({
         </div>
         <div className="account-model-action">
           <span className="account-model-name">
-            {model || t("Default model")}
+            {model || t("Choose model")}
           </span>
           <button
             type="button"
