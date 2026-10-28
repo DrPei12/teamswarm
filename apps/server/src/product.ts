@@ -144,6 +144,14 @@ export class ProductStore {
       .prepare("INSERT OR IGNORE INTO product_state VALUES(1,0,?)")
       .run(JSON.stringify(freshPreferences()));
     mkdirSync(this.fileDirectory, { recursive: true });
+    for (const row of this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all()) {
+      const name = String(row.name);
+      if (!/^[a-z_]+$/.test(name) || ["runtime_view_revisions", "runtime_schedule_state"].includes(name)) continue;
+      if (this.db.prepare(`PRAGMA table_info(${name})`).all().some(c => c.name === "team_id"))
+        runtime.store.changes.track(name, name);
+    }
+    runtime.store.changes.track("messages", "messages", "(SELECT team_id FROM conversations WHERE id=$row.conversation_id)");
+    runtime.store.changes.track("product_message_details", "message_details", "(SELECT c.team_id FROM conversations c JOIN messages m ON m.conversation_id=c.id WHERE m.id=$row.message_id)");
   }
   get db() {
     return this.runtime.store.db;
@@ -238,9 +246,20 @@ export class ProductStore {
     );
   }
   private snapshotCache?: { stamp: string; value: Workspace; tag: string };
+  private projections = new Map<string, { stamp: string; value: any }>();
+  private cached<T>(teamId: string, key: string, domains: string[] | undefined, load: () => T, extra = ""): T {
+    const id = `${teamId}:${key}`, stamp = this.runtime.store.changes.stamp(teamId, domains) + extra;
+    const prior = this.projections.get(id);
+    if (prior?.stamp === stamp) return prior.value;
+    const value = load();
+    this.projections.set(id, { stamp: this.runtime.store.changes.stamp(teamId, domains) + extra, value });
+    return value;
+  }
   private stamp() {
     return JSON.stringify([
-      this.db.prepare("SELECT total_changes() AS n").get(),
+      this.db.prepare("SELECT revision FROM product_state WHERE id=1").get(),
+      this.runtime.store.teams.listTeams(),
+      this.db.prepare("SELECT team_id,domain,revision FROM runtime_view_revisions ORDER BY team_id,domain").all(),
       this.db.prepare("PRAGMA data_version").get(),
     ]);
   }
@@ -252,7 +271,9 @@ export class ProductStore {
     return value;
   }
   messagePage(conversationId: string, before?: string): Chat {
-    const chat = this.buildSnapshot({ conversationId, before }).chats[0];
+    const row = this.db.prepare("SELECT team_id FROM conversations WHERE id=?").get(conversationId);
+    if (!row) throw notFound();
+    const chat = this.buildSnapshot({ conversationId, before }, String(row.team_id)).chats[0];
     if (!chat) throw notFound("Conversation or history cursor was not found.");
     return chat;
   }
@@ -260,7 +281,12 @@ export class ProductStore {
     this.snapshot();
     return this.snapshotCache!.tag;
   }
-  private buildSnapshot(page?: { conversationId: string; before?: string }): Workspace {
+  teamSnapshot(teamId: string): Workspace {
+    const team = this.runtime.store.teams.getTeam(teamId);
+    if (!team) throw notFound();
+    return this.cached(teamId, "snapshot", undefined, () => this.buildSnapshot(undefined, teamId), JSON.stringify([team,this.read()]));
+  }
+  private buildSnapshot(page?: { conversationId: string; before?: string }, onlyTeam?: string): Workspace {
     const { revision, preferences: p } = this.read();
     const workspace: Workspace = {
       version: 1,
@@ -272,7 +298,7 @@ export class ProductStore {
       skills: p.skills,
       plugins: p.plugins,
       drafts: p.drafts,
-      definitions: [...p.legacyDefinitions],
+      definitions: onlyTeam ? [] : [...p.legacyDefinitions],
       members: [],
       connections: [],
       deliveries: [],
@@ -285,18 +311,26 @@ export class ProductStore {
       outputs: [],
       insights: [],
     };
-    for (const team of this.runtime.store.teams.listTeams()) {
-      const state = this.runtime.state(team.id);
+    const teams = this.runtime.store.teams.listTeams();
+    if (!onlyTeam) for (const key of this.projections.keys())
+      if (!teams.some(team => key.startsWith(team.id + ":"))) this.projections.delete(key);
+    for (const team of teams) {
+      if (onlyTeam && team.id !== onlyTeam) continue;
+      if (!onlyTeam && !page) {
+        const part = this.teamSnapshot(team.id);
+        for (const key of ["teams","chats","definitions","members","connections","deliveries","updates","projectNodes","projectBranches","projectDocuments","outputs","insights"] as const)
+          (workspace[key] as any[]).push(...(part[key] as any[]));
+        Object.assign(workspace.executions!, part.executions);
+        continue;
+      }
+      const state = this.cached(team.id, "state", ["settings","members","runs","works","requirements","artifacts","acceptances","exchanges","deliveries","project_branches","project_nodes","project_outputs","project_insights"], () => this.runtime.state(team.id));
       workspace.outputs!.push(...state.outputs);
       workspace.insights!.push(...state.insights);
       const settings = state.settings;
       const prefs = p.teams[team.id] ?? {};
       const mainChatId = this.runtime.history.mainConversation(team.id);
-      const attempts = this.runtime.store.list<Attempt>("attempts", team.id);
-      const hostDeliveries = this.runtime.store.list<HostDelivery>(
-        "deliveries",
-        team.id,
-      );
+      const attempts = this.cached(team.id, "attempts", ["attempts"], () => this.runtime.store.list<Attempt>("attempts", team.id));
+      const hostDeliveries = this.cached(team.id, "deliveries", ["deliveries"], () => this.runtime.store.list<HostDelivery>("deliveries", team.id));
       const lastEvent = Number(
         this.db
           .prepare(
@@ -477,16 +511,24 @@ export class ProductStore {
           branchId: branch.id,
         });
       }
-      const branchList = this.runtime.history.branches(team.id);
+      if (page) return workspace;
+      const viewInput = workspace;
+      const historyView = this.cached(team.id, "history-view", ["project_branches","project_nodes","project_documents","project_checkpoint_deletions","works","runs","artifacts","deliveries","messages","conversations","project_conversations"], () => {
+      const workspace: Workspace = { ...viewInput, chats: viewInput.chats.map(c => ({ ...c })), projectBranches: [], projectNodes: [], projectDocuments: [], definitions: [], deliveries: [], updates: [] };
+      const branchList = this.cached(team.id, "branches", ["project_branches"], () => this.runtime.history.branches(team.id));
       workspace.projectBranches!.push(...branchList);
-      let cursor = 0;
-      const nodes: ProjectNode[] = [];
-      for (;;) {
-        const page = this.runtime.history.timeline(team.id, cursor, 500);
-        nodes.push(...page.nodes);
-        if (page.nodes.length < 500) break;
-        cursor = page.nextCursor;
-      }
+      const nodes = this.cached(team.id, "nodes", ["project_nodes","project_checkpoint_deletions"], () => {
+        let cursor = 0;
+        const nodes: ProjectNode[] = [];
+        for (;;) {
+          const page = this.runtime.history.timeline(team.id, cursor, 500);
+          nodes.push(...page.nodes);
+          if (page.nodes.length < 500) return nodes;
+          cursor = page.nextCursor;
+        }
+      });
+      const documents = this.cached(team.id, "documents", ["project_documents"], () => new Map(this.db.prepare("SELECT id,data FROM project_documents WHERE team_id=?").all(team.id)
+        .map(row => [String(row.id), JSON.parse(String(row.data)) as ProjectDocument])));
       workspace.projectNodes!.push(...nodes);
       for (const chat of workspace.chats.filter((c) => c.teamId === team.id)) {
         const fork = nodes.find(
@@ -500,7 +542,7 @@ export class ProductStore {
             messageId: base.source.messageIds?.at(-1) ?? "",
           };
         chat.inheritedDefinitions = Object.values(fork.documents).map((id) => {
-          const d = this.runtime.history.document(team.id, id);
+          const d = documents.get(id)!;
           return {
             id: d.id,
             teamId: team.id,
@@ -520,7 +562,7 @@ export class ProductStore {
         for (const revisionId of Object.values(node.documents)) {
           if (seenDocs.has(revisionId)) continue;
           seenDocs.add(revisionId);
-          const d = this.runtime.history.document(team.id, revisionId);
+          const d = documents.get(revisionId)!;
           workspace.projectDocuments!.push(d);
           const chatId =
             node.source.conversationId ??
@@ -665,6 +707,15 @@ export class ProductStore {
         outcomes.set(identity, { ...delivery, version: (prior?.version ?? 0) + 1 });
       }
       workspace.deliveries.push(...outcomes.values());
+      return { projectBranches: workspace.projectBranches!, projectNodes: workspace.projectNodes!, projectDocuments: workspace.projectDocuments!, definitions: workspace.definitions,
+        deliveries: workspace.deliveries, updates: workspace.updates!, chats: workspace.chats.map(c => ({ id: c.id, parent: c.parent, inheritedDefinitions: c.inheritedDefinitions })) };
+      }, String(revision));
+      for (const key of ["projectBranches","projectNodes","projectDocuments","definitions","deliveries","updates"] as const)
+        (workspace[key] as any[]).push(...historyView[key]);
+      for (const link of historyView.chats) {
+        const chat = workspace.chats.find(c => c.id === link.id);
+        if (chat) { chat.parent = link.parent; chat.inheritedDefinitions = link.inheritedDefinitions; }
+      }
       for (const member of state.members) {
         const works = state.works.filter((w) => w.memberId === member.id);
         const substantive = works.filter((w) => !w.interaction && w.kind !== "collaboration");
@@ -753,7 +804,7 @@ export class ProductStore {
           activeDirections: [],
         });
       }
-      for (const exchange of communicationExchanges(this.runtime, team.id)) {
+      for (const exchange of this.cached(team.id, "communication", ["works","members","runs","exchanges","exchange_messages","correspondence","project_branches","project_conversations"], () => communicationExchanges(this.runtime, team.id))) {
         const pair = [exchange.source, exchange.target].sort();
         const id = `relationship:${pair.join(":")}`;
         const connection = connections.get(id) ?? {
@@ -791,6 +842,7 @@ export class ProductStore {
 export function productRoutes(runtime: TeamRuntime): Router {
   const router = Router();
   const product = new ProductStore(runtime);
+  router.get("/product/teams/:teamId/snapshot", (req,res) => res.json(product.teamSnapshot(parse(key,req.params.teamId))));
   router.post(
     "/product/teams/:teamId/deliveries/:deliveryId/view",
     (req, res) => {

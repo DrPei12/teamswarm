@@ -143,6 +143,10 @@ Progress updates and completed deliverables have separate entries. Saved artifac
 
 Teams, conversations, work, artifact versions and project history are stored locally. Project files remain in the folders you select.
 
+Members save their continuation and end the current turn while waiting for messages. New messages or dependency results resume execution. Idle Codex executors release their processes, and later tasks resume the saved native session. TeamSwarm Codex sessions load the assigned Team tools and native capabilities. On Windows, each executor and its descendants belong to an owned process group that is reclaimed when the executor or service exits.
+
+Concurrency follows both Team settings and available memory. New tasks queue under memory pressure while active tasks continue, then dispatch when capacity returns. Member identities, history and results remain stored locally.
+
 | Platform | Default service data directory |
 |---|---|
 | Windows | `%LOCALAPPDATA%\TeamSwarm\data` |

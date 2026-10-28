@@ -1,4 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawnOwned, confirmOwnedExit } from "./owned-process.js";
 import { randomUUID } from "node:crypto";
 import {
   readFileSync,
@@ -35,6 +36,7 @@ import {
 
 type NativeId = "claude-code" | "grok" | "pi" | "opencode" | "deepseek-harness";
 type Active = {
+  resourceId: string;
   child: ChildProcessWithoutNullStreams;
   done: Promise<HarnessResult>;
   stopping: boolean;
@@ -48,6 +50,9 @@ export class NativeHarness implements Harness {
     return sessionStoreScope(nativeHome(this.id)) + (this.id === "claude-code" || this.id === "grok" ? ":" + subscriptionScope(this.id) : "") + (this.id === "grok" ? ":acp-profile-v1" : "");
   }
   private active = new Map<string, Active>();
+  resources() {
+    return [...this.active.values()].flatMap(a => a.child.pid ? [{ id: a.resourceId, pid: a.child.pid, sessions: 1 }] : []);
+  }
   constructor(readonly id: NativeId) {
     this.capabilities = {
       dispatchTracking: true,
@@ -412,11 +417,10 @@ export class NativeHarness implements Harness {
     }
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawn(command, args, {
+      child = await spawnOwned(command, args, {
         cwd: request.workspace,
         env,
         windowsHide: true,
-        stdio: "pipe",
         detached: process.platform !== "win32",
       });
     } catch (error) {
@@ -424,6 +428,7 @@ export class NativeHarness implements Harness {
       throw error;
     }
     const receiptPath = path.join(home, `${turnId}.json`);
+    const resourceId = randomUUID();
     const receipt = (result?: HarnessResult) => {
       writeFileSync(
         receiptPath + ".tmp",
@@ -699,6 +704,8 @@ export class NativeHarness implements Harness {
           ? await active.termination
           : false;
         this.active.delete(id);
+        const reclaimed = await confirmOwnedExit(child);
+        emit(reclaimed ? "resource.released" : "resource.unconfirmed", { id: resourceId, pid: child.pid, scope: "attempt" });
         await bridge.close();
         let result: HarnessResult = observationFailure
           ? { status: "unknown", text, error: observationFailure }
@@ -748,8 +755,9 @@ export class NativeHarness implements Harness {
         }, 2000);
       });
     });
-    this.active.set(id, { child, done, stopping: false });
+    this.active.set(id, { resourceId, child, done, stopping: false });
     try {
+      request.onEvent({ type: "resource.acquired", data: { id: resourceId, pid: child.pid, scope: "attempt" } });
       receipt();
     } catch {
       observationFailure =

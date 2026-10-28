@@ -408,6 +408,9 @@ export interface Harness {
   interrupt(sessionId: string, turnId: string): Promise<void>;
   reconcile?(sessionId: string, turnId: string, context?: { workId: string; attemptId: string; startedAt: string }): Promise<HarnessResult>;
   reconcileStart?(sessionId: string, native: Record<string, unknown>): Promise<HarnessResult & { turnId?: string }>;
+  /** Only process groups owned by this adapter instance. */
+  resources?(): { id: string; pid: number; sessions: number }[];
+  maintain?(input: { now: number; pressure: boolean }): Promise<void>;
   close(): Promise<void>;
 }
 export interface PreparedExecutionEnvironment {

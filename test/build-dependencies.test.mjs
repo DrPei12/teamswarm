@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, isAbsolute, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
@@ -24,7 +25,14 @@ const run = promisify(execFile);
 test('build logging excludes sprintf-js', () => {
   const lock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'));
   assert.equal(Object.keys(lock.packages).some(name => name.endsWith('/sprintf-js')), false);
-  assert.throws(() => loggerRequire.resolve('sprintf-js'), { code: 'MODULE_NOT_FOUND' });
+  // A nested checkout can resolve a parent project's modules, which are not packaged here.
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  for (const directory of loggerRequire.resolve.paths('sprintf-js') ?? []) {
+    const fromRoot = relative(root, directory);
+    if (fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) continue;
+    const installed = join(directory, 'sprintf-js');
+    assert.equal(existsSync(installed), false, `Build dependencies contain sprintf-js: ${installed}`);
+  }
 });
 
 test('build logging preserves structured messages without interpreting numeric precision', () => {

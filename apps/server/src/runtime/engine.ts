@@ -7,6 +7,7 @@ import { prepareExecutionEnvironment } from "./harness/execution-environment.js"
 import { badRequest, conflict, notFound, ServiceError } from "../errors.js";
 import { TeamStore } from "../store.js";
 import { CodexHarness } from "./harness/codex.js";
+import { RuntimeResources } from "./resources.js";
 import { rebootConfirmsTermination, systemBootTime } from "./harness/native-recovery.js";
 import { RuntimeStore, activeStates, overlaps, hash } from "./store.js";
 import { redact } from "./redact.js";
@@ -69,13 +70,17 @@ export class TeamRuntime {
   readonly harnesses: Map<string, Harness>;
   readonly catalog: TeamCatalog;
   readonly hostContext: HostContext;
+  readonly resources: RuntimeResources;
+  private resourceWaiting = new Set<string>();
   private active = new Map<
     string,
     { teamId: string; attemptId: string; done: Promise<void> }
   >();
   private ticking = false;
   private closing = false;
-  private timer: NodeJS.Timeout;
+  private timer?: NodeJS.Timeout;
+  private pumpPending = false;
+  private unsubscribeChanges: () => void;
   private interrupting = new Set<string>();
   private schedulerError: string | null = null;
   get isClosing(): boolean {
@@ -92,8 +97,12 @@ export class TeamRuntime {
     this.harnesses = new Map(harnesses.map((h) => [h.id, h]));
     this.catalog = new TeamCatalog(this.store, this.history, this.harnesses);
     this.hostContext = new HostContext(this.store, this.history, this.catalog);
-    this.timer = setInterval(() => this.pump(), 500);
-    this.timer.unref();
+    this.resources = new RuntimeResources(this.store, this.harnesses, () => this.requestPump());
+    this.unsubscribeChanges = this.store.changes.subscribe(() => {
+      if (this.store.changes.pending().length) this.requestPump();
+    });
+    for (const team of teams.listTeams()) this.store.changes.mark(team.id);
+    this.scheduleMaintenance();
   }
   summary(teamId: string): { status: string; message: string } {
     if (this.schedulerError)
@@ -103,7 +112,7 @@ export class TeamRuntime {
         status: "not_connected",
         message: "Configure a workspace and harness to start this Team.",
       };
-    const work = this.store.list<Work>("works", teamId);
+    const work = this.store.workQuery(teamId, { statuses: ["queued", "waiting", "running", "stopping", "recovery_required"] });
     if (work.some((w) => w.status === "recovery_required"))
       return {
         status: "recovery_required",
@@ -512,20 +521,49 @@ export class TeamRuntime {
       },
     );
   }
+  private requestPump(): void {
+    if (this.pumpPending || this.closing || this.schedulerError) return;
+    this.pumpPending = true;
+    setImmediate(() => { this.pumpPending = false; this.pump(); });
+  }
+  private scheduleMaintenance(): void {
+    if (this.closing) return;
+    if (this.timer) clearTimeout(this.timer);
+    const row = this.store.db.prepare(`SELECT min(due) due FROM (
+      SELECT json_extract(data,'$.continuation.deadline') due FROM runtime_works
+        WHERE json_extract(data,'$.status')='waiting' AND json_extract(data,'$.continuation.timeoutReportedAt') IS NULL
+      UNION ALL SELECT json_extract(data,'$.commitment.dueAt') due FROM runtime_exchanges
+        WHERE json_extract(data,'$.status') NOT IN ('resolved','cancelled','declined')) WHERE due>?`)
+      .get(new Date().toISOString());
+    const next = row?.due ? Date.parse(String(row.due)) - Date.now() : 5000;
+    this.timer = setTimeout(() => {
+      const due = this.store.db.prepare(`SELECT DISTINCT team_id FROM (
+        SELECT team_id FROM runtime_works WHERE json_extract(data,'$.status')='waiting'
+          AND json_extract(data,'$.continuation.timeoutReportedAt') IS NULL
+          AND json_extract(data,'$.continuation.deadline')<=?
+        UNION SELECT team_id FROM runtime_exchanges WHERE json_extract(data,'$.status') NOT IN ('resolved','cancelled','declined')
+          AND json_extract(data,'$.commitment.dueAt')<=?)`).all(new Date().toISOString(), new Date().toISOString());
+      for (const r of due) this.store.changes.mark(String(r.team_id));
+      this.pump();
+      this.scheduleMaintenance();
+    }, Math.max(20, Math.min(5000, next)));
+    this.timer.unref();
+  }
   private pump(): void {
     if (this.ticking || this.closing || this.schedulerError) return;
     this.ticking = true;
     try {
-      for (const team of this.store.teams.listTeams()) {
+      const changes = this.store.changes.pending();
+      for (const change of changes) {
+        const team = { id: change.teamId };
         this.correspondence.schedule(team.id);
         this.communication.schedule(team.id, (work) =>
           this.dependenciesReady(work, false),
         );
         // A late exchange can finish after Host has delivered. Re-evaluate the
         // original delivery gate, including after restarting an older service.
-        const works = this.store.list<Work>("works", team.id);
-        for (const run of this.store.list<Run>("runs", team.id).filter((r) => r.state === "active")) {
-          const own = works.filter((w) => w.runId === run.id);
+        for (const run of this.store.activeRuns(team.id)) {
+          const own = this.store.workQuery(team.id, { runId: run.id });
           if (own.some((w) => !w.interaction && (activeStates.has(w.status) || ["queued", "waiting"].includes(w.status)))) continue;
           const lastHost = own.filter((w) => !w.interaction && w.kind !== "collaboration" &&
             this.store.get<Member>("members", team.id, w.memberId).kind === "host").at(-1);
@@ -533,10 +571,9 @@ export class TeamRuntime {
             w.kind === "collaboration" && w.status === "submitted" && w.updatedAt >= lastHost.updatedAt))
             this.followUpRun(lastHost, this.store.get<Member>("members", team.id, lastHost.memberId));
         }
+        this.store.changes.acknowledge(team.id, change.revision);
       }
-      const all = this.store.teams
-        .listTeams()
-        .flatMap((team) => this.store.list<Work>("works", team.id))
+      const all = this.store.workQuery(undefined, { statuses: ["queued", "running", "stopping", "recovery_required"] })
         .sort(
           (a, b) =>
             Number(b.title === "Host") - Number(a.title === "Host") ||
@@ -664,6 +701,14 @@ export class TeamRuntime {
           continue;
         }
         if (blockers.some((other) => this.workspaceConflict(work, resolved.config, other))) continue;
+        if (!this.resources.canStart(resolved.config.harness, member.kind === "host")) {
+          if (!this.resourceWaiting.has(work.id)) {
+            this.resourceWaiting.add(work.id);
+            this.store.event(work.teamId, "work.resource_wait", { reason: "memory_budget", harness: resolved.config.harness }, work);
+          }
+          continue;
+        }
+        this.resourceWaiting.delete(work.id);
         this.records.bindOutputs(work);
         const attempt = this.store.transaction(() => {
           const started = this.store.start(work, resolved.config);
@@ -688,17 +733,20 @@ export class TeamRuntime {
           done: Promise.resolve(),
         };
         this.active.set(work.id, slot);
+        this.resources.reserve(work.id, resolved.config.harness);
         slot.done = this.execute(work, attempt, member, run)
           .catch((error) => this.schedulerFault(error))
           .finally(() => {
             this.active.delete(work.id);
-            this.pump();
+            this.resources.finish(work.id);
+            this.requestPump();
           });
       }
     } catch (error) {
       this.schedulerFault(error);
     } finally {
       this.ticking = false;
+      this.scheduleMaintenance();
     }
   }
   private workspaceConflict(work: Work, config: ExecutionConfig, other: Work): boolean {
@@ -1074,6 +1122,7 @@ export class TeamRuntime {
         },
         onEvent: (event) => {
           event = redact(event, attempt.config.credentialEnv);
+          this.resources.observe(work, attempt, event);
           const current = this.store.get<Work>("works", work.teamId, work.id);
           if (current.attemptId !== attempt.id) return;
           if (event.type === "context.usage" || event.type === "context.compacted")
@@ -3038,7 +3087,9 @@ export class TeamRuntime {
   async close(): Promise<void> {
     if (this.closing) return;
     this.closing = true;
-    clearInterval(this.timer);
+    if (this.timer) clearTimeout(this.timer);
+    this.unsubscribeChanges();
+    await this.resources.close();
     for (const slot of this.active.values()) {
       const attempt = this.store.get<Attempt>(
         "attempts",

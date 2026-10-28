@@ -576,7 +576,7 @@ export class TeamCommunication {
   /** Recovery-safe queue maintenance. Never starts a second execution for a busy member. */
   schedule(teamId: string, ready: (work: Work) => boolean = () => true) {
     this.store.transaction(() => {
-      const works = this.store.list<Work>("works", teamId);
+      const works = this.store.workQuery(teamId, { statuses: ["queued", "waiting", "running", "stopping", "recovery_required"] });
       for (const w of works.filter(
         (w) => w.status === "waiting" && !w.invalidatedByNodeId,
       )) {
@@ -615,9 +615,7 @@ export class TeamCommunication {
           }, w);
         }
       }
-      for (const e of this.store
-        .list<TeamExchange>("exchanges", teamId)
-        .filter((e) => !closed(e))) {
+      for (const e of this.store.openExchanges(teamId)) {
         const origin = this.store.get<Work>("works", teamId, e.originWorkId);
         // A replaced responsibility must not silently create fresh assistance in the new definition.
         if (origin.invalidatedByNodeId || origin.status === "superseded") {
@@ -671,7 +669,7 @@ export class TeamCommunication {
           const run = this.store.get<Run>("runs", teamId, origin.runId);
           if (run.state === "paused" || run.state === "failed") continue;
           // Stop is durable: no automatic replacement of a stopped helper.
-          const priorHelper = own
+          const priorHelper = this.store.workQuery(teamId, { memberId, exchangeId: e.id, limit: 1 })
             .filter((w) => w.collaborationExchangeId === e.id)
             .at(-1);
           if (
@@ -680,7 +678,7 @@ export class TeamCommunication {
           )
             continue;
           if (
-            works.filter((w) => w.runId === run.id).length >=
+            this.store.workCount(teamId, run.id) >=
             run.settings.maxWorksPerRun
           ) {
             run.state = "paused";

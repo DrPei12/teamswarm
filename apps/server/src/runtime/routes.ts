@@ -45,6 +45,11 @@ import {
 export function runtimeRoutes(runtime: TeamRuntime): Router {
   const router = Router();
   const store = runtime.store;
+  router.get("/teams/:teamId/runtime-resources", (req,res) => {
+    const teamId = param(req.params.teamId);
+    if (!store.teams.getTeam(teamId)) throw notFound();
+    res.json(runtime.resources.state(teamId));
+  });
   router.get("/teams/:teamId/capabilities", (req,res)=>res.json(runtime.catalog.capabilities.read(param(req.params.teamId))));
   router.put("/teams/:teamId/capabilities", (req,res)=>res.json(runtime.catalog.capabilities.save(param(req.params.teamId),parse(capabilitiesInput,req.body))));
   router.post("/teams/:teamId/model-catalog", async (req,res)=>{
@@ -798,22 +803,30 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
-    let writable = true;
+    let writable = true, closed = false, scheduled = false;
+    const schedule = () => {
+      if (closed || scheduled) return;
+      scheduled = true;
+      setImmediate(() => { scheduled = false; if (!closed) send(); });
+    };
     const send = () => {
       if (runtime.isClosing) {
         res.end();
         return;
       }
       if (!writable) return;
-      for (const event of store.events(teamId, after, 100)) {
+      const events = store.events(teamId, after, 100);
+      for (const event of events) {
         writable = res.write(
           `id: ${event.sequence}\nevent: team\ndata: ${JSON.stringify(event)}\n\n`,
         );
         after = event.sequence;
         if (!writable) break;
       }
+      if (writable && events.length === 100) schedule();
     };
-    const tick = setInterval(send, 250),
+    const unsubscribe = store.changes.subscribe(schedule);
+    const tick = setInterval(send, 5000),
       heartbeat = setInterval(() => {
         if (writable) writable = res.write(": keepalive\n\n");
       }, 15000);
@@ -824,6 +837,8 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       send();
     });
     res.on("close", () => {
+      closed = true;
+      unsubscribe();
       clearInterval(tick);
       clearInterval(heartbeat);
     });

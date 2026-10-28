@@ -9,7 +9,9 @@ export class Correspondence {
   constructor(readonly store: RuntimeStore) {
     store.db.exec(`CREATE TABLE IF NOT EXISTS runtime_correspondence (
       id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id), data TEXT NOT NULL CHECK(json_valid(data)));
-      CREATE INDEX IF NOT EXISTS correspondence_team ON runtime_correspondence(team_id);`);
+      CREATE INDEX IF NOT EXISTS correspondence_team ON runtime_correspondence(team_id);
+      CREATE INDEX IF NOT EXISTS correspondence_status ON runtime_correspondence(team_id,json_extract(data,'$.status'));`);
+    store.changes.track("runtime_correspondence", "correspondence", "team_id", true, "data");
   }
   list(teamId: string): MemberMessage[] {
     return this.store.db
@@ -25,6 +27,7 @@ export class Correspondence {
         "INSERT INTO runtime_correspondence VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
       )
       .run(message.id, message.teamId, JSON.stringify(message));
+    this.store.changes.signal();
   }
   member(teamId: string, id: string): Member {
     const member = this.store
@@ -255,7 +258,8 @@ export class Correspondence {
     }
   }
   schedule(teamId: string) {
-    const pending = this.list(teamId).filter((m) => m.status === "queued");
+    const pending = this.store.db.prepare("SELECT data FROM runtime_correspondence WHERE team_id=? AND json_extract(data,'$.status')='queued' ORDER BY rowid")
+      .all(teamId).map(row => JSON.parse(String(row.data)) as MemberMessage);
     const groups = new Map<string, MemberMessage[]>();
     for (const message of pending) {
       const key = `${message.recipientId}:${message.branchId}:${message.threadId ?? "legacy"}`;
@@ -263,7 +267,8 @@ export class Correspondence {
     }
     for (const messages of groups.values()) {
       const recipientId = messages[0].recipientId;
-      const works = this.store.list<Work>("works", teamId);
+      const works = this.store.workQuery(teamId, { memberId: recipientId,
+        statuses: ["queued", "running", "stopping", "recovery_required"] });
       if (
         works.some(
           (w) =>
@@ -276,7 +281,8 @@ export class Correspondence {
         )
       )
         continue;
-      const base = works
+      const base = this.store.workQuery(teamId, { memberId: recipientId, branchId: messages[0].branchId,
+        ...(messages[0].threadId ? { threadId: messages[0].threadId } : {}), limit: 1 })
         .filter(
           (w) =>
             w.memberId === recipientId &&
@@ -290,7 +296,7 @@ export class Correspondence {
       const run = this.store.get<Run>("runs", teamId, base.runId);
       if (run.state === "paused") continue;
       if (
-        works.filter((w) => w.runId === run.id).length >=
+        this.store.workCount(teamId, run.id) >=
         run.settings.maxWorksPerRun
       ) {
         for (const message of messages) {

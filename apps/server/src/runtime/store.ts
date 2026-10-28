@@ -17,6 +17,7 @@ import { TeamStore } from "../store.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { ownedRuntimeLocks, processIdentity, processStartedAfterFile } from "./process-identity.js";
 import type { ProjectHistory } from "./project-history.js";
+import { RuntimeChanges } from "./changes.js";
 import type {
   Acceptance,
   ArtifactVersion,
@@ -85,11 +86,13 @@ export function overlaps(a: string, b: string): boolean {
 
 export class RuntimeStore {
   readonly db: DatabaseSync;
+  readonly changes: RuntimeChanges;
   history?: ProjectHistory;
   private lockPath: string;
   private lockId = randomUUID();
   constructor(readonly teams: TeamStore) {
     this.db = teams.database;
+    this.changes = new RuntimeChanges(this.db);
     this.lockPath = path.join(teams.dataDir, "runtime.lock");
     if (existsSync(this.lockPath)) {
       const owner = JSON.parse(readFileSync(this.lockPath, "utf8"));
@@ -137,6 +140,21 @@ export class RuntimeStore {
             team_id TEXT NOT NULL REFERENCES teams(id), run_id TEXT, work_id TEXT, attempt_id TEXT,
             type TEXT NOT NULL, data TEXT NOT NULL CHECK(json_valid(data)), created_at TEXT NOT NULL);
           CREATE INDEX IF NOT EXISTS runtime_events_team ON runtime_events(team_id, sequence);
+          CREATE INDEX IF NOT EXISTS runtime_events_attempt ON runtime_events(attempt_id, type, sequence);
+          CREATE INDEX IF NOT EXISTS runtime_works_status ON runtime_works(json_extract(data,'$.status'),team_id);
+          CREATE INDEX IF NOT EXISTS runtime_works_run ON runtime_works(team_id,json_extract(data,'$.runId'));
+          CREATE INDEX IF NOT EXISTS runtime_works_member ON runtime_works(team_id,json_extract(data,'$.memberId'));
+          CREATE INDEX IF NOT EXISTS runtime_works_thread ON runtime_works(team_id,json_extract(data,'$.threadId'));
+          CREATE INDEX IF NOT EXISTS runtime_works_exchange ON runtime_works(team_id,json_extract(data,'$.collaborationExchangeId'));
+          CREATE INDEX IF NOT EXISTS runtime_runs_state ON runtime_runs(team_id,json_extract(data,'$.state'));
+          CREATE INDEX IF NOT EXISTS runtime_attempts_work ON runtime_attempts(team_id,json_extract(data,'$.workId'));
+          CREATE INDEX IF NOT EXISTS runtime_exchanges_status ON runtime_exchanges(team_id,json_extract(data,'$.status'));
+          CREATE INDEX IF NOT EXISTS runtime_works_global_status ON runtime_works(json_extract(data,'$.status'),team_id);
+          CREATE INDEX IF NOT EXISTS runtime_waiting_deadline ON runtime_works(json_extract(data,'$.continuation.deadline'),team_id)
+            WHERE json_extract(data,'$.status')='waiting' AND json_extract(data,'$.continuation.timeoutReportedAt') IS NULL;
+          CREATE INDEX IF NOT EXISTS runtime_open_exchanges_due ON runtime_exchanges(json_extract(data,'$.commitment.dueAt'),team_id)
+            WHERE json_extract(data,'$.status') NOT IN ('resolved','cancelled','declined');
+          CREATE INDEX IF NOT EXISTS runtime_exchange_messages_exchange ON runtime_exchange_messages(team_id,json_extract(data,'$.exchangeId'));
           CREATE TABLE IF NOT EXISTS runtime_receipts (scope TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(scope, request_id));
           CREATE UNIQUE INDEX IF NOT EXISTS runtime_run_message ON runtime_runs(json_extract(data, '$.sourceMessageId'));
           CREATE UNIQUE INDEX IF NOT EXISTS runtime_host_member ON runtime_members(team_id) WHERE json_extract(data, '$.kind') = 'host';
@@ -165,9 +183,12 @@ export class RuntimeStore {
           this.db.prepare("INSERT INTO runtime_migrations VALUES (4, ?)").run(timestamp());
         }
       });
+      for (const table of tables) this.changes.track(`runtime_${table}`, table, "team_id",
+        ["settings", "members", "runs", "works", "exchanges", "exchange_messages"].includes(table), "data");
+      this.changes.track("runtime_events", "events");
       // An interrupted service never turns an unknown execution into success or replays it.
       for (const team of teams.listTeams())
-        for (const work of this.list<Work>("works", team.id)) {
+        for (const work of this.workQuery(team.id, { statuses: ["running", "stopping"] })) {
           if (["running", "stopping"].includes(work.status))
             this.setStatus(
               work,
@@ -181,6 +202,7 @@ export class RuntimeStore {
     }
   }
   close(): void {
+    this.changes.close();
     if (
       existsSync(this.lockPath) &&
       JSON.parse(readFileSync(this.lockPath, "utf8")).id === this.lockId
@@ -209,6 +231,7 @@ export class RuntimeStore {
         `INSERT INTO runtime_${table}(id, team_id, data) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`,
       )
       .run(id, value.teamId, JSON.stringify(value));
+    this.changes.signal();
   }
   get<T extends Entity>(table: Table, teamId: string, id: string, missingMessage?: string): T {
     const row = this.db
@@ -224,6 +247,48 @@ export class RuntimeStore {
       )
       .all(teamId)
       .map((row) => JSON.parse(String(row.data)) as T);
+  }
+  workQuery(teamId?: string, options: {
+    statuses?: string[]; memberId?: string; runId?: string; threadId?: string;
+    exchangeId?: string; branchId?: string; limit?: number; before?: number;
+  } = {}): Work[] {
+    const terms: string[] = [], args: (string | number)[] = [];
+    if (teamId) { terms.push("team_id=?"); args.push(teamId); }
+    if (options.statuses) {
+      if (!options.statuses.length) return [];
+      terms.push(`json_extract(data,'$.status') IN (${options.statuses.map(() => "?").join(",")})`);
+      args.push(...options.statuses);
+    }
+    for (const [field,value] of [["memberId",options.memberId],["runId",options.runId],
+      ["collaborationExchangeId",options.exchangeId]] as const) {
+      if (value) { terms.push(`json_extract(data,'$.${field}')=?`); args.push(value); }
+    }
+    if (options.threadId) { terms.push("coalesce(json_extract(data,'$.threadId'),id)=?"); args.push(options.threadId); }
+    if (options.branchId) {
+      terms.push(`json_extract(data,'$.runId') IN (SELECT id FROM runtime_runs WHERE
+        json_extract(data,'$.branchId')=? OR (json_extract(data,'$.branchId') IS NULL AND
+        json_extract(data,'$.conversationId') IN (SELECT conversation_id FROM project_conversations WHERE branch_id=?)))`);
+      args.push(options.branchId, options.branchId);
+    }
+    if (options.before !== undefined) { terms.push("rowid<?"); args.push(options.before); }
+    const limit = options.limit === undefined ? "" : " LIMIT ?";
+    if (options.limit !== undefined) args.push(options.limit);
+    const rows = this.db.prepare(`SELECT data FROM runtime_works${terms.length ? " WHERE " + terms.join(" AND ") : ""}
+      ORDER BY rowid ${limit ? "DESC" : "ASC"}${limit}`).all(...args);
+    if (limit) rows.reverse();
+    return rows.map(row => JSON.parse(String(row.data)) as Work);
+  }
+  activeRuns(teamId: string): Run[] {
+    return this.db.prepare("SELECT data FROM runtime_runs WHERE team_id=? AND json_extract(data,'$.state')='active' ORDER BY rowid")
+      .all(teamId).map(r => JSON.parse(String(r.data)));
+  }
+  workCount(teamId: string, runId: string): number {
+    return Number(this.db.prepare("SELECT count(*) n FROM runtime_works WHERE team_id=? AND json_extract(data,'$.runId')=?")
+      .get(teamId, runId)?.n ?? 0);
+  }
+  openExchanges(teamId: string): TeamExchange[] {
+    return this.db.prepare("SELECT data FROM runtime_exchanges WHERE team_id=? AND json_extract(data,'$.status') NOT IN ('resolved','declined','cancelled') ORDER BY rowid")
+      .all(teamId).map(r => JSON.parse(String(r.data)));
   }
   settings(teamId: string): RuntimeSettings | null {
     return this.list<RuntimeSettings>("settings", teamId)[0] ?? null;
@@ -262,6 +327,7 @@ export class RuntimeStore {
         JSON.stringify(data),
         timestamp(),
       );
+    this.changes.signal();
   }
   events(teamId: string, after = 0, limit = 200): RuntimeEvent[] {
     if (!this.teams.getTeam(teamId)) throw notFound();

@@ -1,6 +1,7 @@
 import { productVersion } from "../../version.js";
-import { createHash } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawnOwned, confirmOwnedExit } from "./owned-process.js";
 import { existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { homedir } from "node:os";
@@ -199,6 +200,33 @@ export class CodexHarness implements Harness {
   private initialized: Obj = {};
   private environmentHashes: Record<string, string> = {};
   private recycling?: Promise<void>;
+  private users = 0;
+  private lastActivity = Date.now();
+  private warmMs = 15000;
+  private resourceId = "";
+  private releaseObserver?: HarnessRequest["onEvent"];
+  private resourceError?: Error;
+
+  resources() {
+    return this.child?.pid ? [{ id: this.resourceId, pid: this.child.pid, sessions: this.executions.size }] : [];
+  }
+  async maintain({ now, pressure }: { now: number; pressure: boolean }) {
+    if (this.resourceError) throw this.resourceError;
+    if (!this.child || this.stopped || this.recycling || this.users || this.pending.size || this.executions.size) return;
+    if (!pressure && now - this.lastActivity < this.warmMs) return;
+    this.recycling = this.releaseProcess();
+    try { await this.recycling; } finally { this.recycling = undefined; }
+  }
+  private async releaseProcess() {
+    const child = this.child;
+    if (!child) return;
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(() => child.kill(), 3000);
+      child.once("close", () => { clearTimeout(timer); resolve(); });
+      child.stdin.end();
+    });
+    await confirmOwnedExit(child);
+  }
 
   private async open(): Promise<void> {
     if (this.recycling) await this.recycling;
@@ -212,12 +240,12 @@ export class CodexHarness implements Harness {
           throw new Error("TEAM_CODEX_HOME must be an absolute directory.");
         mkdirSync(nativeHome, { recursive: true, mode: 0o700 });
       }
-      const child = spawn(
+      const began = Date.now();
+      const child = await spawnOwned(
         executable.command,
-        [...executable.args, "app-server", "--listen", "stdio://"],
+        [...executable.args, "-c", "features.plugins=false", "-c", "features.apps=false", "app-server", "--listen", "stdio://"],
         {
           windowsHide: true,
-          stdio: "pipe",
           env: {
             ...Object.fromEntries(
               Object.entries(process.env).filter(
@@ -232,6 +260,11 @@ export class CodexHarness implements Harness {
           },
         },
       );
+      if (this.stopped) {
+        child.on("error", () => {});
+        await new Promise<void>(resolve => { child.once("close", resolve); child.kill(); });
+        throw new Error("Harness closed while the native process was starting.");
+      }
       this.environmentHashes = Object.fromEntries(
         Object.entries(process.env).map(([key, value]) => [
           key,
@@ -241,6 +274,7 @@ export class CodexHarness implements Harness {
         ]),
       );
       this.child = child;
+      const resourceId = this.resourceId = randomUUID();
       const input = createInterface({
         input: child.stdout,
         crlfDelay: Infinity,
@@ -261,6 +295,12 @@ export class CodexHarness implements Harness {
       child.once("error", (error) => this.fail(error));
       child.once("close", () => {
         input.close();
+        const observer = this.releaseObserver;
+        this.releaseObserver = undefined;
+        void confirmOwnedExit(child).then(confirmed => observer?.({ type: confirmed ? "resource.released" : "resource.unconfirmed", data: { id: resourceId, pid: child.pid, scope: "harness" } })).catch(error => {
+          this.resourceError = error instanceof Error ? error : new Error(String(error));
+          this.fail(this.resourceError);
+        });
         this.child = undefined;
         this.opening = undefined;
         this.fail(
@@ -274,6 +314,8 @@ export class CodexHarness implements Harness {
         capabilities: { experimentalApi: true },
       });
       this.write({ method: "initialized", params: {} });
+      this.lastActivity = Date.now();
+      this.warmMs = Math.max(5000, Math.min(60000, Math.max(this.warmMs, (Date.now() - began) * 4)));
     })();
     try {
       await this.opening;
@@ -290,6 +332,7 @@ export class CodexHarness implements Harness {
     this.child.stdin.write(JSON.stringify(value) + "\n");
   }
   private rpc(method: string, params: unknown): Promise<any> {
+    this.lastActivity = Date.now();
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -616,13 +659,23 @@ export class CodexHarness implements Harness {
     return { ...report, environment };
   }
   async execute(request: HarnessRequest): Promise<HarnessResult> {
+    if (this.child && !this.users) this.warmMs = Math.max(5000, Math.min(60000, this.warmMs * 0.7 + (Date.now() - this.lastActivity) * 1.5 * 0.3));
+    this.users++;
+    try { return await this.executeTurn(request); }
+    finally { this.users--; this.lastActivity = Date.now(); }
+  }
+  private async executeTurn(request: HarnessRequest): Promise<HarnessResult> {
     this.validateConfig(request.config);
     await this.refreshCredential(request.config.credentialEnv);
     await this.open();
+    this.releaseObserver = request.onEvent;
+    request.onEvent({ type: "resource.acquired", data: { id: this.resourceId, pid: this.child?.pid, scope: "harness" } });
     const c = request.workspaceBoundary ? { ...request.config, access: "read-only" as const } : request.config;
     const config: Obj = {
       "features.multi_agent": false,
       "features.memories": false,
+      "features.plugins": false,
+      "features.apps": false,
     };
     const verificationDirectory = request.verificationDirectory;
     let environment = request.executionEnvironment;
@@ -637,7 +690,7 @@ export class CodexHarness implements Harness {
       request.contextIsolation === "branch"
     )
       config["project_doc_max_bytes"] = 0;
-    if (c.baseUrl || request.contextIsolation === "branch") {
+    {
       // A Team executor gets its tools from the Team contract and native coding
       // harness. User-global MCP/plugin inventories are not implicit dependencies.
       const native = await this.rpc("config/read", { includeLayers: false });
@@ -815,6 +868,7 @@ export class CodexHarness implements Harness {
         error:
           "Native history does not establish a terminal state for this turn.",
       };
+    this.executions.delete(sessionId);
     return {
       status: turn.status,
       text: (turn.items ?? [])
@@ -841,15 +895,6 @@ export class CodexHarness implements Harness {
   }
   async close(): Promise<void> {
     this.stopped = true;
-    const child = this.child;
-    if (!child) return;
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => child.kill(), 3000);
-      child.once("close", () => {
-        clearTimeout(timer);
-        resolve();
-      });
-      child.stdin.end();
-    });
+    await this.releaseProcess();
   }
 }

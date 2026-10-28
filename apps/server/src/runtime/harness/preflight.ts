@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawnOwned } from "./owned-process.js";
 import { createInterface } from "node:readline";
 import { existsSync, mkdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -55,7 +55,7 @@ export async function probeCodexExecution(command: { command: string; args: stri
   const scratch = environment?.directory ?? realpathSync(input.scratchDirectory);
   const toml = (v: any): string => v && typeof v === "object" && !Array.isArray(v)
     ? "{" + Object.entries(v).map(([k, x]) => JSON.stringify(k) + "=" + toml(x)).join(",") + "}" : JSON.stringify(v);
-  const overrides = { ...configuration, default_permissions: "teamswarm-review", ...(process.platform === "win32" ? { "windows.sandbox": "mxc" } : {}) };
+  const overrides = { ...configuration, "features.plugins": false, "features.apps": false, default_permissions: "teamswarm-review", ...(process.platform === "win32" ? { "windows.sandbox": "mxc" } : {}) };
   const sourceProbe = path.join(input.workspace, `.teamswarm-preflight-${randomUUID()}`);
   const script = path.join(scratch, "execution-preflight.cjs");
   const code = `const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),http=require('node:http'),{spawnSync}=require('node:child_process'),{DatabaseSync}=require('node:sqlite');
@@ -66,8 +66,8 @@ export async function probeCodexExecution(command: { command: string; args: stri
     const child=spawnSync(${JSON.stringify(process.execPath)},['-e','process.stdout.write("child-ok")'],{encoding:'utf8',windowsHide:true});assert.equal(child.status,0,child.stderr);assert.equal(child.stdout,'child-ok');
     const server=http.createServer((req,res)=>res.end('loopback-ok'));server.listen(0,'127.0.0.1',async()=>{try{assert.equal(await(await fetch('http://127.0.0.1:'+server.address().port)).text(),'loopback-ok');console.log('SOURCE_READ_OK SOURCE_WRITE_DENIED CHILD_PROCESS_OK SQLITE_OK LOOPBACK_OK')}catch(e){console.error(e);process.exitCode=1}finally{server.close()}});`;
   writeFileSync(script, code, { mode: 0o600 });
-  const child = spawn(command.command, [...command.args, ...Object.entries(overrides).flatMap(([k,v]) => ["-c", k + "=" + toml(v)]), "app-server", "--listen", "stdio://"],
-    { cwd: input.workspace, windowsHide: true, stdio: "pipe", env: { ...process.env, ...(process.env.TEAM_CODEX_HOME ? { CODEX_HOME: process.env.TEAM_CODEX_HOME } : {}) } });
+  const child = await spawnOwned(command.command, [...command.args, ...Object.entries(overrides).flatMap(([k,v]) => ["-c", k + "=" + toml(v)]), "app-server", "--listen", "stdio://"],
+    { cwd: input.workspace, windowsHide: true, env: { ...process.env, ...(process.env.TEAM_CODEX_HOME ? { CODEX_HOME: process.env.TEAM_CODEX_HOME } : {}) } });
   let id = 0, stderr = "";
   const pending = new Map<number, {resolve: (value: any) => void; reject: (error: Error) => void}>();
   const lines = createInterface({ input: child.stdout });
