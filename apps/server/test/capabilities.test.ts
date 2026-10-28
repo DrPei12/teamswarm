@@ -7,6 +7,8 @@ import { test } from "node:test";
 import { createApp } from "../src/app.js";
 import { executionConfig } from "../src/runtime/validation.js";
 import { capabilitiesInput } from "../src/runtime/capabilities.js";
+import { checkResource, deriveResource } from "../src/runtime/resource-control.js";
+import { checkExecutionCompatibility, canReuseNativeSession } from "../src/runtime/allocation-contract.js";
 import {
   deleteResource,
   resolveExecution,
@@ -120,6 +122,36 @@ const apiConnection = {
   credentialEnv: "CAPABILITY_TEST_KEY",
   models: ["qwen-code", "qwen-fast"],
 };
+
+test("independent ChatGPT connection reaches catalog, selection, checking and frozen execution",async()=>{
+  const a=await setup();
+  try{
+    const runtime=a.service.runtime, id=a.team.id, accountId=randomUUID();
+    const seed=runtime.catalog.capabilities.read(id);
+    runtime.catalog.capabilities.save(id,capabilitiesInput.parse({preferences:seed.preferences,expectedVersion:0,
+      enabledHarnesses:["codex","claude-code","grok","pi","opencode","deepseek-harness"],
+      connections:[{id:"chatgpt",name:"ChatGPT",kind:"subscription",enabled:true,subscriptionHarness:null,chatgptAccountId:accountId,endpoints:{},credentialEnv:null,models:["gpt-model","gpt-model-small"]}]}));
+    const resources=runtime.catalog.capabilities.combinations(id);
+    assert.equal(resources.length,12);
+    for(const resource of resources)assert.deepEqual(checkExecutionCompatibility(resource.config),[]);
+    const resource=resources.find(r=>r.config.harness==="claude-code")!;
+    const selection={resourceId:resource.id,resourceVersion:resource.version,reason:"Use Claude tools with ChatGPT"};
+    setHostAllocation({store:runtime.store,catalog:runtime.catalog},id,a.branch.id,1,selection);
+    const checked=await checkResource(runtime,id,resource.id,resource.version);
+    assert.equal(checked.configurationValid,true);assert.equal(checked.authenticated,false);
+    assert.equal(checked.connection,"chatgpt");assert.deepEqual(checked.models,[]);
+    const derived=deriveResource(runtime,id,{sourceResourceId:resource.id,expectedResourceVersion:resource.version,name:"Small GPT",model:"gpt-model-small",effort:"high",reason:"Short task"});
+    assert.equal(derived.config.chatgptAccountId,accountId);
+    const posted=await a.request(`/teams/${id}/conversations/${a.chat.id}/messages`,{content:"Use the selected model.",clientRequestId:randomUUID()});
+    assert.equal(posted.status,200);
+    const work=runtime.store.get<Work>("works",id,posted.body.workId);
+    const host=runtime.store.list<Member>("members",id).find(m=>m.kind==="host")!;
+    const resolved=resolveExecution({store:runtime.store,catalog:runtime.catalog},id,host,work);
+    assert.equal(resolved.conflict,null);assert.equal(resolved.config.harness,"claude-code");assert.equal(resolved.config.chatgptAccountId,accountId);
+    assert.equal(canReuseNativeSession(resolved.config,{...resolved.config}),true);
+    assert.equal(canReuseNativeSession(resolved.config,{...resolved.config,chatgptAccountId:randomUUID()}),false);
+  }finally{await a.close();}
+});
 
 test("Legacy migration preserves models on distinct endpoints and the native default", async () => {
   const a = await setup();

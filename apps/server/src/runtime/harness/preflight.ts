@@ -14,7 +14,7 @@ export function inspectExecution(input: PreflightInput, entry: string) {
   const source = realpathSync(input.workspace);
   const installed = statSync(entry);
   if (!installed.isFile()) throw new Error("The installed Harness entry is not a file.");
-  if (input.config.credentialEnv && !process.env[input.config.credentialEnv])
+  if (input.config.credentialEnv && !input.modelCredentialPresent && !process.env[input.config.credentialEnv])
     throw new Error(`Credential environment variable ${input.config.credentialEnv} is not set.`);
   if (input.config.access === "workspace-write" && input.writePaths === undefined && !input.legacyWorkspaceWrite)
     throw new Error("write_scope_required: assign explicit project-relative writePaths before starting this member.");

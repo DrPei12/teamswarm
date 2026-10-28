@@ -2,6 +2,8 @@ import type { AttemptExecutionSnapshot, ResourceSelection } from "./allocation.j
 
 export type Access = "read-only" | "workspace-write";
 export interface ExecutionConfig {
+  /** ChatGPT model authorization; independent of the native Harness login. */
+  chatgptAccountId?: string | null;
   harness: string;
   model: string | null;
   provider: string | null;
@@ -21,7 +23,8 @@ export interface RuntimeSettings {
   teamId: string;
   workspace: string;
   config: ExecutionConfig;
-  maxConcurrent: number;
+  /** Legacy saved value, ignored. Admission follows current device resources. */
+  maxConcurrent?: number;
   maxWorksPerRun: number;
   maxTurnsPerWork?: number;
   timeoutSeconds: number;
@@ -361,6 +364,8 @@ export interface ToolSpec {
   inputSchema: Record<string, unknown>;
 }
 export interface HarnessRequest {
+  /** Execution-only route. Never persist tokens or use this URL as session identity. */
+  modelRoute?: { token: string; sourceConfig: ExecutionConfig };
   executionRequirements?: ExecutionRequirements;
   executionEnvironment?: PreparedExecutionEnvironment;
   workspace: string;
@@ -397,6 +402,7 @@ export interface Harness {
   inspect(): Promise<Record<string, unknown>>;
   validateConfig?(config: ExecutionConfig): void;
   preflight?(request: {
+    modelCredentialPresent?: boolean;
     workspace: string;
     config: ExecutionConfig;
     writePaths?: string[];

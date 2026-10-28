@@ -19,6 +19,7 @@ const nullableName = z.string().trim().min(1).max(200).nullable().default(null);
 export const executionConfig = z
   .object({
     harness: z.string().trim().min(1).max(64).default("codex"),
+    chatgptAccountId: z.string().uuid().nullable().optional(),
     model: nullableName,
     provider: nullableName,
     baseUrl: z
@@ -63,7 +64,7 @@ export const runtimeSettings = z
     expectedVersion: z.number().int().min(0),
     workspace: z.string().trim().min(1).max(4096),
     config: executionConfig,
-    maxConcurrent: z.number().int().min(1).max(8).default(2),
+    maxConcurrent: z.number().int().positive().optional(),
     maxWorksPerRun: z.number().int().min(2).max(100).default(20),
     maxTurnsPerWork: z.number().int().min(1).max(100).default(20),
     timeoutSeconds: z.number().int().min(10).max(3600).default(600),
@@ -94,6 +95,15 @@ export function parse<T extends z.ZodType>(
   return result.data;
 }
 export const tools = {
+  team_device_resources: {
+    description: "Host only. Read fresh device memory, Windows commit headroom, CPU load, process counts, shared reserve policy, per-Harness measured costs and estimated additional starts. This is device-wide across Teams. Forecasts change with load; use them when arranging parallel work.",
+    schema: z.object({}).strict(),
+  },
+  team_set_device_reserve: {
+    description: "Host dialogue only. Apply the user's explicit device memory reserve (MiB, 1024 MiB = 1 GiB), or null for automatic headroom. Optionally set the CPU utilization target. This affects all Teams on this device, including queued work; running work continues. Read team_device_resources for expectedVersion. Cite the latest user message and its complete verbatim content as authorizationQuote. Preserve the user's reserve until they change it. Explain the applied setting in the conversation.",
+    schema: z.object({expectedVersion:z.number().int().nonnegative(),reserveMemoryMiB:z.number().int().nonnegative().nullable(),
+      cpuTargetPercent:z.number().min(10).max(100).optional(),sourceMessageId:key,authorizationQuote:text}).strict(),
+  },
   team_save_insight: {
     description:
       "Preserve a useful idea or decision with exact sourceMessageIds from the current input or team_state. Use a stable key and expectedRevision (0 for new). Proposed/rejected/superseded ideas are NOT effective requirements. Host records explicit user judgments as adopted, uncertainty as proposed. When adopting a branch into mainline, keep its ideas proposed until team_adopt_branch atomically publishes them; use that tool instead of simply changing the insight status. Members may only propose. Never invent source IDs or turn a tentative idea into a commitment.",

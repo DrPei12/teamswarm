@@ -65,12 +65,12 @@ class OwnedProcess {
   try { var e=new Entry();e.size=(uint)Marshal.SizeOf(typeof(Entry));if(Process32First(snapshot,ref e))do { parents[e.pid]=e.parent; } while(Process32Next(snapshot,ref e)); } finally {CloseHandle(snapshot);}
   var own=new HashSet<uint>(roots);bool changed=true;while(changed){changed=false;foreach(var p in parents)if(own.Contains(p.Value)&&own.Add(p.Key))changed=true;}
   var memory=new Memory();memory.length=(uint)Marshal.SizeOf(typeof(Memory));if(!GlobalMemoryStatusEx(ref memory))throw new System.ComponentModel.Win32Exception();
-  var output=new StringBuilder(); output.Append("{\"totalPhysical\":").Append(memory.totalPhysical).Append(",\"availablePhysical\":").Append(memory.availablePhysical).Append(",\"availableCommit\":").Append(memory.availableCommit).Append(",\"processes\":[");bool first=true;
+  var output=new StringBuilder(); output.Append("{\"totalPhysical\":").Append(memory.totalPhysical).Append(",\"availablePhysical\":").Append(memory.availablePhysical).Append(",\"totalCommit\":").Append(memory.totalCommit).Append(",\"availableCommit\":").Append(memory.availableCommit).Append(",\"systemProcessCount\":").Append(parents.Count).Append(",\"processes\":[");bool first=true;
   int samplerPid=Process.GetCurrentProcess().Id;
   foreach(uint pid in own) { if(pid==(uint)samplerPid)continue; try { using(var p=Process.GetProcessById((int)pid)){
-    long started=p.StartTime.ToUniversalTime().Ticks,working=p.WorkingSet64,committed=p.PrivateMemorySize64;
+    long started=p.StartTime.ToUniversalTime().Ticks,working=p.WorkingSet64,committed=p.PrivateMemorySize64,cpu=(long)p.TotalProcessorTime.TotalMilliseconds;
     if(!first)output.Append(',');first=false;
-    output.Append("{\"pid\":").Append(pid).Append(",\"parentPid\":").Append(parents.ContainsKey(pid)?parents[pid]:0).Append(",\"identity\":\"windows:").Append(started).Append("\",\"workingSet\":").Append(working).Append(",\"privateBytes\":").Append(committed).Append('}');
+    output.Append("{\"pid\":").Append(pid).Append(",\"parentPid\":").Append(parents.ContainsKey(pid)?parents[pid]:0).Append(",\"identity\":\"windows:").Append(started).Append("\",\"workingSet\":").Append(working).Append(",\"privateBytes\":").Append(committed).Append(",\"cpuMilliseconds\":").Append(cpu).Append('}');
   } }catch(ArgumentException){}catch(System.ComponentModel.Win32Exception){}catch(InvalidOperationException){} }
   Console.WriteLine(output.Append("]}").ToString());return 0;
  }
@@ -139,8 +139,10 @@ export async function spawnOwned(command: string, args: string[], options: Spawn
 }
 
 export interface ProcessSample {
-  totalPhysical: number; availablePhysical: number; availableCommit?: number;
-  processes: { pid: number; parentPid: number; identity: string; workingSet: number; privateBytes: number }[];
+  totalPhysical: number; availablePhysical: number; availableCommit?: number; totalCommit?: number;
+  systemProcessCount?: number; cpuCores?: number; cpuBusyPercent?: number; cpuModel?: string;
+  processCoverage?: "descendants" | "unavailable";
+  processes: { pid: number; parentPid: number; identity: string; workingSet: number; privateBytes: number; cpuMilliseconds?: number }[];
 }
 export async function sampleWindowsProcesses(root: number): Promise<ProcessSample> {
   const executable = await windowsBridge();

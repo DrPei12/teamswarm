@@ -8,6 +8,8 @@ import {
 
 export type Language = "en" | "zh-CN";
 export const zhCN: Record<string, string> = {
+  "Read device resources": "读取设备资源",
+  "Set device memory reserve": "设置设备内存预留",
   "Context window tokens": "上下文 token 数",
   "Maximum output tokens": "最大输出 token 数",
   "A context window override requires Pi or OpenCode":
@@ -178,6 +180,16 @@ export const zhCN: Record<string, string> = {
   "A previous harness check could not be stopped. Close the harness processes before restarting TeamSwarm.":
     "未能确认上一次 Harness 检查已经停止。请关闭相关进程后重新打开 TeamSwarm。",
   "Subscription account": "订阅账号",
+  "Continue with ChatGPT": "使用 ChatGPT 继续",
+  "Continue with ChatGPT first.": "请先连接 ChatGPT 账号。",
+  "Use your ChatGPT models with any enabled Harness.":
+    "将 ChatGPT 模型用于任意已启用的 Harness。",
+  "ChatGPT account": "ChatGPT 账号",
+  "Choose an account": "选择账号",
+  "Add account": "添加账号",
+  "Open ChatGPT sign-in": "打开 ChatGPT 登录页",
+  "Signed out on this device. Disconnect TeamSwarm in ChatGPT Settings to end remote access.":
+    "已在本机退出。请在 ChatGPT 设置中断开 TeamSwarm，以结束远程授权。",
   "Checking sign-in…": "正在检查登录…",
   "Status unavailable": "未能读取状态",
   "Install to sign in": "安装后可登录",

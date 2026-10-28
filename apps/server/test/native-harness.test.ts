@@ -162,10 +162,7 @@ test("native configuration import preserves routing and never imports executable
     models: ["model-a"],
     credentialEnv: "TEST_MODEL_KEY",
   });
-  assert.throws(
-    () => resolveConnection(connection, "codex", "model-a", "read-only"),
-    /protocol/,
-  );
+  assert.equal(resolveConnection(connection,"codex","model-a","read-only").config.protocol,"chat-completions");
   assert.throws(
     () => resolveConnection(connection, "pi", "missing", "read-only"),
     /model/,

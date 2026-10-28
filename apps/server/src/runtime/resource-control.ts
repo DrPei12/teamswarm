@@ -6,7 +6,7 @@ import type { Member, Work, Run } from "./types.js";
 import type { z } from "zod";
 import type { tools } from "./validation.js";
 
-export const resourceTools = ["team_check_resource", "team_select_resource", "team_derive_resource"];
+export const resourceTools = ["team_check_resource", "team_select_resource", "team_derive_resource", "team_device_resources", "team_set_device_reserve"];
 
 function resource(runtime: TeamRuntime, teamId: string, id: string, version: number) {
   const value = runtime.catalog.resource(teamId, id);
@@ -18,7 +18,7 @@ function resource(runtime: TeamRuntime, teamId: string, id: string, version: num
 export async function checkResource(runtime: TeamRuntime, teamId: string, id: string, version: number) {
   const value = resource(runtime, teamId, id, version);
   const config = value.config;
-  const subscription = !config.baseUrl && !config.credentialEnv;
+  const subscription = !config.chatgptAccountId && !config.baseUrl && !config.credentialEnv;
   const adapter = runtime.harnesses.get(config.harness);
   let inspection: Record<string, any> = {};
   try { inspection = await adapter?.inspect() ?? {}; } catch { /* Unknown, not a fabricated failed login. */ }
@@ -37,9 +37,9 @@ export async function checkResource(runtime: TeamRuntime, teamId: string, id: st
   return {
     resourceId: id, resourceVersion: version, checkedAt: new Date().toISOString(),
     harness: config.harness, model: config.model,
-    connection: subscription ? "subscription" : "api", installed,
-    authenticated: subscription && typeof inspection.authenticated === "boolean" ? inspection.authenticated : null,
-    credentialPresent: config.credentialEnv ? !!process.env[config.credentialEnv] : null,
+    connection: config.chatgptAccountId ? "chatgpt" : subscription ? "subscription" : "api", installed,
+    authenticated: config.chatgptAccountId ? runtime.models.accounts.list().some(a=>a.id===config.chatgptAccountId&&a.connected) : subscription && typeof inspection.authenticated === "boolean" ? inspection.authenticated : null,
+    credentialPresent: config.chatgptAccountId ? runtime.models.accounts.list().some(a=>a.id===config.chatgptAccountId&&a.connected) : config.credentialEnv ? !!process.env[config.credentialEnv] : null,
     configurationValid: valid && issues.length === 0, issues,
     modelAvailability: "not_checked", models,
     guidance: "Installation, login, credential presence and model availability are separate facts. This check does not consume a model response or infer subscription quota. Custom API model IDs come from the configured provider.",

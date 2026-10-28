@@ -10,6 +10,7 @@ import { TeamRuntime } from './runtime/engine.js';
 import { runtimeRoutes } from './runtime/routes.js';
 import { productRoutes } from './product.js';
 import type { Harness } from './runtime/types.js';
+import type { ResourceSampling } from './runtime/resources.js';
 
 const DEFAULT_API_PORT = 4318;
 const DEFAULT_WEB_PORT = 4317;
@@ -23,6 +24,7 @@ export interface CreateAppOptions {
   webDistDir?: string;
   apiPort?: number;
   harnesses?: Harness[];
+  resourceSampling?: ResourceSampling;
 }
 
 export interface TeamService {
@@ -186,7 +188,7 @@ export function createApp(options: CreateAppOptions = {}): TeamService {
   const apiPort = options.apiPort ?? DEFAULT_API_PORT;
   const store = new TeamStore({ dataDir: options.dataDir ?? defaultDataDir() });
   let runtime: TeamRuntime;
-  try { runtime = new TeamRuntime(store, options.harnesses); } catch (error) { store.close(); throw error; }
+  try { runtime = new TeamRuntime(store, options.harnesses, options.resourceSampling); } catch (error) { store.close(); throw error; }
   const app = express();
   const webDistDir = path.resolve(options.webDistDir ?? defaultWebDistDir());
 

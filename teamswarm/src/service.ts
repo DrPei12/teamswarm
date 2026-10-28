@@ -829,7 +829,6 @@ class ProductClient {
         expectedVersion: settings.version,
         workspace: settings.workspace,
         config: settings.config,
-        maxConcurrent: settings.maxConcurrent,
       },
       "PUT",
     );

@@ -160,7 +160,7 @@ export class NativeHarness implements Harness {
     mkdirSync(home, { recursive: true, mode: 0o700 });
     const binding = JSON.stringify({
       workspace: path.resolve(request.workspace),
-      config: c,
+      config: request.modelRoute?.sourceConfig ?? c,
       ...(request.workspaceBoundary ? { workspaceBoundary: request.workspaceBoundary } : {}),
       ...(subscription ? { accountScope: subscriptionScope(this.id as "claude-code" | "grok") } : {}),
     });
@@ -213,6 +213,13 @@ export class NativeHarness implements Harness {
         if (!subscription) {
           env.ANTHROPIC_API_KEY = env[c.credentialEnv!];
           env.ANTHROPIC_BASE_URL = c.baseUrl!;
+          if (request.modelRoute) {
+            env.ANTHROPIC_DEFAULT_SONNET_MODEL = c.model!;
+            env.ANTHROPIC_DEFAULT_OPUS_MODEL = c.model!;
+            env.ANTHROPIC_DEFAULT_HAIKU_MODEL = c.model!;
+            env.CLAUDE_CODE_SUBAGENT_MODEL = c.model!;
+            env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = "1";
+          }
         }
         env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
         env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = "8192";

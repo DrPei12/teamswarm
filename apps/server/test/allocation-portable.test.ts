@@ -87,8 +87,10 @@ test("one model binds many Harnesses and one Harness saves many models", () => {
 
 test("export refuses incompatible configs and secrets that cannot travel", () => {
   assert.throws(() =>
-    buildPortablePackage({ resources: [resource("bad", config({ harness: "codex", protocol: "chat-completions" }))], selections: [] }),
+    buildPortablePackage({ resources: [resource("bad", config({ harness: "codex", protocol: "anthropic-messages", effort: "high" }))], selections: [] }),
     (error) => isServiceError(error, 400, "incompatible_resource"));
+  const crossProtocol = buildPortablePackage({ resources: [resource("bridge", config({ harness: "codex", protocol: "chat-completions" }))], selections: [] });
+  assert.equal(previewPortableImport(crossProtocol, []).ok, true);
   assert.throws(() =>
     buildPortablePackage({ resources: [resource("bad", config({ credentialEnv: null }))], selections: [] }),
     (error) => isServiceError(error, 400, "incompatible_resource"));
@@ -149,7 +151,7 @@ test("preview reports package-internal failures with stable codes", () => {
     [(() => { const p = bundle(); delete (p as { version?: unknown }).version; return p; })(), "missing_version"],
     [{ ...bundle(), resources: [wire(), wire()] }, "duplicate_resource"],
     [{ ...bundle(), resources: [{ ...wire(), config: { ...config(), credentialEnv: null } }] }, "missing_configuration"],
-    [{ ...bundle(), resources: [wire("example", config({ harness: "codex", protocol: "chat-completions" }))] }, "incompatible_protocol"],
+    [{ ...bundle(), resources: [wire("example", config({ harness: "codex", protocol: "chat-completions", credentialEnv: null }))] }, "missing_configuration"],
     [{ ...bundle(), resources: [wire("example", config({ harness: "pi", effort: "higher" }))] }, "unsupported_effort"],
     [{ ...bundle(), resources: [wire("example", config({ harness: "codex", thinkingFormat: "qwen" }))] }, "unsupported_thinking_format"],
     [{ ...bundle(), token: "not-a-real-secret" }, "invalid_package"],

@@ -75,12 +75,15 @@ test("resource admission accounts for reservations, Host headroom and per-attemp
   const root=mkdtempSync(path.join(tmpdir(),"teamswarm-resource-budget-"));
   const service=createApp({dataDir:root,harnesses:[]}),MiB=1024*1024;
   let sample={totalPhysical:4096*MiB,availablePhysical:1100*MiB,availableCommit:700*MiB,processes:[] as any[]};
-  const harness=new CodexHarness(), resources=new RuntimeResources(service.runtime.store,new Map([[harness.id,harness]]),()=>{},async()=>sample);
+  let currentPhysical=sample.availablePhysical;
+  const harness=new CodexHarness(), resources=new RuntimeResources(service.runtime.store,new Map([[harness.id,harness]]),()=>{},async()=>sample,()=>currentPhysical);
   try {
     await resources.refresh();
     assert.equal(resources.canStart("codex",false),true);resources.reserve("first","codex");
     assert.equal(resources.canStart("codex",false),false);assert.equal(resources.canStart("codex",true),true);
     resources.finish("first");assert.equal(resources.canStart("codex",false),true);
+    currentPhysical=600*MiB;assert.equal(resources.canStart("codex",false),false);
+    currentPhysical=sample.availablePhysical;
     const team=service.store.createTeam("Owner","");
     const work={id:"first",teamId:team.id,memberId:"reader"} as Work;
     const attempt={id:"attempt",config:{harness:"codex"}} as Attempt;
@@ -88,6 +91,7 @@ test("resource admission accounts for reservations, Host headroom and per-attemp
     assert.equal(resources.state(team.id).groups[0].state,"resident");
     resources.observe(work,attempt,{type:"resource.released",data:{id:"group",pid:123}});
     assert.equal(resources.state(team.id).groups[0].state,"released");
+    await resources.refresh(); // Finish the acquisition-triggered sample before changing the fixture.
     sample={...sample,availableCommit:200*MiB};await resources.refresh();
     assert.equal(resources.canStart("codex",true),false);
   } finally {await resources.close();await harness.close();await service.close();rmSync(root,{recursive:true,force:true});}

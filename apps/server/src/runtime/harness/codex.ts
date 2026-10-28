@@ -666,7 +666,7 @@ export class CodexHarness implements Harness {
   }
   private async executeTurn(request: HarnessRequest): Promise<HarnessResult> {
     this.validateConfig(request.config);
-    await this.refreshCredential(request.config.credentialEnv);
+    if (!request.modelRoute) await this.refreshCredential(request.config.credentialEnv);
     await this.open();
     this.releaseObserver = request.onEvent;
     request.onEvent({ type: "resource.acquired", data: { id: this.resourceId, pid: this.child?.pid, scope: "harness" } });
@@ -711,7 +711,7 @@ export class CodexHarness implements Harness {
         requires_openai_auth: false,
         request_max_retries: 0,
         stream_max_retries: 0,
-        ...(c.credentialEnv ? { env_key: c.credentialEnv } : {}),
+        ...(request.modelRoute ? { http_headers: { Authorization: "Bearer " + request.modelRoute.token } } : c.credentialEnv ? { env_key: c.credentialEnv } : {}),
       };
     }
     let model = c.model;

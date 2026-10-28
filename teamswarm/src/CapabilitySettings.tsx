@@ -23,6 +23,7 @@ import { useI18n } from "./i18n";
 import { Disclosure } from "./Disclosure";
 import { HarnessInstallation } from "./HarnessInstallation";
 import { HarnessAccount } from "./HarnessAccount";
+import { ChatGPTConnection } from "./ChatGPTConnection";
 import { ModelPicker, modelProvider } from "./ModelPicker";
 import type { HarnessInspection } from "./harnessCatalog";
 import "./capabilities.css";
@@ -46,13 +47,11 @@ const protocolNames = {
   "anthropic-messages": "Anthropic Messages",
 };
 const compatible = (c: ModelAccess, id: string) =>
-  c.kind === "subscription"
-    ? c.subscriptionHarness === id
-    : id === "codex"
-      ? !!c.endpoints.responses
-      : ["claude-code", "deepseek-harness"].includes(id)
-        ? !!c.endpoints["anthropic-messages"]
-        : Object.keys(c.endpoints).length > 0;
+  c.chatgptAccountId || (c.kind === "subscription" && !c.subscriptionHarness)
+    ? true
+    : c.kind === "subscription"
+      ? c.subscriptionHarness === id
+      : Object.keys(c.endpoints).length > 0;
 type Installation = { installed: boolean; version: string | null };
 type Tab = "harnesses" | "connections" | "preferences";
 
@@ -727,6 +726,11 @@ function ConnectionEditor({
         throw new Error(t("Give this connection a name."));
       if (draft.kind === "api" && !draft.models.length)
         throw new Error(t("Add at least one model."));
+      if (draft.kind === "subscription" && !draft.subscriptionHarness) {
+        if (!draft.chatgptAccountId)
+          throw new Error(t("Continue with ChatGPT first."));
+        if (!draft.models.length) throw new Error(t("Add at least one model."));
+      }
       const ref = draft.kind === "api" ? await credential() : null;
       if (draft.kind === "api" && !ref)
         throw new Error(t("Enter an API key first."));
@@ -786,7 +790,8 @@ function ConnectionEditor({
                   models: [],
                   endpoints: kind === "api" ? { "chat-completions": "" } : {},
                   credentialEnv: null,
-                  subscriptionHarness: kind === "subscription" ? "codex" : null,
+                  subscriptionHarness: null,
+                  chatgptAccountId: null,
                 });
                 setCatalog([]);
                 setSecret("");
@@ -914,34 +919,50 @@ function ConnectionEditor({
           <>
             <div className="cap-account-options">
               {[
-                { id: "codex", name: "ChatGPT" },
+                { id: "chatgpt", name: "ChatGPT" },
+                { id: "codex", name: "ChatGPT (Codex)" },
                 { id: "claude-code", name: "Claude" },
                 { id: "grok", name: "Grok" },
               ].map((a) => (
                 <button
                   type="button"
                   key={a.id}
-                  aria-pressed={draft.subscriptionHarness === a.id}
+                  aria-pressed={
+                    (draft.subscriptionHarness ?? "chatgpt") === a.id
+                  }
                   onClick={() => {
                     setDraft({
                       ...draft,
-                      subscriptionHarness: a.id,
+                      subscriptionHarness: a.id === "chatgpt" ? null : a.id,
+                      chatgptAccountId: null,
                       models: [],
                     });
                     setError("");
                   }}
                 >
                   {a.name}
-                  {draft.subscriptionHarness === a.id && <Check size={14} />}
+                  {(draft.subscriptionHarness ?? "chatgpt") === a.id && (
+                    <Check size={14} />
+                  )}
                 </button>
               ))}
             </div>
-            <p className="cap-footnote">
-              {t(
-                "Subscriptions use their official Harness login. API connections can be shared across compatible Harnesses.",
-              )}
-            </p>
-            {draft.subscriptionHarness === "codex" ? (
+            {!draft.subscriptionHarness ? (
+              <ChatGPTConnection
+                value={draft.chatgptAccountId}
+                onChange={(id) =>
+                  setDraft((v) => ({ ...v, chatgptAccountId: id, models: [] }))
+                }
+                onModels={(models) =>
+                  setCatalog(
+                    models.map((model) => ({
+                      ...model,
+                      provider: "OpenAI",
+                    })),
+                  )
+                }
+              />
+            ) : draft.subscriptionHarness === "codex" ? (
               <CodexAccount
                 inspection={inspection}
                 onChanged={() => refresh((v) => v + 1)}
@@ -974,7 +995,7 @@ function ConnectionEditor({
           </div>
           <p>
             {t(
-              draft.kind === "api"
+              draft.kind === "api" || !draft.subscriptionHarness
                 ? "Choose models from the provider, or enter their model IDs."
                 : "Choose specific models, or let Host use the account's available models.",
             )}

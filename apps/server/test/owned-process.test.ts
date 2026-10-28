@@ -41,6 +41,8 @@ test("Windows Job reclaims the execution when its owning service dies", {skip:pr
 test("Windows memory sampling reports physical and private committed bytes separately",{skip:process.platform!=="win32"},async()=>{
   const sample=await sampleWindowsProcesses(process.pid);
   assert.ok(sample.totalPhysical>sample.availablePhysical);assert.ok(sample.availableCommit!>0);
+  assert.ok(sample.totalCommit!>=sample.availableCommit!);assert.ok(sample.systemProcessCount!>=sample.processes.length);
   const own=sample.processes.find(p=>p.pid===process.pid)!;
   assert.ok(own.workingSet>0);assert.ok(own.privateBytes>0);assert.match(own.identity,/^windows:/);
+  assert.ok(own.cpuMilliseconds!>=0);
 });

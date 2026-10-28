@@ -401,8 +401,9 @@ export class RuntimeStore {
           "active_execution",
           "Stop and reconcile pending work before changing runtime settings.",
         );
+      const { maxConcurrent: _legacyConcurrency, ...deviceManagedInput } = input;
       const settings = {
-        ...input,
+        ...deviceManagedInput,
         workspace,
         teamId,
         version: expectedVersion + 1,

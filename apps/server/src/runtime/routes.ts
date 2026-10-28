@@ -9,6 +9,7 @@ import { supportsSubscription, subscriptionAccounts } from "./harness/subscripti
 import { homedir } from "node:os";
 import { resourceInput, directoryQuery, directoryDetail } from "./catalog.js";
 import { capabilitiesInput } from "./capabilities.js";
+import { devicePolicyInput } from "./resources.js";
 import { allocationRequest, resourceSelection } from "./allocation-contract.js";
 import {
   attemptAllocation,
@@ -45,6 +46,20 @@ import {
 export function runtimeRoutes(runtime: TeamRuntime): Router {
   const router = Router();
   const store = runtime.store;
+  router.get("/device-resources", async (_req,res) => { await runtime.resources.refresh(); res.json(runtime.resources.state()); });
+  router.put("/device-resources/policy", (req,res) => res.json(runtime.resources.configure(parse(devicePolicyInput,req.body))));
+  const modelAccountOperation=async<T>(operation:()=>Promise<T>):Promise<T>=>{
+    try{return await operation();}catch(error){throw badRequest("chatgpt_connection_error",error instanceof Error ? error.message : "ChatGPT connection failed.");}
+  };
+  router.get("/model-accounts/chatgpt", (_req,res) => res.json({ accounts:runtime.models.accounts.list() }));
+  router.post("/model-accounts/chatgpt/sign-in", async (req,res) => {
+    const input = parse(z.object({accountId:z.string().uuid().optional()}).strict(),req.body);
+    res.json(await modelAccountOperation(()=>runtime.models.accounts.start(input.accountId)));
+  });
+  router.get("/model-accounts/chatgpt/sign-in/:id", (req,res) => res.json(runtime.models.accounts.status(param(req.params.id))));
+  router.delete("/model-accounts/chatgpt/sign-in/:id",(req,res)=>res.json(runtime.models.accounts.cancel(param(req.params.id))));
+  router.get("/model-accounts/chatgpt/:id/models", async (req,res) => res.json({models:await modelAccountOperation(()=>runtime.models.accounts.models(parse(z.string().uuid(),req.params.id)))}));
+  router.post("/model-accounts/chatgpt/:id/sign-out",async(req,res)=>res.json(await modelAccountOperation(()=>runtime.models.disconnect(parse(z.string().uuid(),req.params.id)))));
   router.get("/teams/:teamId/runtime-resources", (req,res) => {
     const teamId = param(req.params.teamId);
     if (!store.teams.getTeam(teamId)) throw notFound();

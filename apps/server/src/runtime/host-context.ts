@@ -49,6 +49,7 @@ export class HostContext {
     readonly store: RuntimeStore,
     readonly history: ProjectHistory,
     readonly catalog: TeamCatalog,
+    readonly deviceResources: () => unknown = () => null,
   ) {
     store.db.exec(`CREATE TABLE IF NOT EXISTS host_notes (
       team_id TEXT NOT NULL REFERENCES teams(id), branch_id TEXT NOT NULL, key TEXT NOT NULL,
@@ -384,7 +385,7 @@ export class HostContext {
                     attempt.config,
                   ),
                 },
-                memberConcurrencyLimit: run.settings.maxConcurrent,
+                deviceResources: this.deviceResources(),
                 activeMemberAttempts: this.store
                   .list<Attempt>("attempts", work.teamId)
                   .filter(

@@ -82,6 +82,16 @@ node report.mjs <json-file> --status open|done|blocked
 
 打开“成果与想法”，展开文件并选择历史版本和当前版本。关闭并重新打开 TeamSwarm，回到原团队，对该工作提出只读问题。兼容的 Harness 可以恢复原生会话；需要新会话时，从保存的项目事实接续。
 
+## 设备资源与任务排队
+
+Host 在安排工作时读取设备内存、CPU、进程占用、已运行任务和资源配置。运行时在每次启动前重新核算预算；单 Team 和整个服务的并发成员数由设备余量与实测执行开销决定。
+
+可以直接在对话中要求“为其他程序预留 8 GiB 内存”，或“恢复自动预留”。设置保存在本机，作用于该服务中的全部 Team。Windows 同时检查物理内存和提交空间；CPU 使用独立预算。各 Harness 的后续估算会随实际执行数据调整，正在启动的任务也会提前占用预算。
+
+任务因资源不足排队时，对话会显示原因、受影响的任务和默认处理方式。正在执行的工作继续进行；用户可以调整预留或任务安排。用户没有新指示时，任务保持排队，资源恢复后自动接续，并在实际开始执行后再次通知。同一次持续等待合并提示，重启服务后继续保留排队记录和通知状态。Host 保留一个受实际设备余量约束的控制通道，用于调整过高的预留。
+
+Windows 提供逐进程采样和所属进程组统计。其他系统当前使用设备内存与 CPU 采样，以及保守的启动开销估算；逐进程成本学习需要相应平台的采样支持。
+
 <a id="harnesses-and-models"></a>
 ## Harness 与模型
 
@@ -96,25 +106,31 @@ Harness 执行代理工具与运行循环，模型连接提供模型 API。执�
 | DeepSeek Harness | 本机单独安装 | 新原生会话读取保存的 TeamSwarm 工作 |
 | OpenCode | 本机单独安装 | 支持 |
 
-兼容性取决于安装版本、模型和协议。集成版本固定在 [config/harnesses.json](config/harnesses.json)，原生工具负责自己的账号登录与会话状态。
+集成版本固定在 [config/harnesses.json](config/harnesses.json)。Harness 负责自己的工具、权限与会话，模型来源由独立的连接提供。同一模型连接可以分配给六种 Harness；跨协议组合由本机服务转换 Responses、Chat Completions 和 Anthropic Messages。
 
-在执行设置中选择 Harness，连接或检查已有账号。配置 API 时：
+在团队能力中分别启用 Harness 和添加模型连接。选择 **ChatGPT → Continue with ChatGPT**，在官方页面授权后加载账号模型目录，再选择提供给 Host 分配的模型。ChatGPT 连接也可用于 Claude Code；Claude Code 自己执行命令、处理工具结果和继续会话。原有 **ChatGPT (Codex)** 入口保留 Codex 原生账号方式。
 
-1. 安装支持该提供方协议的 Harness。
+ChatGPT 连接采用 [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) 的独立账号授权，使用账号目录中的模型和已授权的套餐额度。Windows 使用系统加密存储可续期凭据；刷新、退出和重新登录按账号串行处理。取消未完成的登录后可重新发起。退出会停止本机使用并请求远端撤销；远端未完成时界面提供处理入口。
+
+配置 API 时：
+
+1. 安装任务需要的 Harness。
 2. 填写官方 API 地址和账号可用的模型。
-3. 选择双方支持的协议，例如 Chat Completions 或 Anthropic Messages。
+3. 选择提供方支持的协议，例如 Responses、Chat Completions 或 Anthropic Messages。
 4. 通过桌面凭据存储保存 Key，或填写环境变量引用。
 5. 检查可用状态，并运行包含实际工具调用的小任务。
 
-例如，DeepSeek 连接使用 `https://api.deepseek.com`、其支持的 Chat Completions 协议，以及 Pi 或 OpenCode 等兼容 Harness。模型以提供方当前账号目录为准。
+例如，DeepSeek 连接使用 `https://api.deepseek.com` 和 Chat Completions 协议，可由 Pi 原生使用，也可通过协议转换交给 Claude Code。模型以提供方当前账号目录为准。
+
+协议转换支持文本、嵌入式图片、函数工具、工具结果、流式输出与 JSON Schema 输出。每次执行使用独立路由和临时凭据，结束即撤销；一个服务共用一个回环监听器。当前最多同时处理 32 个模型请求，每条执行路由最多 8 个，超限返回繁忙状态。输入上限 8 MiB、响应上限 16 MiB；原生会话的模型元数据达到 16 MiB 时要求新建会话，保留已有记录。供应商托管工具和跨协议精确 token 计数另行支持；不支持的请求会返回具体错误。
 
 使用环境变量时，在启动服务前设置 `DEEPSEEK_API_KEY` 等变量，资源中只填写变量名。`TEAM_CREDENTIAL_FILES` 接受一个 JSON 映射，将环境变量名关联到包含单行密钥的绝对文件路径。
 
 “执行资源与分配”中的任务资源优先于成员默认。每次执行保存实际配置，编辑影响后续工作。资源导入导出携带配置与密钥引用，目标设备需要单独配置对应凭据。
 
-Pi 和 OpenCode 支持“最大输出 token 数”（`maxOutputTokens`，默认 8192）和“上下文 token 数”（`contextWindowTokens`，默认 131072）。设置为模型支持的值，输入、推理和输出共享上下文容量，输出限制包含推理 tokens。达到长度限制的失败保留供恢复处理，其他 Harness 拒绝这两项覆盖参数。
+Pi 和 OpenCode 支持“最大输出 token 数”（`maxOutputTokens`，默认 8192）和“上下文 token 数”（`contextWindowTokens`，默认 131072）。采用协议转换的 API 连接也支持输出限制。ChatGPT 套餐连接采用服务自身的输出限制，自定义输出上限会被拒绝；上下文容量覆盖仍限 Pi 和 OpenCode。输入、推理和输出共享上下文容量，输出限制包含推理 tokens。达到长度限制的失败保留供恢复处理。
 
-Pi 的 Chat Completions 支持提供方允许的 `minimal`、`low`、`medium`、`high`、`xhigh` 或 `max` 推理强度；留空使用提供方默认。Pi 其他协议及 OpenCode 要求该字段留空。Pi 通过原生上下文加载器读取适用的项目指令，该入口不启用扩展代码。
+Pi 的 Chat Completions 支持提供方允许的 `minimal`、`low`、`medium`、`high`、`xhigh` 或 `max` 推理强度。经转换的 Responses 或 Chat Completions 连接按模型支持的取值设置推理强度，独立于 Harness；留空使用提供方默认。Pi 通过原生上下文加载器读取适用的项目指令，该入口不启用扩展代码。
 
 <a id="work-and-results"></a>
 ## 工作与成果

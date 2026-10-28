@@ -85,6 +85,16 @@ Deliver updated versions of report.mjs and summary.md.
 
 Open **Results and reasoning**, open **Current results**, expand a file and use **Version** to select its earlier and current versions. Close and reopen TeamSwarm, return to the same team and ask a read-only question about the work. A compatible harness can resume its native session; otherwise, a new session continues from saved project facts.
 
+## Device resources and queued tasks
+
+The Host receives device memory, CPU, process usage, active work and resource settings when planning work. The runtime recalculates admission before each start. Team and service concurrency follow available resources and measured execution costs.
+
+Ask in the conversation to “reserve 8 GiB for other apps” or “restore automatic reservation.” Settings persist on this device and apply across all Teams in the service. Windows checks physical memory and commit headroom separately, alongside a CPU budget. Per-harness estimates adapt to measured execution, and starting tasks reserve their expected cost before the next sample.
+
+When resources delay tasks, the conversation shows the reason, affected tasks and default action. Running work continues. Users can change the reserve or task plan; without new instructions, tasks stay queued and resume when resources recover. A follow-up notice confirms actual execution. Notices are grouped during one continuous wait, with queue and notification state preserved across service restarts. One Host control turn remains available within actual device headroom so users can reduce an oversized reserve.
+
+Windows provides process-level sampling and owned process-group totals. Other systems currently use device memory and CPU samples with conservative startup estimates; process-level cost learning requires a sampler for that platform.
+
 <a id="harnesses-and-models"></a>
 ## Harnesses and models
 
@@ -99,25 +109,31 @@ A harness runs an agent's tools and execution loop. A model connection supplies 
 | DeepSeek Harness | Separate device installation | A new native session reads saved TeamSwarm work |
 | OpenCode | Separate device installation | Supported |
 
-Compatibility depends on the installed version, model and protocol. Integration versions are pinned in [config/harnesses.json](config/harnesses.json). Native tools own their account login and session state.
+Integration versions are pinned in [config/harnesses.json](config/harnesses.json). Harnesses own their tools, permissions and sessions; independent connections supply models. A connection can be assigned to any of the six harnesses. The local service translates Responses, Chat Completions and Anthropic Messages when their protocols differ.
 
-In execution settings, select a harness and connect or check its existing account. For an API connection:
+In Team capabilities, enable harnesses and add model connections separately. Select **ChatGPT → Continue with ChatGPT**, authorize on the official page, load the account's model catalog and choose models for the Host to allocate. Claude Code can use that ChatGPT connection while running its own commands, handling tool results and continuing its native session. **ChatGPT (Codex)** retains the original Codex account path.
 
-1. Install a harness that supports the provider's protocol.
+ChatGPT connections use independent [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) authorization, account-specific models and authorized plan usage. Windows encrypts renewable credentials with the operating system. Refresh, sign-out and reauthorization are serialized per account. Pending sign-ins can be cancelled and restarted. Sign-out stops local use and requests remote revocation; the interface provides recovery instructions if remote revocation fails.
+
+For an API connection:
+
+1. Install the harness needed for the task.
 2. Enter the provider's official base URL and a model available to your account.
-3. Select a protocol supported by both the provider and harness, such as Chat Completions or Anthropic Messages.
+3. Select the provider's protocol, such as Responses, Chat Completions or Anthropic Messages.
 4. Save the key through the desktop credential store, or provide an environment-variable reference.
 5. Check availability and run a small task with an actual tool call.
 
-For example, a DeepSeek connection uses `https://api.deepseek.com`, its supported Chat Completions protocol and a compatible harness such as Pi or OpenCode. Use a model from the provider's current account model list.
+For example, a DeepSeek connection uses `https://api.deepseek.com` and Chat Completions. Pi can consume it natively, while Claude Code can use protocol translation. Use a model from the provider's current account model list.
+
+Translation supports text, embedded images, function tools, tool results, streaming and JSON Schema output. Each execution receives a separate route and temporary credential, revoked when execution ends. One service shares one loopback listener, admitting up to 32 simultaneous model requests and 8 per execution route; excess requests receive a busy response. Input is limited to 8 MiB and output to 16 MiB. Native-session model metadata is retained up to 16 MiB; reaching that limit requires a new session and preserves existing records. Provider-hosted tools and exact cross-protocol token counting require separate support; unsupported requests return specific errors.
 
 For environment credentials, set a variable such as `DEEPSEEK_API_KEY` before starting the service and enter only its name in the resource. `TEAM_CREDENTIAL_FILES` accepts a JSON map of environment-variable names to absolute, one-line secret files.
 
 In **Resources and allocation**, work-specific resources take precedence over member defaults. Each attempt captures its actual configuration; edits affect subsequent work. Resource export/import carries configuration and secret references. Configure the referenced credentials on the destination device.
 
-Pi and OpenCode accept **Maximum output tokens** (`maxOutputTokens`, default 8192) and **Context window tokens** (`contextWindowTokens`, default 131072). Use values supported by your model; input, reasoning and output share its context capacity. The output limit includes reasoning tokens. Length-limited failures remain visible for recovery. Other harnesses reject these overrides.
+Pi and OpenCode accept **Maximum output tokens** (`maxOutputTokens`, default 8192) and **Context window tokens** (`contextWindowTokens`, default 131072). API connections using protocol translation also accept an output limit. ChatGPT plan connections use the service's output limits and reject a custom output-limit override. Context-window overrides remain specific to Pi and OpenCode. Input, reasoning and output share the model's context capacity; the output limit includes reasoning tokens. Length-limited failures remain visible for recovery.
 
-For Pi Chat Completions, **Effort** accepts `minimal`, `low`, `medium`, `high`, `xhigh` or `max` when supported by the provider. Leave it blank for provider defaults; other Pi protocols and OpenCode require it blank. Pi loads applicable project instructions through its native context loader, without enabling extension code through that loader.
+For Pi Chat Completions, **Effort** accepts `minimal`, `low`, `medium`, `high`, `xhigh` or `max` when supported by the provider. Translated Responses or Chat Completions connections accept their model's supported effort values independently of the Harness. Leave effort blank for provider defaults. Pi loads applicable project instructions through its native context loader, without enabling extension code through that loader.
 
 <a id="work-and-results"></a>
 ## Work and results

@@ -15,6 +15,7 @@ export const modelAccessInput = z
     kind: z.enum(["subscription", "api"]),
     enabled: z.boolean(),
     subscriptionHarness: z.enum(["codex", "claude-code", "grok"]).nullable(),
+    chatgptAccountId: z.string().uuid().nullable().optional(),
     endpoints: z
       .object({
         responses: endpoint.optional(),
@@ -27,6 +28,11 @@ export const modelAccessInput = z
   })
   .strict()
   .superRefine((c, ctx) => {
+    if (c.chatgptAccountId) {
+      if (c.kind !== "subscription" || c.subscriptionHarness || c.credentialEnv || Object.keys(c.endpoints).length || !c.models.length)
+        ctx.addIssue({ code: "custom", message: "ChatGPT connections require a saved account and model IDs." });
+      return;
+    }
     const message =
       c.kind === "api"
         ? !c.models.length ||
@@ -79,25 +85,26 @@ export class CapabilityStore {
     const nativeDefaults = new Set<string>();
     for (const r of resources) {
       const c = r.config,
-        api = !!(c.baseUrl || c.credentialEnv);
+        api = !!(c.baseUrl || c.credentialEnv), independent = !!c.chatgptAccountId;
       if (api && (!c.baseUrl || !c.credentialEnv || !c.model)) continue;
-      if (!api && !["codex", "claude-code", "grok"].includes(c.harness))
+      if (!api && !independent && !["codex", "claude-code", "grok"].includes(c.harness))
         continue;
-      const identity = api ? [c.provider, c.credentialEnv] : [c.harness];
+      const identity = independent ? ["chatgpt",c.chatgptAccountId] : api ? [c.provider, c.credentialEnv] : [c.harness];
       const id = "existing_" + hash(JSON.stringify(identity)).slice(0, 24);
-      if (!api && !c.model) nativeDefaults.add(id);
+      if (!api && !independent && !c.model) nativeDefaults.add(id);
       const connection =
         connections.get(id) ??
         ({
           id,
-          name: api
+          name: independent ? "ChatGPT" : api
             ? c.provider || r.name
             : { codex: "ChatGPT", "claude-code": "Claude", grok: "Grok" }[
                 c.harness
               ] || c.harness,
           kind: api ? "api" : "subscription",
           enabled: true,
-          subscriptionHarness: api ? null : c.harness,
+          subscriptionHarness: api || independent ? null : c.harness,
+          ...(independent ? {chatgptAccountId:c.chatgptAccountId} : {}),
           endpoints: {},
           credentialEnv: c.credentialEnv,
           models: [],
@@ -159,6 +166,7 @@ export class CapabilityStore {
           name: c.name,
           kind: c.kind,
           subscriptionHarness: c.subscriptionHarness,
+          chatgptAccountId: c.chatgptAccountId,
           protocols: Object.keys(c.endpoints),
           modelCount: c.models.length,
         })),
@@ -216,7 +224,9 @@ export class CapabilityStore {
           ? connection.models
           : [null]) {
           let config: ExecutionConfig;
-          if (connection.kind === "subscription") {
+          if (connection.chatgptAccountId) {
+            config = executionConfig.parse({ harness, model, access, provider: "ChatGPT", protocol: "responses", chatgptAccountId: connection.chatgptAccountId });
+          } else if (connection.kind === "subscription") {
             if (connection.subscriptionHarness !== harness) continue;
             config = executionConfig.parse({ harness, model, access });
           } else {
@@ -265,6 +275,8 @@ export class CapabilityStore {
         (c.models.length && (!config.model || !c.models.includes(config.model)))
       )
         return false;
+      if (c.chatgptAccountId) return config.chatgptAccountId === c.chatgptAccountId && config.protocol === "responses" && !config.baseUrl && !config.credentialEnv;
+      if (config.chatgptAccountId) return false;
       if (c.kind === "subscription")
         return (
           c.subscriptionHarness === config.harness &&
