@@ -926,7 +926,7 @@ function HostAllocation({
             .map((resource) => (
               <option key={resource.id} value={resource.id}>
                 {resource.name} · {resource.config.harness} ·{" "}
-                {resource.config.model ?? t("Default model")}
+                {resource.config.model ?? t("Choose model")}
               </option>
             ))}
         </select>
@@ -1025,14 +1025,20 @@ function AllocationBoard({
   const [rowError, setRowError] = useState<Record<string, string>>({});
   const [busyRow, setBusyRow] = useState("");
   const members = workspace.members.filter(
-    (member) => member.teamId === teamId && member.id !== `host:${teamId}`,
+    (member) =>
+      member.teamId === teamId &&
+      member.id !== `host:${teamId}` &&
+      !member.removedAt,
   ) as unknown as MemberAllocationView[];
   const works = useMemo(() => {
     const list: Work[] = workspace.executions?.[teamId]?.works ?? [];
     return [...list]
       .filter((work) =>
         workspace.members.some(
-          (member) => member.teamId === teamId && member.id === work.memberId,
+          (member) =>
+            member.teamId === teamId &&
+            member.id === work.memberId &&
+            !member.removedAt,
         ),
       )
       .sort(

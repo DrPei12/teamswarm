@@ -78,6 +78,12 @@
   background: var(--hover);
   color: var(--text);
 }
+.runtime-choice:disabled {
+  cursor: default;
+  opacity: 0.5;
+  background: transparent;
+  color: var(--subtle);
+}
 .runtime-popover {
   z-index: 60;
   min-width: 218px;
@@ -87,6 +93,9 @@
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
   border-radius: 10px;
+  max-height: var(--radix-popover-content-available-height);
+  overflow-y: auto;
+  animation: appear 100ms ease-out;
 }
 .custom-runtime {
   display: flex;
@@ -570,7 +579,7 @@
 }
 .graph-copy strong {
   display: block;
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(14px * var(--font-scale));
   font-weight: 550;
   line-height: 1.4;
   max-height: 48px;
@@ -581,7 +590,7 @@
 }
 .graph-copy > span {
   display: block;
-  font-size: calc(11px * var(--font-scale));
+  font-size: calc(12px * var(--font-scale));
   color: var(--secondary);
   margin-top: 5px;
   overflow: hidden;

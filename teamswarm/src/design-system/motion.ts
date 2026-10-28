@@ -6,8 +6,8 @@ export const springSnappy = {
   mass: 1,
 };
 export const disclosureMotion = {
-  duration: 0.22,
-  ease: [0.16, 1, 0.3, 1] as const,
+  duration: 0.2,
+  ease: [0.165, 0.84, 0.44, 1] as const,
 };
 
 /** Enter/Escape belong to the IME while a candidate is being composed. */

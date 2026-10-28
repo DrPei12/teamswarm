@@ -295,19 +295,6 @@ function OutputRecord({
       </button>
       {open && (
         <div className="record-body">
-          <p className="record-hint">
-            {t(
-              output.current.restoredFrom
-                ? "Restored"
-                : (output.workStatus ?? "submitted"),
-            )}{" "}
-            ·{" "}
-            {t(
-              output.verification === "self-check"
-                ? "Producer self-check"
-                : "Independent review",
-            )}
-          </p>
           <label>
             {t("Version")}
             <select

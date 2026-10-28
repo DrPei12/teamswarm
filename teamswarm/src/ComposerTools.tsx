@@ -23,53 +23,49 @@ import { useI18n } from "./i18n";
 import { ICON_SCALE, useTooltipContainer } from "./ui";
 import { api } from "./service";
 import { ModelPicker } from "./ModelPicker";
-import {
-  harnessId,
-  supportedEfforts,
-  effortLabel,
-  type HarnessInspection,
-} from "./harnessCatalog";
+import type { ExecutionConfig } from "@team/contracts/runtime";
+import { selectedModelChoice, type ModelChoice } from "./modelCatalog";
+import { useModelCatalog } from "./useModelCatalog";
+import { clipboardFiles } from "./AttachmentChip";
+import { harnessId, supportedEfforts, effortLabel } from "./harnessCatalog";
 
 export function RuntimeControls({
   team,
+  executionConfig,
+  config: runtimeConfig,
+  showContext = true,
+  disabled = false,
   onChange,
   onSettings,
 }: {
   team: Team;
-  onChange: (config: RuntimeConfig) => void;
-  onSettings: () => void;
+  executionConfig?: ExecutionConfig;
+  config?: RuntimeConfig;
+  showContext?: boolean;
+  disabled?: boolean;
+  onChange: (config: RuntimeConfig, choice?: ModelChoice) => void;
+  onSettings: (tab?: "harnesses" | "connections") => void;
 }) {
   const { t: tr, locale } = useI18n();
-  const config = team.runtime || defaultRuntime;
+  const config = runtimeConfig ?? team.runtime ?? defaultRuntime;
+  const hasModel = !!config.model && config.model !== "Default model";
   const [edit, setEdit] = useState<string | null>(null);
-  const [inspection, setInspection] = useState<HarnessInspection | null>(null);
-  const efforts = supportedEfforts(inspection, config.model);
-  const [checking, setChecking] = useState(false);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    if (edit !== "model" && edit !== "effort") return;
-    let current = true;
-    setChecking(true);
-    setError("");
-    setInspection(null);
-    const id = harnessId(config.harness);
-    void api<HarnessInspection>(
-      `/harnesses/${encodeURIComponent(id)}/check`,
-      {},
-    )
-      .then((result) => {
-        if (current) setInspection(result);
-      })
-      .catch((e) => {
-        if (current) setError(e.message);
-      })
-      .finally(() => {
-        if (current) setChecking(false);
-      });
-    return () => {
-      current = false;
-    };
-  }, [edit, config.harness]);
+  const activeMenu = useRef(edit);
+  activeMenu.current = edit;
+  const catalog = useModelCatalog(team.id, harnessId(config.harness));
+  const selected = executionConfig
+    ? selectedModelChoice(catalog.models, executionConfig)
+    : undefined;
+  const efforts =
+    executionConfig?.baseUrl || executionConfig?.credentialEnv
+      ? []
+      : supportedEfforts(catalog.inspection, config.model);
+  const checking = catalog.loading;
+  const error =
+    catalog.error ||
+    (!executionConfig?.baseUrl && !executionConfig?.credentialEnv
+      ? (catalog.inspection?.error ?? "")
+      : "");
   const { trigger, container } = useTooltipContainer();
   const context = team.context;
   const known = context && context.limit > 0 && context.used >= 0;
@@ -79,32 +75,53 @@ export function RuntimeControls({
       {(["harness", "model", "effort"] as const).map((key) =>
         key === "model" ? (
           <ModelPicker
-            key={`model-${config.harness}`}
+            key="model"
             compact
+            disabled={disabled}
             value={config.model === "Default model" ? null : config.model}
-            models={inspection?.models}
+            models={catalog.models}
+            selectedKey={selected?.key}
             loading={checking}
             error={error}
-            onOpenChange={(open) => setEdit(open ? "model" : null)}
-            onChange={(model) =>
-              onChange({
-                ...config,
-                model: model || "Default model",
-                effort: "Default",
-              })
+            onRetry={catalog.retry}
+            open={!disabled && edit === "model"}
+            onConfigure={() => onSettings("connections")}
+            onCloseAutoFocus={(event) => {
+              if (activeMenu.current && activeMenu.current !== "model")
+                event.preventDefault();
+            }}
+            onOpenChange={(open) =>
+              setEdit((current) =>
+                open ? "model" : current === "model" ? null : current,
+              )
+            }
+            onChange={(model, choice) =>
+              onChange(
+                {
+                  ...config,
+                  model: model || "",
+                  effort: "Default",
+                },
+                choice,
+              )
             }
           />
         ) : (
           <Popover.Root
             key={key}
-            open={edit === key}
-            onOpenChange={(open) => setEdit(open ? key : null)}
+            open={!disabled && edit === key && (key !== "effort" || hasModel)}
+            onOpenChange={(open) =>
+              setEdit((current) =>
+                open ? key : current === key ? null : current,
+              )
+            }
           >
             <Popover.Trigger asChild>
               <button
                 type="button"
-                className="runtime-choice"
+                className={`runtime-choice ${key === "effort" ? "effort-choice" : ""}`}
                 aria-label={tr(`Choose ${key}`)}
+                disabled={disabled || (key === "effort" && !hasModel)}
               >
                 <span>
                   {key === "effort" && config[key] !== "Default"
@@ -121,10 +138,19 @@ export function RuntimeControls({
                 align="start"
                 sideOffset={12}
                 aria-label={tr(key === "harness" ? "Harness" : "Effort")}
+                onInteractOutside={(event) => {
+                  if ((event.target as Element).closest?.(".runtime-choice"))
+                    event.preventDefault();
+                }}
+                onCloseAutoFocus={(event) => {
+                  if (activeMenu.current && activeMenu.current !== key)
+                    event.preventDefault();
+                }}
               >
                 <div className="menu-heading">
                   {key === "harness" ? tr("Harness") : tr("Effort")}
                 </div>
+                {key === "harness" && <div className="separator" />}
                 {(key === "harness"
                   ? [
                       "Codex",
@@ -150,8 +176,8 @@ export function RuntimeControls({
                       onChange(
                         key === "harness"
                           ? {
+                              ...config,
                               harness: value,
-                              model: "Default model",
                               effort: "Default",
                             }
                           : {
@@ -171,21 +197,26 @@ export function RuntimeControls({
                   </button>
                 ))}
                 <div className="separator" />
-                {key === "effort" && (
-                  <div className="menu-note" role={error ? "alert" : "status"}>
-                    {checking
-                      ? tr("Loading harness options…")
-                      : error
+                {key === "effort" &&
+                  (error || (checking && !catalog.inspection)) && (
+                    <div
+                      className="menu-note"
+                      role={error ? "alert" : "status"}
+                    >
+                      {error && !checking
                         ? tr(error)
-                        : !efforts.length
-                          ? tr(
-                              "This harness has not provided effort options for this model. Use its default.",
-                            )
-                          : tr(
-                              "Options provided by the selected harness and model.",
-                            )}
-                  </div>
-                )}
+                        : tr("Loading harness options…")}
+                      {error && !checking && (
+                        <button
+                          type="button"
+                          className="model-picker-link"
+                          onClick={catalog.retry}
+                        >
+                          {tr("Retry")}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 <button
                   type="button"
                   className="menu-item"
@@ -202,56 +233,58 @@ export function RuntimeControls({
           </Popover.Root>
         ),
       )}
-      <Tooltip.Root>
-        <Tooltip.Trigger asChild>
-          <button
-            type="button"
-            className="context-ring"
-            ref={trigger}
-            aria-label={
-              known
-                ? tr("Context {percent}% used", {
-                    percent: Math.round(fraction * 100),
-                  })
-                : tr("Context usage unavailable")
-            }
-          >
-            <svg
-              width={16 * ICON_SCALE}
-              height={16 * ICON_SCALE}
-              viewBox="0 0 20 20"
-              aria-hidden="true"
+      {showContext && (
+        <Tooltip.Root>
+          <Tooltip.Trigger asChild>
+            <button
+              type="button"
+              className="context-ring"
+              ref={trigger}
+              aria-label={
+                known
+                  ? tr("Context {percent}% used", {
+                      percent: Math.round(fraction * 100),
+                    })
+                  : tr("Context usage unavailable")
+              }
             >
-              <circle
-                cx="10"
-                cy="10"
-                r="7"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                opacity=".18"
-              />
-              <circle
-                cx="10"
-                cy="10"
-                r="7"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeDasharray={`${fraction * 43.982} 43.982`}
-                transform="rotate(-90 10 10)"
-              />
-            </svg>
-          </button>
-        </Tooltip.Trigger>
-        <Tooltip.Portal container={container}>
-          <Tooltip.Content className="tooltip" side="top" sideOffset={8}>
-            {known
-              ? `${context.used.toLocaleString(locale)} / ${context.limit.toLocaleString(locale)} tokens · ${Math.round(fraction * 100)}%`
-              : tr("Context · —")}
-          </Tooltip.Content>
-        </Tooltip.Portal>
-      </Tooltip.Root>
+              <svg
+                width={16 * ICON_SCALE}
+                height={16 * ICON_SCALE}
+                viewBox="0 0 20 20"
+                aria-hidden="true"
+              >
+                <circle
+                  cx="10"
+                  cy="10"
+                  r="7"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  opacity=".18"
+                />
+                <circle
+                  cx="10"
+                  cy="10"
+                  r="7"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeDasharray={`${fraction * 43.982} 43.982`}
+                  transform="rotate(-90 10 10)"
+                />
+              </svg>
+            </button>
+          </Tooltip.Trigger>
+          <Tooltip.Portal container={container}>
+            <Tooltip.Content className="tooltip" side="top" sideOffset={8}>
+              {known
+                ? `${context.used.toLocaleString(locale)} / ${context.limit.toLocaleString(locale)} tokens · ${Math.round(fraction * 100)}%`
+                : tr("Context · —")}
+            </Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+      )}
     </div>
   );
 }
@@ -331,7 +364,12 @@ export const ComposerInput = forwardRef<
             kind: "member",
           },
           ...workspace.members
-            .filter((m) => m.teamId === team.id && !m.id.startsWith("host:"))
+            .filter(
+              (m) =>
+                m.teamId === team.id &&
+                !m.id.startsWith("host:") &&
+                !m.removedAt,
+            )
             .map((m) => ({
               id: m.id,
               label: m.name,
@@ -525,9 +563,10 @@ export const ComposerInput = forwardRef<
           }
         }}
         onPaste={(e) => {
-          if (e.clipboardData.files.length) {
+          const files = clipboardFiles(e.clipboardData);
+          if (files.length) {
             e.preventDefault();
-            onFiles([...e.clipboardData.files]);
+            onFiles(files);
           }
         }}
       />

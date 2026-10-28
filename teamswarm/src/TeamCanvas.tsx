@@ -2,7 +2,8 @@ import { CanvasViewport } from "./CanvasViewport";
 import { SwarmMark } from "./SwarmMark";
 import { collaborationEdgeTypes, connectionPorts } from "./Visuals";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Tooltip } from "radix-ui";
+import { Tooltip, ContextMenu } from "radix-ui";
+import { product } from "./service";
 import { useI18n } from "./i18n";
 import {
   ReactFlow,
@@ -39,9 +40,12 @@ import {
   Crosshair,
   CornerDownRight,
   Cpu,
+  Trash2,
+  LoaderCircle,
 } from "lucide-react";
 import {
   DetailPanel,
+  Modal,
   IconButton,
   ICON_SCALE,
   useMediaQuery,
@@ -81,6 +85,7 @@ type Data = {
   model?: string;
   harness?: string;
   onOpen: () => void;
+  onRemove?: () => void;
   onDrop?: (id: string) => void;
   onCarry?: (item: Definition) => void;
   onDrag?: (active: boolean) => void;
@@ -152,152 +157,190 @@ function CanvasNode({ data, selected }: NodeProps<CardNode>) {
   const [over, setOver] = useState(false);
   const { trigger, container } = useTooltipContainer();
   return (
-    <div
-      className={`graph-card ${data.kind} ${data.host ? "host-node" : ""} ${selected || data.selected ? "selected" : ""} ${data.active ? "current" : ""} ${over ? "drop-target" : ""}`}
-      data-status={data.status}
-      onDragOver={(e) => {
-        if (
-          e.dataTransfer.types.includes("application/x-teamswarm-definition") &&
-          data.onDrop
-        ) {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "copy";
-          setOver(true);
-        }
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setOver(false);
-        const id = e.dataTransfer.getData("application/x-teamswarm-definition");
-        if (id) data.onDrop?.(id);
-      }}
-    >
-      <Handle type="target" position={Position.Left} />
-      {data.kind === "member" &&
-        [Position.Left, Position.Right, Position.Top, Position.Bottom].map(
-          (position) => (
-            <span key={position}>
-              <Handle type="source" id={position} position={position} />
-              <Handle type="target" id={position} position={position} />
-            </span>
-          ),
-        )}
-      <Tooltip.Root delayDuration={550}>
-        <Tooltip.Trigger asChild>
-          <button
-            ref={trigger}
-            type="button"
-            className={`graph-card-main ${data.kind === "member" ? "" : "nodrag"}`}
-            onClick={data.onOpen}
-          >
-            <span className={`graph-symbol ${data.status || ""}`}>
-              {data.kind === "member" ? (
-                data.host ? (
-                  <SwarmMark />
-                ) : (
-                  <Cpu size={22 * ICON_SCALE} />
-                )
-              ) : data.kind === "branch" ? (
-                <GitBranch size={19 * ICON_SCALE} />
-              ) : (
-                <MessageSquare size={18 * ICON_SCALE} />
-              )}
-            </span>
-            <span className="graph-copy">
-              <strong>
-                {data.kind === "member" && (
-                  <i
-                    className={`member-presence ${data.status || "idle"}`}
-                    title={tr(data.status || "idle")}
-                    aria-label={tr(data.status || "idle")}
-                  />
-                )}
-                {data.title}
-              </strong>
-              <span>
-                {data.detail.replace(/^Review: /, `${tr("Review")} · `)}
-              </span>
-            </span>
-            {data.status && data.kind !== "member" && (
-              <span
-                className={`member-state ${data.status}`}
-                title={tr(data.status)}
-              >
-                <span />
-                <span className="sr-only">{tr(data.status)}</span>
-              </span>
+    <ContextMenu.Root modal={false}>
+      <ContextMenu.Trigger asChild disabled={!data.onRemove}>
+        <div
+          className={`graph-card ${data.kind} ${data.host ? "host-node" : ""} ${selected || data.selected ? "selected" : ""} ${data.active ? "current" : ""} ${over ? "drop-target" : ""}`}
+          data-status={data.status}
+          onDragOver={(e) => {
+            if (
+              e.dataTransfer.types.includes(
+                "application/x-teamswarm-definition",
+              ) &&
+              data.onDrop
+            ) {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+              setOver(true);
+            }
+          }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setOver(false);
+            const id = e.dataTransfer.getData(
+              "application/x-teamswarm-definition",
+            );
+            if (id) data.onDrop?.(id);
+          }}
+        >
+          <Handle type="target" position={Position.Left} />
+          {data.kind === "member" &&
+            [Position.Left, Position.Right, Position.Top, Position.Bottom].map(
+              (position) => (
+                <span key={position}>
+                  <Handle type="source" id={position} position={position} />
+                  <Handle type="target" id={position} position={position} />
+                </span>
+              ),
             )}
-          </button>
-        </Tooltip.Trigger>
-        <Tooltip.Portal container={container}>
-          <Tooltip.Content
-            className="node-preview"
-            role="tooltip"
-            side="top"
-            sideOffset={10}
-            collisionPadding={16}
-          >
-            <strong>{data.kind === "point" ? data.detail : data.title}</strong>
-            <p>{data.kind === "point" ? data.title : data.detail}</p>
-            {data.time && <time>{data.time}</time>}
-          </Tooltip.Content>
-        </Tooltip.Portal>
-      </Tooltip.Root>
-      {data.kind === "member" && (
-        <div className="member-result-line">
-          <span>{tr(data.status || "idle")}</span>
-          {data.conversationStatus && (
-            <span className="member-conversation-warning">
-              {tr(
-                data.conversationStatus === "paused"
-                  ? "Last conversation paused"
-                  : "Last conversation failed",
+          <Tooltip.Root delayDuration={550}>
+            <Tooltip.Trigger asChild>
+              <button
+                ref={trigger}
+                type="button"
+                className={`graph-card-main ${data.kind === "member" ? "" : "nodrag"}`}
+                onClick={data.onOpen}
+              >
+                <span className={`graph-symbol ${data.status || ""}`}>
+                  {data.kind === "member" ? (
+                    data.host ? (
+                      <SwarmMark />
+                    ) : (
+                      <Cpu size={22 * ICON_SCALE} />
+                    )
+                  ) : data.kind === "branch" ? (
+                    <GitBranch size={19 * ICON_SCALE} />
+                  ) : (
+                    <MessageSquare size={18 * ICON_SCALE} />
+                  )}
+                </span>
+                <span className="graph-copy">
+                  <strong>
+                    {data.kind === "member" && (
+                      <i
+                        className={`member-presence ${data.status || "idle"}`}
+                        title={tr(data.status || "idle")}
+                        aria-label={tr(data.status || "idle")}
+                      />
+                    )}
+                    {data.title}
+                  </strong>
+                  {data.detail && (
+                    <span>
+                      {data.detail.replace(/^Review: /, `${tr("Review")} · `)}
+                    </span>
+                  )}
+                </span>
+                {data.status && data.kind !== "member" && (
+                  <span
+                    className={`member-state ${data.status}`}
+                    title={tr(data.status)}
+                  >
+                    <span />
+                    <span className="sr-only">{tr(data.status)}</span>
+                  </span>
+                )}
+              </button>
+            </Tooltip.Trigger>
+            <Tooltip.Portal container={container}>
+              <Tooltip.Content
+                className="node-preview"
+                role="tooltip"
+                side="top"
+                sideOffset={10}
+                collisionPadding={16}
+              >
+                <strong>
+                  {data.kind === "point" ? data.detail : data.title}
+                </strong>
+                {(data.kind === "point" ? data.title : data.detail) && (
+                  <p>{data.kind === "point" ? data.title : data.detail}</p>
+                )}
+                {data.time && <time>{data.time}</time>}
+              </Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
+          {data.kind === "member" && (
+            <div className="member-result-line">
+              <span>{tr(data.status || "idle")}</span>
+              {data.conversationStatus && (
+                <span className="member-conversation-warning">
+                  {tr(
+                    data.conversationStatus === "paused"
+                      ? "Last conversation paused"
+                      : "Last conversation failed",
+                  )}
+                </span>
               )}
-            </span>
+            </div>
           )}
-        </div>
-      )}
-      {data.kind === "member" && (
-        <div className="member-caption">
-          <span className="node-harness">{data.harness}</span>
-          {data.model && (
-            <span className="node-model" title={data.model}>
-              {tr(data.model)}
-            </span>
+          {data.kind === "member" && (
+            <div className="member-caption">
+              <span className="node-harness">{data.harness}</span>
+              {data.model && (
+                <span className="node-model" title={data.model}>
+                  {tr(data.model)}
+                </span>
+              )}
+            </div>
           )}
-        </div>
-      )}
-      {data.time && (
-        <div className="point-meta">
-          <time>{data.time}</time>
-          {data.deliveries ? (
-            <span>
-              <FileText size={11 * ICON_SCALE} />
-              {data.deliveries}
-            </span>
-          ) : null}
-        </div>
-      )}
-      {!!data.definitions?.length && (
-        <div className="node-definitions">
-          {data.definitions.slice(0, 2).map((d) => (
-            <DefinitionChip
-              key={d.id}
-              item={d}
-              onCarry={data.onCarry}
-              onDrag={data.onDrag}
-            />
-          ))}
-          {data.definitions.length > 2 && (
-            <button className="more-definitions nodrag" onClick={data.onOpen}>
-              +{data.definitions.length - 2}
-            </button>
+          {data.time && (
+            <div className="point-meta">
+              <time>{data.time}</time>
+              {data.deliveries ? (
+                <span>
+                  <FileText size={11 * ICON_SCALE} />
+                  {data.deliveries}
+                </span>
+              ) : null}
+            </div>
           )}
+          {!!data.definitions?.length && (
+            <div className="node-definitions">
+              {data.definitions.slice(0, 2).map((d) => (
+                <DefinitionChip
+                  key={d.id}
+                  item={d}
+                  onCarry={data.onCarry}
+                  onDrag={data.onDrag}
+                />
+              ))}
+              {data.definitions.length > 2 && (
+                <button
+                  className="more-definitions nodrag"
+                  onClick={data.onOpen}
+                >
+                  +{data.definitions.length - 2}
+                </button>
+              )}
+            </div>
+          )}
+          <Handle type="source" position={Position.Right} />
         </div>
+      </ContextMenu.Trigger>
+      {data.onRemove && (
+        <ContextMenu.Portal>
+          <ContextMenu.Content
+            className="menu history-context-menu"
+            collisionPadding={12}
+          >
+            <ContextMenu.Item className="menu-item" onSelect={data.onOpen}>
+              <MessageSquare size={15} />
+              <span className="item-label">{tr("Conversation")}</span>
+            </ContextMenu.Item>
+            <ContextMenu.Separator className="separator" />
+            <ContextMenu.Item
+              className="menu-item danger"
+              onSelect={data.onRemove}
+            >
+              <Trash2 size={15} />
+              <span className="item-label">{tr("Delete member")}</span>
+            </ContextMenu.Item>
+          </ContextMenu.Content>
+        </ContextMenu.Portal>
       )}
-      <Handle type="source" position={Position.Right} />
-    </div>
+    </ContextMenu.Root>
   );
 }
 const nodeTypes = { card: CanvasNode };
@@ -371,11 +414,13 @@ type Props = {
   workspace: Workspace;
   team: Team;
   mode: "collaboration" | "history";
+  filesOpen?: boolean;
   chatId?: string;
   memberAnchor?: { memberId: string; messageId?: string; workId?: string };
   onUpdate: (change: (old: Workspace) => Workspace) => boolean;
   onNavigate: (chatId: string, messageId?: string) => void;
   onAddMember: () => void;
+  onSettings: (tab?: "harnesses" | "connections") => void;
   onDelivery: (id: string) => void;
   onNavigateMember: (
     memberId: string,
@@ -396,11 +441,13 @@ function CanvasContent({
   workspace,
   team,
   mode,
+  filesOpen = false,
   chatId,
   memberAnchor,
   onUpdate,
   onNavigate,
   onAddMember,
+  onSettings,
   onDelivery,
 }: Props) {
   const { t: tr, locale } = useI18n();
@@ -420,6 +467,32 @@ function CanvasContent({
   const [find, setFind] = useState(false);
   const [findIndex, setFindIndex] = useState(0);
   const [error, setError] = useState("");
+  const [deleting, setDeleting] = useState<Member | null>(null);
+  // Retain the target while the dialog finishes its exit animation.
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const [deletingBusy, setDeletingBusy] = useState(false);
+  const deletionLock = useRef(false);
+  const deleteMember = async () => {
+    if (!deleting || deletionLock.current) return;
+    deletionLock.current = true;
+    setDeletingBusy(true);
+    setDeleteError("");
+    try {
+      await product.deleteMember(team.id, deleting.id);
+      setSelection((current) =>
+        current?.kind === "member" && current.id === deleting.id
+          ? null
+          : current,
+      );
+      setDeleteOpen(false);
+    } catch (error) {
+      setDeleteError((error as Error).message);
+    } finally {
+      deletionLock.current = false;
+      setDeletingBusy(false);
+    }
+  };
   const flow = useReactFlow<CardNode>();
   const stage = useRef<HTMLDivElement>(null);
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
@@ -443,7 +516,7 @@ function CanvasContent({
       ...(team.hostPosition || {}),
     },
     ...workspace.members.filter(
-      (m) => m.teamId === team.id && m.id !== `host:${team.id}`,
+      (m) => m.teamId === team.id && m.id !== `host:${team.id}` && !m.removedAt,
     ),
   ];
   const beginFork = (source: Chat, messageId: string, id?: string) => {
@@ -489,7 +562,7 @@ function CanvasContent({
             detail:
               m.id === `host:${team.id}`
                 ? team.name
-                : tr(m.task || m.responsibility || "—"),
+                : m.task || m.responsibility || "",
             kind: "member",
             host: m.id === `host:${team.id}`,
             model: modelLabel(tr(m.model), m.effort),
@@ -497,6 +570,14 @@ function CanvasContent({
             status: m.status,
             conversationStatus: m.conversationStatus,
             onOpen: () => setSelection({ kind: "member", id: m.id }),
+            onRemove:
+              workspace.service && m.id !== `host:${team.id}`
+                ? () => {
+                    setDeleteError("");
+                    setDeleting(m);
+                    setDeleteOpen(true);
+                  }
+                : undefined,
           },
         }),
       );
@@ -703,7 +784,10 @@ function CanvasContent({
   }, [find]);
   const selectedMember =
     selection?.kind === "member"
-      ? members.find((m) => m.id === selection.id)
+      ? (members.find((m) => m.id === selection.id) ??
+        workspace.members.find(
+          (m) => m.teamId === team.id && m.id === selection.id,
+        ))
       : undefined;
   const selectedChat =
     selection?.kind === "point"
@@ -764,11 +848,17 @@ function CanvasContent({
           : t,
       ),
     }));
+  const memberReading = !!selectedMember && filesOpen;
   return (
     <div
-      className={`canvas-view ${mode === "collaboration" ? "collaboration-view" : ""} ${dragging ? "carrying-definition" : ""}`}
+      className={`canvas-view ${mode === "collaboration" ? "collaboration-view" : ""} ${memberReading ? "member-reading-view" : ""} ${dragging ? "carrying-definition" : ""}`}
     >
-      <div className="canvas-stage" ref={stage}>
+      <div
+        className="canvas-stage"
+        ref={stage}
+        inert={memberReading}
+        aria-hidden={memberReading || undefined}
+      >
         <div className="canvas-heading">
           <span>
             {mode === "history" ? (
@@ -1017,7 +1107,7 @@ function CanvasContent({
       </div>
       {(selection || fork) && (
         <DetailPanel
-          resizable
+          resizable={!memberReading}
           className={`canvas-detail ${selectedMember ? "conversation-detail" : ""}`}
           label={fork ? tr("New direction") : tr("Node details")}
           onClose={() => {
@@ -1056,22 +1146,55 @@ function CanvasContent({
                 <MessageSquare size={16 * ICON_SCALE} />
               )}
             </span>
-            <strong>
-              {fork
-                ? tr("New direction")
-                : selectedMember?.name ||
-                  selectedDefinition?.title ||
-                  (selectedEdge ? tr("Exchanges") : "") ||
-                  tr("Discussion")}
-            </strong>
-            {selectedMember && (
-              <small
-                className="member-header-model"
-                title={selectedMember.model}
-              >
-                {modelLabel(tr(selectedMember.model), selectedMember.effort)}
-              </small>
+            {selectedMember ? (
+              <div className="member-header-identity">
+                <strong title={selectedMember.name}>
+                  {selectedMember.name}
+                </strong>
+                <small
+                  className="member-header-model"
+                  title={selectedMember.model}
+                >
+                  {selectedMember.harness}
+                  {modelLabel(
+                    tr(selectedMember.model),
+                    selectedMember.effort,
+                  ) && (
+                    <>
+                      {" "}
+                      ·{" "}
+                      {modelLabel(
+                        tr(selectedMember.model),
+                        selectedMember.effort,
+                      )}
+                    </>
+                  )}
+                </small>
+              </div>
+            ) : (
+              <strong>
+                {fork
+                  ? tr("New direction")
+                  : selectedDefinition?.title ||
+                    (selectedEdge ? tr("Exchanges") : "") ||
+                    tr("Discussion")}
+              </strong>
             )}
+            {selectedMember &&
+              workspace.service &&
+              !selectedMember.removedAt &&
+              selectedMember.id !== `host:${team.id}` && (
+                <IconButton
+                  label={tr("Delete member")}
+                  onClick={() => {
+                    setDeleteError("");
+                    setDeleting(selectedMember);
+                    setDeleteOpen(true);
+                  }}
+                >
+                  <Trash2 size={16} />
+                </IconButton>
+              )}
             <IconButton
               label={tr("Close details")}
               onClick={() => {
@@ -1097,6 +1220,7 @@ function CanvasContent({
                   selection?.kind === "member" ? selection.workId : undefined
                 }
                 onUpdate={onUpdate}
+                onSettings={onSettings}
               />
             )}
             {selectedEdge && (
@@ -1333,6 +1457,47 @@ function CanvasContent({
           </div>
         </DetailPanel>
       )}
+      <Modal
+        open={deleteOpen}
+        title={tr("Delete member")}
+        className="checkpoint-delete-modal"
+        onOpenChange={(open) => {
+          if (!open && !deletionLock.current) {
+            setDeleteOpen(false);
+            setDeleteError("");
+          }
+        }}
+      >
+        <div className="form-body">
+          <p>{tr("Delete “{title}”?", { title: deleting?.name ?? "" })}</p>
+          <p>{tr("Previous conversations and work will be kept.")}</p>
+          {deleteError && (
+            <p role="alert" className="form-error">
+              {tr(deleteError)}
+            </p>
+          )}
+        </div>
+        <div className="form-footer">
+          <button
+            className="secondary-button"
+            disabled={deletingBusy}
+            onClick={() => {
+              setDeleteOpen(false);
+              setDeleteError("");
+            }}
+          >
+            {tr("Cancel")}
+          </button>
+          <button
+            className="primary-button danger-button"
+            disabled={deletingBusy}
+            onClick={() => void deleteMember()}
+          >
+            {deletingBusy && <LoaderCircle size={15} className="spinner" />}
+            {tr("Delete")}
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }

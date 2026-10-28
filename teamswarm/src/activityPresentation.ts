@@ -8,7 +8,19 @@ export type ActivityGroup = {
 };
 const contextTools = new Set([
   "team_state",
+  "team_read_file",
+  "team_read_work",
+  "team_list_files",
+  "team_directory",
+  "team_directory_detail",
+  "team_check_resource",
+  "Read",
+  "ReadFile",
+  "Grep",
+  "Glob",
+  "ListDir",
   "team_project_context",
+  "team_acknowledge_context",
   "team_adoption_context",
   "team_inbox",
   "team_read_artifact",
@@ -49,6 +61,23 @@ export function toolValue(text?: string): RecordValue {
 }
 export const field = (object: RecordValue, key: string) =>
   typeof object[key] === "string" ? (object[key] as string) : "";
+
+export function canExpandActivity(item: TranscriptItem) {
+  return (
+    item.kind === "command" ||
+    item.kind === "file" ||
+    !!item.changes?.length ||
+    [
+      "team_write_file",
+      "team_edit_file",
+      "apply_patch",
+      "exec_command",
+      "Bash",
+      "bash",
+      "shell_command",
+    ].includes(item.title ?? "")
+  );
+}
 
 export function groupActivity(items: TranscriptItem[]): ActivityGroup[] {
   const groups: ActivityGroup[] = [];

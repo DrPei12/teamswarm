@@ -1,9 +1,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { installPreloadRecovery } from "./ViewBoundary";
 import "./styles.css";
 import "./product.css";
 if (window.teamswarmDesktop) document.documentElement.classList.add("desktop");
+installPreloadRecovery();
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />

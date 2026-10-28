@@ -134,6 +134,12 @@ To adopt a discussion branch, state the decision and scope to the Host in that b
 
 Progress updates and completed deliverables have separate entries. Saved artifact versions remain downloadable even when a full workspace snapshot is unavailable. Restoring a file version creates a new current version; active writers, unsaved local edits or a changed current version must be resolved first. Creating a workspace branch from history requires a saved file snapshot. External actions retain their own state.
 
+The right file panel browses project files and opens multiple tabs for Markdown, images, PDF, Word, Excel and PowerPoint. Edit code, text, and text or cells in modern Office files; fit previews to the panel or adjust zoom. Unsaved edits remain in local drafts, and saving checks the original file version. Finish or stop active member writes in that workspace before saving.
+
+Manually created history checkpoints have a context menu for deletion while the original history and existing branches remain traceable. Member conversations share the Host composer's Harness, model and effort controls; changes apply to subsequent executions.
+
+Delete an idle member from its card's context menu or conversation header, or ask Host to use `team_remove_member`. Conversations, work and results remain in history. Finish pending work, review, exchanges and messages first. Removed members no longer receive work or messages. The standalone Web service and desktop client serve the same current frontend build.
+
 <a id="data-and-recovery"></a>
 ## Data and recovery
 

@@ -1,4 +1,5 @@
 import { applicationDataBase } from "../../../../scripts/platform.cjs";
+import { projectFileRoutes } from "../project-files.js";
 import { Router } from "express";
 import path from "node:path";
 import { z } from "zod";
@@ -44,6 +45,7 @@ import {
 
 export function runtimeRoutes(runtime: TeamRuntime): Router {
   const router = Router();
+  router.use(projectFileRoutes(runtime));
   const store = runtime.store;
   router.get("/teams/:teamId/capabilities", (req,res)=>res.json(runtime.catalog.capabilities.read(param(req.params.teamId))));
   router.put("/teams/:teamId/capabilities", (req,res)=>res.json(runtime.catalog.capabilities.save(param(req.params.teamId),parse(capabilitiesInput,req.body))));
@@ -466,6 +468,9 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       ),
     ),
   );
+  router.delete("/teams/:teamId/history/:nodeId", (req, res) =>
+    res.json(runtime.history.deleteCheckpoint(param(req.params.teamId), param(req.params.nodeId))),
+  );
   router.post("/teams/:teamId/branches/:branchId/definitions", (req, res) => {
     const teamId = param(req.params.teamId),
       branchId = param(req.params.branchId);
@@ -649,15 +654,15 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
         ),
       );
   });
+  router.delete("/teams/:teamId/members/:memberId", (req, res) => {
+    const member = store.removeMember(param(req.params.teamId), param(req.params.memberId));
+    res.json({ id: member.id, removedAt: member.removedAt });
+  });
   router.patch("/teams/:teamId/members/:memberId", (req, res) => {
     const teamId = param(req.params.teamId);
     const input = parse(memberInput, req.body);
     runtime.validateConfig(input.config);
-    const member = store.get<Member>(
-      "members",
-      teamId,
-      param(req.params.memberId),
-    );
+    const member = store.activeMember(teamId, param(req.params.memberId));
     if (member.kind === "host")
       throw badRequest(
         "host_configuration",

@@ -16,8 +16,11 @@ import type {
   ExecutionResource,
   PortableAllocationPackage,
   ResourceSelection,
+  TeamCapabilities,
 } from "@team/contracts/allocation";
+import { chooseModel, switchHarness, type ModelChoice } from "./modelCatalog";
 import type { ServerPackagePreview } from "./allocation";
+import { invalidateModelCatalog } from "./modelCatalogCache";
 const inputStorage = window.teamswarmDesktop?.storage ?? localStorage;
 let snapshotCache: { tag: string; value: Workspace } | undefined;
 
@@ -61,6 +64,15 @@ export async function api<T>(
     );
   if (url === "/product" && response.headers.get("etag"))
     snapshotCache = { tag: response.headers.get("etag")!, value: payload };
+  const changedCapabilities =
+    method === "PUT" && url.match(/^\/teams\/([^/]+)\/capabilities$/);
+  if (changedCapabilities)
+    invalidateModelCatalog(decodeURIComponent(changedCapabilities[1]));
+  if (
+    method !== "GET" &&
+    /\/harnesses\/[^/]+\/(?:login|install|logout)/.test(url)
+  )
+    invalidateModelCatalog();
   return payload as T;
 }
 type State = {
@@ -74,6 +86,32 @@ type State = {
 const cacheKey = "teamswarm.workspace";
 const preferencesOutbox = new PreferencesOutbox(inputStorage);
 const requestKey = "teamswarm.messages.pending";
+export async function resolveModelConnection(
+  connection: Pick<
+    NonNullable<ModelChoice["connection"]>,
+    "name" | "endpoints" | "credentialEnv" | "models"
+  >,
+  harness: string,
+  model: string,
+  access: ExecutionConfig["access"],
+) {
+  const result = await api<{ config: ExecutionConfig }>(
+    "/connections/resolve",
+    {
+      connection: {
+        name: connection.name,
+        endpoints: connection.endpoints,
+        credentialEnv: connection.credentialEnv,
+        models: connection.models,
+      },
+      harness,
+      model,
+      access,
+    },
+  );
+  return result.config;
+}
+
 const harnessIds: Record<string, string> = {
   Codex: "codex",
   "Claude Code": "claude-code",
@@ -717,19 +755,81 @@ class ProductClient {
       file,
     );
   }
-  async configure(teamId: string, config: RuntimeConfig) {
+  async configure(teamId: string, config: RuntimeConfig, choice?: ModelChoice) {
     const settings = this.state.workspace?.executions?.[teamId]?.settings;
     if (!settings) throw new Error("Team settings are not available.");
-    return this.saveSettings(teamId, {
-      ...settings,
-      config: {
-        ...settings.config,
-        harness: harnessIds[config.harness] ?? config.harness,
-        model: config.model === "Default model" ? null : config.model,
+    const next = await this.resolveRuntimeChoice(
+      teamId,
+      settings.config,
+      config,
+      choice,
+    );
+    return this.saveSettings(teamId, { ...settings, config: next });
+  }
+  async configureMember(
+    teamId: string,
+    memberId: string,
+    config: RuntimeConfig,
+    choice?: ModelChoice,
+  ) {
+    if (memberId.startsWith("host:"))
+      return this.configure(teamId, config, choice);
+    const member = this.state.workspace?.members.find(
+      (m) => m.teamId === teamId && m.id === memberId,
+    );
+    if (!member?.executionConfig || !member.configurationVersion)
+      throw new Error("Member configuration is not available. Try again.");
+    const next = await this.resolveRuntimeChoice(
+      teamId,
+      member.executionConfig,
+      config,
+      choice,
+    );
+    try {
+      return await this.command(
+        `/product/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/runtime`,
+        {
+          config: next,
+          expectedVersion: member.configurationVersion,
+        },
+        "PUT",
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "version_conflict")
+        await this.refresh();
+      throw error;
+    }
+  }
+  private async resolveRuntimeChoice(
+    teamId: string,
+    previous: ExecutionConfig,
+    config: RuntimeConfig,
+    choice?: ModelChoice,
+  ) {
+    const harness = harnessIds[config.harness] ?? config.harness;
+    const model =
+      !config.model || config.model === "Default model" ? null : config.model;
+    let next = previous;
+    if (harness !== next.harness) {
+      const capabilities = await api<TeamCapabilities>(
+        `/teams/${encodeURIComponent(teamId)}/capabilities`,
+      );
+      next = await switchHarness(
+        next,
+        harness,
+        capabilities.connections,
+        resolveModelConnection,
+      );
+    } else if (choice || model !== next.model) {
+      next = await chooseModel(next, model, choice, resolveModelConnection);
+    } else {
+      next = {
+        ...next,
         effort:
           config.effort === "Default" ? null : config.effort.toLowerCase(),
-      },
-    });
+      };
+    }
+    return next;
   }
   async resources(teamId: string) {
     return api<{ resources: ExecutionResource[] }>(
@@ -759,6 +859,13 @@ class ProductClient {
       `/teams/${encodeURIComponent(teamId)}/resources/${encodeURIComponent(resourceId)}`,
       input,
       "PUT",
+    );
+  }
+  async deleteMember(teamId: string, memberId: string) {
+    return this.command<{ id: string; removedAt: string }>(
+      `/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}`,
+      {},
+      "DELETE",
     );
   }
   async deleteResource(teamId: string, resourceId: string) {

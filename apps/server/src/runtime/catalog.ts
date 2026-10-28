@@ -190,6 +190,7 @@ export class TeamCatalog {
         .filter((w) => ids.has(w.runId)),
       members: this.store
         .list<Member>("members", teamId)
+        .filter(m => !m.removedAt)
         .filter(
           (m) =>
             m.kind === "host" ||

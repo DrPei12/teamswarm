@@ -47,5 +47,12 @@
     "license": "MIT",
     "source": "https://raw.githubusercontent.com/theKashey/react-remove-scroll-bar/master/LICENSE",
     "kind": "current upstream notice for declared MIT license"
+  },
+  "saxes@6.0.0": {
+    "file": "licenses/dependency-notices/saxes-6.0.0.txt",
+    "sha256": "1851452f7131a1d41492aeaade5704d62bea0695adf453b18f1f494c6d2bd3dd",
+    "license": "ISC",
+    "source": "https://github.com/lddubeau/saxes/blob/v6.0.0/LICENSE",
+    "kind": "complete upstream notice at the published version tag"
   }
 }

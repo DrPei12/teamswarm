@@ -37,6 +37,8 @@ export interface Member {
   name: string;
   responsibility: string;
   kind: "host" | "member";
+  /** Removed from the active roster; history and attribution stay readable. */
+  removedAt?: string;
   config: ExecutionConfig;
   createdAt: string;
   branchId?: string;
@@ -462,6 +464,8 @@ export interface ProjectNode {
     adoption?: { sourceBranchId: string; sourceNodeId: string; baseNodeId: string; insightIds: string[]; authorizationQuote: string; ideas: { id: string; title: string; content: string; sourceMessageIds: string[] }[]; changedKeys: string[] };
   };
   createdAt: string;
+  /** User-removed checkpoint; original history remains addressable. */
+  deletedAt?: string;
 }
 export interface ProjectContext {
   branchId: string;

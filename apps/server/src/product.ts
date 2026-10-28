@@ -27,6 +27,7 @@ import type {
   ArtifactVersion,
   HostDelivery,
   TeamExchange,
+  Member as RuntimeMember,
 } from "@team/contracts/runtime";
 import { saveProductCredential } from "./product-credentials.js";
 import { stageAttachment } from "./attachments.js";
@@ -357,7 +358,7 @@ export class ProductStore {
             harnessLabels[hostConfig?.harness ?? ""] ??
             hostConfig?.harness ??
             "Codex",
-          model: hostAllocation?.selectionCurrent === false && !hostAllocation.selectionRetained ? "Reselect resource" : hostConfig?.model ?? "Default model",
+          model: hostAllocation?.selectionCurrent === false && !hostAllocation.selectionRetained ? "Reselect resource" : hostConfig?.model ?? "",
           effort: hostConfig?.effort ?? "Default",
         },
         ...(Number.isFinite(used) && limit > 0
@@ -675,7 +676,11 @@ export class ProductStore {
         const latestAttempt = attempts
           .filter((a) => a.memberId === member.id)
           .at(-1);
-        const config = latestAttempt?.config ?? member.config;
+        const nextExecution = member.kind === "member"
+          ? this.runtime.catalog.memberExecution(team.id, member.branchId ?? this.runtime.history.ensure(team.id).id, member)
+          : undefined;
+        const displayedAttempt = member.kind === "host" || (latestAttempt && active.has(latestAttempt.status)) ? latestAttempt : undefined;
+        const config = displayedAttempt?.config ?? nextExecution?.config ?? member.config;
         const status: Member["status"] = !work
           ? "idle"
           : work.status === "running"
@@ -702,6 +707,7 @@ export class ProductStore {
         workspace.members.push({
           ...p.positions[id],
           id,
+          removedAt: member.removedAt,
           teamId: team.id,
           name: member.kind === "host" ? "Host" : member.name,
           responsibility: member.responsibility,
@@ -723,14 +729,16 @@ export class ProductStore {
             : undefined,
           harness: harnessLabels[config.harness] ?? config.harness,
           model: String(
-            latestAttempt?.actual?.model ?? config.model ?? "Default model",
+            displayedAttempt?.actual?.model ?? config.model ?? "",
           ),
           effort: String(
-            latestAttempt?.actual?.requestedTurnEffort ??
-              latestAttempt?.actual?.threadEffort ??
+            displayedAttempt?.actual?.requestedTurnEffort ??
+              displayedAttempt?.actual?.threadEffort ??
               config.effort ??
               "Default",
           ),
+          executionConfig: nextExecution?.config,
+          configurationVersion: nextExecution?.allocationRevision,
           sessionId: latestAttempt?.sessionId ?? undefined,
           workId: work?.id,
           error: work?.error,
@@ -948,6 +956,33 @@ export function productRoutes(runtime: TeamRuntime): Router {
       );
     },
   );
+  router.put("/product/teams/:teamId/members/:memberId/runtime", (req, res) => {
+    const teamId = parse(key, req.params.teamId);
+    const memberId = parse(key, req.params.memberId);
+    const input = parse(z.object({
+      expectedVersion: z.number().int().positive(),
+      config: executionConfig,
+    }).strict(), req.body);
+    runtime.validateConfig(input.config);
+    const member = runtime.store.activeMember(teamId, memberId);
+    if (member.kind === "host")
+      throw badRequest("host_configuration", "Change Host configuration through Team runtime settings.");
+    const current = runtime.catalog.memberExecution(teamId, member.branchId ?? runtime.history.ensure(teamId).id, member);
+    if (current.allocationRevision !== input.expectedVersion)
+      throw conflict("version_conflict", "Member configuration changed. Try again.");
+    if (input.config.access !== current.config.access)
+      throw badRequest("access_change", "Keep the member's existing file access when changing its model.");
+    // Attempts already running keep their frozen configuration and session.
+    // A composer choice replaces only this member's default, never a shared resource.
+    runtime.store.transaction(() => {
+      member.config = input.config;
+      delete member.selection;
+      member.allocationVersion = current.allocationRevision + 1;
+      runtime.store.save("members", member);
+      runtime.store.event(teamId, "member.configuration", { memberId });
+    });
+    res.json({ config: member.config, version: member.allocationVersion });
+  });
   router.get(
     "/product/teams/:teamId/members/:memberId/conversation",
     (req, res) => {
@@ -1401,7 +1436,10 @@ export function productRoutes(runtime: TeamRuntime): Router {
     );
     res
       .type("application/octet-stream")
-      .sendFile(path.join(product.fileDirectory, id));
+      .sendFile(id, {
+        root: path.resolve(product.fileDirectory),
+        dotfiles: "deny",
+      });
   });
   router.get(
     "/product/teams/:teamId/artifacts/:artifactId/download",

@@ -1,26 +1,30 @@
-/** Three paths sharing a centre: the same mark belongs to the workspace and Host. */
-export function SwarmMark({ className = "" }: { className?: string }) {
+import logo16 from "../branding/logo-16.png";
+import logo24 from "../branding/logo-24.png";
+import logo32 from "../branding/logo-32.png";
+import logo48 from "../branding/logo-48.png";
+import logo64 from "../branding/logo-64.png";
+import logo128 from "../branding/logo-128.png";
+
+const marks = { 16: logo16, 24: logo24, 32: logo32, 48: logo48 };
+const retina = { 16: logo32, 24: logo48, 32: logo64, 48: logo128 };
+
+export function SwarmMark({
+  className = "",
+  size = 24,
+}: {
+  className?: string;
+  size?: keyof typeof marks;
+}) {
   return (
-    <svg
+    <img
       className={`swarm-mark ${className}`}
-      viewBox="0 0 32 32"
-      fill="none"
+      src={marks[size]}
+      srcSet={`${marks[size]} 1x, ${retina[size]} 2x`}
+      width={size}
+      height={size}
+      alt=""
       aria-hidden="true"
-    >
-      <path
-        d="M16 4.5 26 10.25v5.5L16 10 6 15.75v-5.5L16 4.5Z"
-        fill="currentColor"
-      />
-      <path
-        d="m6 17.5 10 5.75 10-5.75V23l-10 5.75L6 23v-5.5Z"
-        fill="currentColor"
-        opacity=".62"
-      />
-      <path
-        d="m6 17.5 10-5.75 10 5.75-10 5.75L6 17.5Z"
-        fill="currentColor"
-        opacity=".84"
-      />
-    </svg>
+      draggable={false}
+    />
   );
 }

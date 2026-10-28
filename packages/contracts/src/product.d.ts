@@ -1,5 +1,6 @@
 import type {
   RuntimeSettings,
+  ExecutionConfig,
   Work,
   Run,
   Attempt,
@@ -69,6 +70,7 @@ export type Definition = {
 };
 export type Member = {
   id: string;
+  removedAt?: string;
   teamId: string;
   name: string;
   responsibility: string;
@@ -77,6 +79,9 @@ export type Member = {
   harness: string;
   model: string;
   effort?: string;
+  /** Configuration for the next execution, separate from the last attempt. */
+  executionConfig?: ExecutionConfig;
+  configurationVersion?: number;
   sessionId?: string;
   x?: number;
   y?: number;

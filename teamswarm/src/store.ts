@@ -24,7 +24,7 @@ export type {
 
 export const defaultRuntime: RuntimeConfig = {
   harness: "Codex",
-  model: "Default model",
+  model: "",
   effort: "Default",
 };
 export const storageKey = "teamswarm.workspace";
