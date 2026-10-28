@@ -406,6 +406,8 @@ function HistoryContent({
     undefined,
   );
   const [deleting, setDeleting] = useState<ProjectNode | null>(null);
+  // Retain the target while the dialog finishes its exit animation.
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const records =
     workspace.projectNodes?.filter((n) => n.teamId === team.id) ?? [];
   const all = visibleHistory(records);
@@ -551,6 +553,7 @@ function HistoryContent({
           remove: () => {
             setError("");
             setDeleting(node);
+            setDeleteOpen(true);
           },
           open: (tab = "overview") => {
             setDetailTab(tab);
@@ -698,7 +701,7 @@ function HistoryContent({
         "DELETE",
       );
       if (selected === deleting.id || forkId === deleting.id) close();
-      setDeleting(null);
+      setDeleteOpen(false);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1425,10 +1428,10 @@ function HistoryContent({
         </DetailPanel>
       )}
       <Modal
-        open={!!deleting}
+        open={deleteOpen}
         onOpenChange={(open) => {
           if (!open && !busy) {
-            setDeleting(null);
+            setDeleteOpen(false);
             setError("");
           }
         }}
@@ -1448,7 +1451,7 @@ function HistoryContent({
             className="secondary-button"
             disabled={busy}
             onClick={() => {
-              setDeleting(null);
+              setDeleteOpen(false);
               setError("");
             }}
           >

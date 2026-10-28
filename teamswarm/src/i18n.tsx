@@ -8,6 +8,7 @@ import {
 
 export type Language = "en" | "zh-CN";
 export const zhCN: Record<string, string> = {
+  Delete: "删除",
   "Delete member": "删除成员",
   "Previous conversations and work will be kept.": "保留已有对话和工作记录。",
   "This member has been deleted.": "此成员已删除。",

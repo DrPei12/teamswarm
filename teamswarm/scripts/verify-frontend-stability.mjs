@@ -237,11 +237,31 @@ try {
     .locator(".canvas-detail")
     .getByRole("button", { name: "Delete member", exact: true })
     .click();
+  await page.evaluate(() => {
+    const dialog = document.querySelector(".checkpoint-delete-modal");
+    window.emptyDeleteLabel = false;
+    const observer = new MutationObserver(() => {
+      if (dialog.isConnected && dialog.textContent.includes("“”"))
+        window.emptyDeleteLabel = true;
+      if (!dialog.isConnected) observer.disconnect();
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+  });
   await page
     .getByRole("dialog")
     .getByRole("button", { name: "Delete", exact: true })
     .click();
   await memberCard.waitFor({ state: "detached" });
+  await page.getByRole("dialog").waitFor({ state: "hidden" });
+  assert.equal(
+    await page.evaluate(() => window.emptyDeleteLabel),
+    false,
+    "Closing deletion dialog retains the member's name",
+  );
   assert(service.runtime.store.get("members", team.id, member.id).removedAt);
   await page.reload();
   await page.locator(".collaboration-view .react-flow").waitFor();

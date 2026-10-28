@@ -468,6 +468,8 @@ function CanvasContent({
   const [findIndex, setFindIndex] = useState(0);
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState<Member | null>(null);
+  // Retain the target while the dialog finishes its exit animation.
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [deletingBusy, setDeletingBusy] = useState(false);
   const deletionLock = useRef(false);
@@ -483,7 +485,7 @@ function CanvasContent({
           ? null
           : current,
       );
-      setDeleting(null);
+      setDeleteOpen(false);
     } catch (error) {
       setDeleteError((error as Error).message);
     } finally {
@@ -573,6 +575,7 @@ function CanvasContent({
                 ? () => {
                     setDeleteError("");
                     setDeleting(m);
+                    setDeleteOpen(true);
                   }
                 : undefined,
           },
@@ -1186,6 +1189,7 @@ function CanvasContent({
                   onClick={() => {
                     setDeleteError("");
                     setDeleting(selectedMember);
+                    setDeleteOpen(true);
                   }}
                 >
                   <Trash2 size={16} />
@@ -1454,12 +1458,12 @@ function CanvasContent({
         </DetailPanel>
       )}
       <Modal
-        open={!!deleting}
+        open={deleteOpen}
         title={tr("Delete member")}
         className="checkpoint-delete-modal"
         onOpenChange={(open) => {
           if (!open && !deletionLock.current) {
-            setDeleting(null);
+            setDeleteOpen(false);
             setDeleteError("");
           }
         }}
@@ -1478,7 +1482,7 @@ function CanvasContent({
             className="secondary-button"
             disabled={deletingBusy}
             onClick={() => {
-              setDeleting(null);
+              setDeleteOpen(false);
               setDeleteError("");
             }}
           >
