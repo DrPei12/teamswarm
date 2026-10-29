@@ -277,6 +277,14 @@ try {
     await list.getByRole("searchbox").fill("code");
     assert.equal(await list.locator(".cap-model-row").count(), 1);
     assert(
+      await page
+        .locator(".cap-account-options button")
+        .evaluateAll((buttons) =>
+          buttons.every((button) => button.getBoundingClientRect().height < 60),
+        ),
+      "Account choices should wrap into rows instead of tall, narrow labels",
+    );
+    assert(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth + 1,
       ),
@@ -356,6 +364,24 @@ try {
     await page.getByText("Reconnect ChatGPT", { exact: true }).count(),
     0,
   );
+  await request("/product/preferences", { language: "zh-CN" }, "PATCH");
+  await page.reload();
+  await page
+    .getByRole("button", { name: "团队能力与偏好", exact: true })
+    .click();
+  await page.getByRole("tab", { name: "模型与连接", exact: true }).click();
+  await page
+    .locator(".cap-connection")
+    .filter({ hasText: "ChatGPT catalog" })
+    .getByRole("button", { name: "编辑", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Codex 本机登录", exact: true })
+    .waitFor();
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.screenshot({
+    path: path.join(root, "subscription-models-zh-390.png"),
+  });
   assert(!requests.some((url) => /\/harnesses\/(null|undefined)\//.test(url)));
   assert.deepEqual(errors, []);
   const report = {
@@ -375,6 +401,7 @@ try {
       "composer account catalog",
       "sign-out and completed sign-in update the composer without reload",
       "390 and 760 px layout",
+      "localized account choices and compact wrapped rows",
     ],
   };
   await writeFile(
