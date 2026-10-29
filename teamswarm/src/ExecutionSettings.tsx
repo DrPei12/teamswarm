@@ -1,3 +1,6 @@
+import { PermissionSelect } from "./PermissionSelect";
+import { permissionsForAccess } from "./permissions";
+import { FieldSelect } from "./FieldSelect";
 import { Disclosure } from "./Disclosure";
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -428,11 +431,11 @@ function ManualExecutionSettings({
             <div className="form-pair">
               <label>
                 {t("Harness")}
-                <select
+                <FieldSelect
                   value={settings.config.harness}
                   disabled={busy}
-                  onChange={async (e) => {
-                    const harness = e.target.value;
+                  onValueChange={async (value) => {
+                    const harness = value;
                     setBusy(true);
                     setError("");
                     try {
@@ -470,7 +473,7 @@ function ManualExecutionSettings({
                       )[id] ?? id}
                     </option>
                   ))}
-                </select>
+                </FieldSelect>
               </label>
               <div className="model-field">
                 {t("Model")}
@@ -687,10 +690,10 @@ function ManualExecutionSettings({
             <div className="form-pair">
               <label>
                 {t("Effort")}
-                <select
+                <FieldSelect
                   value={settings.config.effort ?? ""}
                   disabled={!settings.config.model}
-                  onChange={(e) => config({ effort: e.target.value || null })}
+                  onValueChange={(value) => config({ effort: value || null })}
                 >
                   {settings.config.effort && effortUnavailable && (
                     <option value={settings.config.effort} disabled>
@@ -702,15 +705,19 @@ function ManualExecutionSettings({
                       {v ? effortLabel(v) : t("Default")}
                     </option>
                   ))}
-                </select>
+                </FieldSelect>
               </label>
               <label>
-                {t("Access")}
-                <select
+                {t("File access")}
+                <FieldSelect
                   value={settings.config.access}
-                  onChange={(e) =>
+                  onValueChange={(value) =>
                     config({
-                      access: e.target.value as "read-only" | "workspace-write",
+                      access: value as "read-only" | "workspace-write",
+                      permissions: permissionsForAccess(
+                        settings.config,
+                        value as "read-only" | "workspace-write",
+                      ),
                     })
                   }
                 >
@@ -718,9 +725,19 @@ function ManualExecutionSettings({
                     {t("Project read and write")}
                   </option>
                   <option value="read-only">{t("Read only")}</option>
-                </select>
+                </FieldSelect>
               </label>
             </div>
+            {["codex", "claude-code"].includes(settings.config.harness) && (
+              <label>
+                {t("Execution permissions")}
+                <PermissionSelect
+                  config={settings.config}
+                  disabled={busy}
+                  onChange={(permissions) => config({ permissions })}
+                />
+              </label>
+            )}
             {!subscriptionMode && (
               <div
                 className="advanced-settings"
@@ -765,11 +782,11 @@ function ManualExecutionSettings({
                   </label>
                   <label>
                     {t("Protocol")}
-                    <select
+                    <FieldSelect
                       value={settings.config.protocol ?? ""}
-                      onChange={(e) =>
+                      onValueChange={(value) =>
                         config({
-                          protocol: (e.target.value ||
+                          protocol: (value ||
                             null) as RuntimeSettings["config"]["protocol"],
                         })
                       }
@@ -780,7 +797,7 @@ function ManualExecutionSettings({
                       <option value="anthropic-messages">
                         Anthropic Messages
                       </option>
-                    </select>
+                    </FieldSelect>
                   </label>
                   <label>
                     {t("API key")}

@@ -10,6 +10,7 @@ import { supportsSubscription, subscriptionAccounts } from "./harness/subscripti
 import { homedir } from "node:os";
 import { resourceInput, directoryQuery, directoryDetail } from "./catalog.js";
 import { capabilitiesInput } from "./capabilities.js";
+import { devicePolicyInput } from "./resources.js";
 import { allocationRequest, resourceSelection } from "./allocation-contract.js";
 import {
   attemptAllocation,
@@ -45,8 +46,32 @@ import {
 
 export function runtimeRoutes(runtime: TeamRuntime): Router {
   const router = Router();
+  router.get("/teams/:teamId/approvals", (req, res) => res.json(runtime.approvals.list(param(req.params.teamId), true)));
+  router.post("/teams/:teamId/approvals/:approvalId", (req, res) => {
+    const input = parse(z.object({ accepted: z.boolean() }).strict(), req.body);
+    res.json(runtime.approvals.answer(param(req.params.teamId), param(req.params.approvalId), input.accepted));
+  });
   router.use(projectFileRoutes(runtime));
   const store = runtime.store;
+  router.get("/device-resources", async (_req,res) => { await runtime.resources.refresh(); res.json(runtime.resources.state()); });
+  router.put("/device-resources/policy", (req,res) => res.json(runtime.resources.configure(parse(devicePolicyInput,req.body))));
+  const modelAccountOperation=async<T>(operation:()=>Promise<T>):Promise<T>=>{
+    try{return await operation();}catch(error){throw badRequest("chatgpt_connection_error",error instanceof Error ? error.message : "ChatGPT connection failed.");}
+  };
+  router.get("/model-accounts/chatgpt", (_req,res) => res.json({ accounts:runtime.models.accounts.list() }));
+  router.post("/model-accounts/chatgpt/sign-in", async (req,res) => {
+    const input = parse(z.object({accountId:z.string().uuid().optional()}).strict(),req.body);
+    res.json(await modelAccountOperation(()=>runtime.models.accounts.start(input.accountId)));
+  });
+  router.get("/model-accounts/chatgpt/sign-in/:id", (req,res) => res.json(runtime.models.accounts.status(param(req.params.id))));
+  router.delete("/model-accounts/chatgpt/sign-in/:id",(req,res)=>res.json(runtime.models.accounts.cancel(param(req.params.id))));
+  router.get("/model-accounts/chatgpt/:id/models", async (req,res) => res.json({models:await modelAccountOperation(()=>runtime.models.accounts.models(parse(z.string().uuid(),req.params.id)))}));
+  router.post("/model-accounts/chatgpt/:id/sign-out",async(req,res)=>res.json(await modelAccountOperation(()=>runtime.models.disconnect(parse(z.string().uuid(),req.params.id)))));
+  router.get("/teams/:teamId/runtime-resources", (req,res) => {
+    const teamId = param(req.params.teamId);
+    if (!store.teams.getTeam(teamId)) throw notFound();
+    res.json(runtime.resources.state(teamId));
+  });
   router.get("/teams/:teamId/capabilities", (req,res)=>res.json(runtime.catalog.capabilities.read(param(req.params.teamId))));
   router.put("/teams/:teamId/capabilities", (req,res)=>res.json(runtime.catalog.capabilities.save(param(req.params.teamId),parse(capabilitiesInput,req.body))));
   router.post("/teams/:teamId/model-catalog", async (req,res)=>{
@@ -803,22 +828,30 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
-    let writable = true;
+    let writable = true, closed = false, scheduled = false;
+    const schedule = () => {
+      if (closed || scheduled) return;
+      scheduled = true;
+      setImmediate(() => { scheduled = false; if (!closed) send(); });
+    };
     const send = () => {
       if (runtime.isClosing) {
         res.end();
         return;
       }
       if (!writable) return;
-      for (const event of store.events(teamId, after, 100)) {
+      const events = store.events(teamId, after, 100);
+      for (const event of events) {
         writable = res.write(
           `id: ${event.sequence}\nevent: team\ndata: ${JSON.stringify(event)}\n\n`,
         );
         after = event.sequence;
         if (!writable) break;
       }
+      if (writable && events.length === 100) schedule();
     };
-    const tick = setInterval(send, 250),
+    const unsubscribe = store.changes.subscribe(schedule);
+    const tick = setInterval(send, 5000),
       heartbeat = setInterval(() => {
         if (writable) writable = res.write(": keepalive\n\n");
       }, 15000);
@@ -829,6 +862,8 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       send();
     });
     res.on("close", () => {
+      closed = true;
+      unsubscribe();
       clearInterval(tick);
       clearInterval(heartbeat);
     });

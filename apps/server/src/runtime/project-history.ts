@@ -76,7 +76,7 @@ const version = (documents: Record<string, string>) =>
     ),
   );
 
-function cleanDefinition(content: string) {
+export function cleanDefinition(content: string) {
   // Narrow structural checks, not a ban on domain words such as "old password".
   if (
     /^\s*(?:#{1,6}\s*)?(?:变更记录|修订历史|更新日志|本次更新|版本演变|changelog|revision history)\s*[:：]?\s*$/im.test(
@@ -87,11 +87,12 @@ function cleanDefinition(content: string) {
     ) ||
     /^\s*(?:本文档|本方案|本版本)(?:是|为)?(?:最新|旧版|从.+更新)/m.test(
       content,
-    )
+    ) ||
+    /^\s*(?:我(?:们)?(?:已经|已|刚刚|先)(?:阅读|读取|检查|核对|更新|整理)|I (?:have (?:read|reviewed|updated)|will (?:read|review|update))\b)/im.test(content)
   )
     throw badRequest(
       "document_contains_history",
-      "Keep the complete project definition in the document. Put revision explanations in the history node reason.",
+      "State project facts directly. Keep revision explanations in source metadata and the history node reason.",
     );
 }
 
@@ -189,7 +190,7 @@ export class ProjectHistory {
     });
   }
   forConversation(teamId: string, conversationId: string): ProjectBranch {
-    if (!this.store.teams.getConversationDetail(teamId, conversationId))
+    if (!this.store.db.prepare("SELECT id FROM conversations WHERE team_id=? AND id=?").get(teamId, conversationId))
       throw notFound();
     const row = this.store.db
       .prepare(

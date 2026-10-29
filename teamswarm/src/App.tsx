@@ -1,3 +1,5 @@
+import { FieldSelect } from "./FieldSelect";
+import { ApprovalRequests } from "./ApprovalRequests";
 import { Disclosure } from "./Disclosure";
 import { AttachmentChip } from "./AttachmentChip";
 import { ViewBoundary } from "./ViewBoundary";
@@ -1309,6 +1311,10 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 >
                   {chat && (
                     <div className="messages" aria-label={tr("Conversation")}>
+                      <ApprovalRequests
+                        teamId={team.id}
+                        workspace={workspace}
+                      />
                       {chat.historyBefore && (
                         <button
                           className="load-older-messages"
@@ -2044,29 +2050,20 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
               responsibility = String(data.get("responsibility")).trim();
             const settings = workspace.executions?.[team.id]?.settings;
             if (!name || !responsibility || !settings) return;
-            const ids: Record<string, string> = {
-              Codex: "codex",
-              "Claude Code": "claude-code",
-              Grok: "grok",
-              pi: "pi",
-              OpenCode: "opencode",
-              "DeepSeek Harness": "deepseek-harness",
-            };
             const model = String(data.get("model")).trim();
             setBusy(true);
             try {
-              await product.command(`/teams/${team.id}/members`, {
-                clientRequestId: crypto.randomUUID(),
+              await product.addMember(
+                team.id,
                 name,
                 responsibility,
-                config: {
-                  ...settings.config,
-                  harness:
-                    ids[String(data.get("harness"))] ??
-                    String(data.get("harness")),
-                  model: !model || model === "Default model" ? null : model,
+                {
+                  harness: String(data.get("harness")).trim(),
+                  model,
+                  effort: settings.config.effort ?? "Default",
                 },
-              });
+                crypto.randomUUID(),
+              );
               setScreen(null);
             } catch (error) {
               setNotice((error as Error).message);
@@ -2091,6 +2088,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 name="responsibility"
                 placeholder={tr("e.g. Design & typography")}
                 maxLength={160}
+                required
               />
             </label>
             <div className="form-columns">
@@ -2234,19 +2232,19 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
             </label>
             <label>
               {tr("Language")}
-              <select
+              <FieldSelect
                 name="language"
                 value={workspace.language}
-                onChange={(event) =>
+                onValueChange={(value) =>
                   update((old) => ({
                     ...old,
-                    language: event.target.value as Language,
+                    language: value as Language,
                   }))
                 }
               >
                 <option value="en">English</option>
                 <option value="zh-CN">简体中文</option>
-              </select>
+              </FieldSelect>
             </label>
             <label>{tr("Appearance")}</label>
             <div className="theme-options">

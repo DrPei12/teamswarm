@@ -107,7 +107,8 @@ try {
     form = await edit(renamed);
     await form.getByLabel("Maximum output tokens", { exact: true }).fill("32768");
     await form.getByLabel("Context window tokens", { exact: true }).fill("1048576");
-    await form.getByRole("combobox", { name: /^Harness/ }).selectOption("codex");
+    await form.getByRole("combobox", { name: /^Harness/ }).click();
+    await page.getByRole("option", { name: "Codex", exact: true }).click();
     assert.equal(await form.getByLabel("Maximum output tokens", { exact: true }).count(), 0);
     await save(form);
     assert.equal((await exported(renamed)).config.maxOutputTokens ?? null, null);
@@ -115,7 +116,8 @@ try {
   }
   await page.getByRole("button", { name: "Add resource", exact: true }).click();
   const form = page.locator(".resource-form");
-  await form.getByRole("combobox", { name: /^Harness/ }).selectOption("pi");
+  await form.getByRole("combobox", { name: /^Harness/ }).click();
+  await page.getByRole("option", { name: "Pi", exact: true }).click();
   assert.equal(await form.getByLabel("Maximum output tokens", { exact: true }).inputValue(), "");
   assert.equal(await form.getByLabel("Maximum output tokens", { exact: true }).getAttribute("placeholder"), "8192");
   assert.equal(await form.getByLabel("Context window tokens", { exact: true }).inputValue(), "");

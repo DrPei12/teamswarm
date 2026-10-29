@@ -1164,11 +1164,7 @@ function HistoryContent({
                       {detailTab === "members" ? (
                         <div className="history-contributors">
                           {!contributorsAt(displayed).length && (
-                            <p className="muted">
-                              {t(
-                                "This is a discussion or context checkpoint; no member result was attached.",
-                              )}
-                            </p>
+                            <p className="muted">{t("No contributors")}</p>
                           )}
                           {contributorsAt(displayed).map((work) => {
                             const member = memberFor(work);
@@ -1206,16 +1202,12 @@ function HistoryContent({
                                   </span>
                                 </div>
                                 <p>
-                                  {displayed.kind === "insight"
-                                    ? t(
-                                        "Preserved this idea from the discussion",
-                                      )
-                                    : work.title === "Host follow-up"
-                                      ? t("Reviewing team results")
-                                      : work.title.replace(
-                                          /^Review: /,
-                                          `${t("Review")} · `,
-                                        )}
+                                  {work.title === "Host follow-up"
+                                    ? t("Reviewing team results")
+                                    : work.title.replace(
+                                        /^Review: /,
+                                        `${t("Review")} · `,
+                                      )}
                                 </p>
                                 <small>
                                   {(

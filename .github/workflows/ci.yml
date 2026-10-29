@@ -36,5 +36,6 @@ jobs:
       - run: node teamswarm/scripts/verify-files.mjs
       - run: npm run harness:install -- pi opencode
       - run: node test/browser/resource-configuration.mjs
+      - run: node test/browser/execution-permissions.mjs
       - run: node test/native/opencode-output-budget.mjs
       - run: node test/native/pi-model-configuration.mjs

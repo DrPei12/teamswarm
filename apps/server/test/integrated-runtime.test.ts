@@ -260,7 +260,7 @@ test("Host frame binds the exact retained insights, output versions and attachme
     );
     assert.equal(frame.inputSha256, hash(JSON.stringify(input)));
     assert.equal(frame.inputBytes, Buffer.byteLength(JSON.stringify(input)));
-    assert(frame.inputBytes <= frame.maxBytes);
+    assert(frame.inputTokensEstimate <= frame.budget.inputTokens);
   } finally {
     f.close();
   }
@@ -304,6 +304,7 @@ test("Host continuity notes accept actual A2A and direct messages but reject oth
       sourceMessageIds: sourceIds,
     });
     assert.deepEqual(note.sourceMessageIds, sourceIds);
+    assert.equal((f.hostContext.read(f.run,{kind:"messages",messageId:sent.message.id,query:"",offset:0,limit:1}) as any).content,"Keep one shared directory");
     assert.deepEqual(
       f.records
         .sources(f.team.id, sourceIds, f.branch.id)

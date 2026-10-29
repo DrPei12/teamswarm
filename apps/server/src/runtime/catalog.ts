@@ -1,3 +1,4 @@
+import { readOnlyExecution } from "./harness/permissions.js";
 import { z } from "zod";
 import { conflict, notFound } from "../errors.js";
 import { RuntimeStore, activeStates, hash } from "./store.js";
@@ -302,7 +303,7 @@ export class TeamCatalog {
     const configuration = selectionCurrent ? selected?.config ?? member.config : choice?.config ?? member.config;
     return {
       harness: configuration.harness, model: configuration.model, effort: configuration.effort,
-      config: { ...configuration, access: member.config.access === "read-only" ? "read-only" as const : configuration.access },
+      config: member.config.access === "read-only" ? readOnlyExecution(configuration) : configuration,
       selection, allocationRevision: member.kind === "host" ? choice?.revision ?? 1 : member.allocationVersion ?? 1,
       selectionCurrent,
       selectionRetained,

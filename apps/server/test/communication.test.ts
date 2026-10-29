@@ -1683,7 +1683,7 @@ test("reply before yield, late cancellation, branch isolation, durable commitmen
   }
 });
 
-test("dependency-blocked queued responsibility does not deadlock useful assistance, member concurrency stays bounded", async () => {
+test("dependency-blocked responsibility permits useful assistance while each member retains one active turn", async () => {
   const t = await setup();
   try {
     const [a] = t.works;
@@ -1743,7 +1743,11 @@ test("dependency-blocked queued responsibility does not deadlock useful assistan
     });
     t.harness.finish(helper.work.id);
     await until(() => t.state(a.id).status === "running");
+    await until(() => t.state(helper.work.id).status !== "running");
     assert.equal(t.state(blocked.id).status, "queued");
+    const activeMembers = t.service.runtime.store.list<Work>("works", t.team.id)
+      .filter(w => w.status === "running").map(w => w.memberId);
+    assert.equal(new Set(activeMembers).size, activeMembers.length);
     assert.equal(
       t.service.runtime.store
         .list<Work>("works", t.team.id)

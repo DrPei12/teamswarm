@@ -34,7 +34,7 @@ copy(path.join(root, "teamswarm/licenses"), path.join(target, "licenses/frontend
 copy(path.join(root, "THIRD_PARTY_NOTICES.md"), path.join(target, "licenses/frontend.md"));
 copy(path.join(root, "teamswarm/public/fonts/LICENSE.txt"), path.join(target, "licenses/Inter-LICENSE.txt"));
 const lock = JSON.parse(readFileSync(path.join(root, "package-lock.json"), "utf8"));
-const dependencies = Object.fromEntries(["express", "jsonc-parser", "smol-toml", "yaml", "zod"].map(name => [name,
+const dependencies = Object.fromEntries(["express", "jsonc-parser", "smol-toml", "yaml", "zod", "@earendil-works/pi-ai", "jose"].map(name => [name,
   lock.packages["node_modules/" + name]?.version || lock.packages["apps/server/node_modules/" + name]?.version]));
 if (Object.values(dependencies).some(value => !value)) throw new Error("A service dependency is missing from the lockfile.");
 writeFileSync(path.join(target, "package.json"), JSON.stringify({ name: "teamswarm-service", version: identity.version,

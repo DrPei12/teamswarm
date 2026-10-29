@@ -44,7 +44,7 @@ export function resolveConnection(
   access: "read-only" | "workspace-write",
 ) {
   const preferred = protocols[harness];
-  const wire = ["pi", "opencode", "grok"].includes(harness)
+  const wire = preferred
     ? (
         [
           preferred,
@@ -53,7 +53,7 @@ export function resolveConnection(
           "chat-completions",
         ] as const
       ).find((p) => !!connection.endpoints[p])
-    : preferred;
+    : undefined;
   if (!wire || !connection.endpoints[wire])
     throw badRequest(
       "incompatible_protocol",

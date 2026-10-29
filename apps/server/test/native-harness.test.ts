@@ -47,7 +47,14 @@ test(
       };
       const result = await h.execute(req);
       assert.equal(result.status, "unknown");
-      assert.match(result.error ?? "", /descendant execution is unknown/);
+      assert.match(result.error ?? "", process.platform === "win32" ? /without a completion receipt/ : /descendant execution is unknown/);
+      if (process.platform === "win32" && descendant) {
+        for (let i=0;i<100;i++) {
+          try { process.kill(descendant,0); } catch { break; }
+          await new Promise(r=>setTimeout(r,20));
+        }
+        assert.throws(() => process.kill(descendant!,0), {code:"ESRCH"});
+      }
       await h.close();
     } finally {
       if (descendant) {
@@ -155,10 +162,7 @@ test("native configuration import preserves routing and never imports executable
     models: ["model-a"],
     credentialEnv: "TEST_MODEL_KEY",
   });
-  assert.throws(
-    () => resolveConnection(connection, "codex", "model-a", "read-only"),
-    /protocol/,
-  );
+  assert.equal(resolveConnection(connection,"codex","model-a","read-only").config.protocol,"chat-completions");
   assert.throws(
     () => resolveConnection(connection, "pi", "missing", "read-only"),
     /model/,

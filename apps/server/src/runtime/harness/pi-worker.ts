@@ -119,7 +119,7 @@ try {
     resourceLoader,
     sessionManager: manager,
     settingsManager: pi.SettingsManager.inMemory({
-      compaction: { enabled: false },
+      compaction: { enabled: true },
       retry: { enabled: false },
     }),
     tools: [
@@ -141,7 +141,7 @@ try {
   session.subscribe((event: any) => {
     // Native tool arguments/results and final messages only; no internal runtime objects.
     if (
-      ["message_end", "tool_execution_start", "tool_execution_end"].includes(
+      ["message_end", "tool_execution_start", "tool_execution_end", "compaction_end"].includes(
         event.type,
       )
     )

@@ -24,7 +24,12 @@ function load(text, globals, dependencies) {
   return exports;
 }
 const outbox = load(source("preferences-outbox"), {}, {});
-const modelCatalog = load(source("modelCatalog"), {}, {});
+const permissions = load(source("permissions"), {}, {});
+const modelCatalog = load(
+  source("modelCatalog"),
+  {},
+  { "./permissions": permissions },
+);
 const modelCatalogCache = load(source("modelCatalogCache"), {}, {});
 const service = source("service");
 function scenario() {
@@ -104,6 +109,7 @@ function scenario() {
         "./preferences-outbox": outbox,
         "./modelCatalog": modelCatalog,
         "./modelCatalogCache": modelCatalogCache,
+        "./permissions": permissions,
         react: { useSyncExternalStore() {} },
       },
     );

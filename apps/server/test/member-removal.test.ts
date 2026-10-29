@@ -20,6 +20,7 @@ async function fixture() {
   const service = createApp({ dataDir, harnesses: [] });
   // Persisted state transitions and HTTP are exercised without model execution.
   clearInterval((service.runtime as any).timer);
+  (service.runtime as any).requestPump = () => {};
   const { runtime } = service;
   const { store } = runtime;
   const team = service.store.createTeam("Member removal", "");
@@ -119,7 +120,7 @@ test("member deletion is authenticated, scoped, durable and preserves historical
     assert.deepEqual((await f.request(f.route)).body, deleted.body);
     assert.deepEqual(
       memberConversation(f.runtime, f.team.id, f.member.id),
-      before,
+      { ...before, canSend: false },
     );
     assert.equal(
       f.store.get<Work>("works", f.team.id, f.work.id).status,
@@ -179,7 +180,7 @@ test("member deletion is authenticated, scoped, durable and preserves historical
       );
       assert.deepEqual(
         memberConversation(reopened.runtime, f.team.id, f.member.id),
-        before,
+        { ...before, canSend: false },
       );
     } finally {
       await reopened.close();

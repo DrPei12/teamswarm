@@ -9,7 +9,9 @@ export class Correspondence {
   constructor(readonly store: RuntimeStore) {
     store.db.exec(`CREATE TABLE IF NOT EXISTS runtime_correspondence (
       id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id), data TEXT NOT NULL CHECK(json_valid(data)));
-      CREATE INDEX IF NOT EXISTS correspondence_team ON runtime_correspondence(team_id);`);
+      CREATE INDEX IF NOT EXISTS correspondence_team ON runtime_correspondence(team_id);
+      CREATE INDEX IF NOT EXISTS correspondence_status ON runtime_correspondence(team_id,json_extract(data,'$.status'));`);
+    store.changes.track("runtime_correspondence", "correspondence", "team_id", true, "data");
   }
   list(teamId: string): MemberMessage[] {
     return this.store.db
@@ -25,6 +27,7 @@ export class Correspondence {
         "INSERT INTO runtime_correspondence VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
       )
       .run(message.id, message.teamId, JSON.stringify(message));
+    this.store.changes.signal();
   }
   member(teamId: string, id: string): Member {
     const member = this.store
@@ -183,6 +186,7 @@ export class Correspondence {
         m.recipientId === work.memberId &&
         m.branchId === branchId &&
         (!m.threadId || m.threadId === threadOf(work)) &&
+        (!m.workId || m.workId === work.id) &&
         m.status === "queued",
     );
     for (const message of messages) {
@@ -221,6 +225,18 @@ export class Correspondence {
       );
     }
   }
+  failBeforeStart(work: Work, error: string) {
+    const ids = new Set(work.interaction?.messageIds ?? []);
+    for (const message of this.list(work.teamId).filter(m =>
+      m.status === "queued" && m.recipientId === work.memberId &&
+      (m.workId === work.id || ids.has(m.id)))) {
+      message.status = "failed";
+      message.workId = work.id;
+      message.error = error;
+      this.save(message);
+      this.store.event(work.teamId, "communication.failed", { messageId: message.id, error }, work);
+    }
+  }
   cancelQueued(work: Work) {
     const branchId = this.store.history!.forRun(
       this.store.get<Run>("runs", work.teamId, work.runId),
@@ -251,13 +267,15 @@ export class Correspondence {
         (m.workId === work.id || work.interaction?.messageIds.includes(m.id)),
     )) {
       message.status = "queued";
+      message.workId = work.id;
       delete message.error;
       delete message.attemptId;
       this.save(message);
     }
   }
   schedule(teamId: string) {
-    const pending = this.list(teamId).filter((m) => m.status === "queued");
+    const pending = this.store.db.prepare("SELECT data FROM runtime_correspondence WHERE team_id=? AND json_extract(data,'$.status')='queued' ORDER BY rowid")
+      .all(teamId).map(row => JSON.parse(String(row.data)) as MemberMessage);
     const groups = new Map<string, MemberMessage[]>();
     for (const message of pending) {
       const key = `${message.recipientId}:${message.branchId}:${message.threadId ?? "legacy"}`;
@@ -265,7 +283,19 @@ export class Correspondence {
     }
     for (const messages of groups.values()) {
       const recipientId = messages[0].recipientId;
-      const works = this.store.list<Work>("works", teamId);
+      // Repair mail left queued by older services after a pre-start failure.
+      // The original work owns delivery, even across a process restart.
+      const previous = this.store.workQuery(teamId, { memberId: recipientId });
+      const failed = previous.filter(w => ["failed", "interrupted", "rejected"].includes(w.status) &&
+        w.interaction?.messageIds.some(id => messages.some(m => m.id === id && (!m.workId || m.workId === w.id))));
+      if (failed.length) {
+        this.store.transaction(() => {
+          for (const work of failed.reverse()) this.failBeforeStart(work, work.error ?? "Delivery stopped before execution.");
+        });
+        continue;
+      }
+      const works = this.store.workQuery(teamId, { memberId: recipientId,
+        statuses: ["queued", "running", "stopping", "recovery_required"] });
       if (
         works.some(
           (w) =>
@@ -278,7 +308,8 @@ export class Correspondence {
         )
       )
         continue;
-      const base = works
+      const base = this.store.workQuery(teamId, { memberId: recipientId, branchId: messages[0].branchId,
+        ...(messages[0].threadId ? { threadId: messages[0].threadId } : {}), limit: 1 })
         .filter(
           (w) =>
             w.memberId === recipientId &&
@@ -292,13 +323,13 @@ export class Correspondence {
       const run = this.store.get<Run>("runs", teamId, base.runId);
       if (run.state === "paused") continue;
       if (
-        works.filter((w) => w.runId === run.id).length >=
+        this.store.workCount(teamId, run.id) >=
         run.settings.maxWorksPerRun
       ) {
         for (const message of messages) {
           message.status = "failed";
           message.error =
-            "The run work limit was reached. Start a new Host conversation to continue.";
+            "This run has reached its work limit. Retry the failed message or ask Host to continue the work.";
           this.save(message);
           this.store.event(
             teamId,
@@ -325,6 +356,10 @@ export class Correspondence {
         };
         work.threadId = threadOf(base);
         this.store.save("works", work);
+        for (const message of messages) {
+          message.workId = work.id;
+          this.save(message);
+        }
       });
     }
   }

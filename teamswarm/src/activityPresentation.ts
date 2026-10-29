@@ -19,6 +19,7 @@ const contextTools = new Set([
   "Grep",
   "Glob",
   "ListDir",
+  "team_device_resources",
   "team_project_context",
   "team_acknowledge_context",
   "team_adoption_context",

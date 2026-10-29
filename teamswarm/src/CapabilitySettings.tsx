@@ -1,3 +1,4 @@
+import { FieldSelect } from "./FieldSelect";
 import { useEffect, useState } from "react";
 import {
   ArrowLeft,
@@ -22,6 +23,7 @@ import { useI18n } from "./i18n";
 import { Disclosure } from "./Disclosure";
 import { HarnessInstallation } from "./HarnessInstallation";
 import { HarnessAccount } from "./HarnessAccount";
+import { ChatGPTConnection } from "./ChatGPTConnection";
 import { ModelPicker, modelProvider } from "./ModelPicker";
 import type { HarnessInspection } from "./harnessCatalog";
 import "./capabilities.css";
@@ -45,13 +47,11 @@ const protocolNames = {
   "anthropic-messages": "Anthropic Messages",
 };
 const compatible = (c: ModelAccess, id: string) =>
-  c.kind === "subscription"
-    ? c.subscriptionHarness === id
-    : id === "codex"
-      ? !!c.endpoints.responses
-      : ["claude-code", "deepseek-harness"].includes(id)
-        ? !!c.endpoints["anthropic-messages"]
-        : Object.keys(c.endpoints).length > 0;
+  c.chatgptAccountId || (c.kind === "subscription" && !c.subscriptionHarness)
+    ? true
+    : c.kind === "subscription"
+      ? c.subscriptionHarness === id
+      : Object.keys(c.endpoints).length > 0;
 type Installation = { installed: boolean; version: string | null };
 type Tab = "harnesses" | "connections" | "preferences";
 
@@ -245,9 +245,6 @@ export function CapabilitySettings({
           >
             {tab === "harnesses" && (
               <>
-                <div className="cap-intro">
-                  <h3>{t("Choose the tools your team can use")}</h3>
-                </div>
                 <div className="cap-harness-list">
                   {harnesses.map((h) => {
                     const selected = draft.enabledHarnesses.includes(h.id),
@@ -324,7 +321,7 @@ export function CapabilitySettings({
               <>
                 <div className="cap-intro cap-intro-row">
                   <div>
-                    <h3>{t("Give your team access to models")}</h3>
+                    <h3>{t("Models")}</h3>
                   </div>
                   <button
                     className="primary-button"
@@ -544,11 +541,6 @@ export function CapabilitySettings({
                     {t("Advanced settings")} →
                   </button>
                 </div>
-                <p className="cap-footnote">
-                  {t(
-                    "Manual Host, member and task choices are in Advanced settings. Running work keeps its current configuration.",
-                  )}
-                </p>
               </>
             )}
           </div>
@@ -694,6 +686,11 @@ function ConnectionEditor({
         throw new Error(t("Give this connection a name."));
       if (draft.kind === "api" && !draft.models.length)
         throw new Error(t("Add at least one model."));
+      if (draft.kind === "subscription" && !draft.subscriptionHarness) {
+        if (!draft.chatgptAccountId)
+          throw new Error(t("Continue with ChatGPT first."));
+        if (!draft.models.length) throw new Error(t("Add at least one model."));
+      }
       const ref = draft.kind === "api" ? await credential() : null;
       if (draft.kind === "api" && !ref)
         throw new Error(t("Enter an API key first."));
@@ -753,7 +750,8 @@ function ConnectionEditor({
                   models: [],
                   endpoints: kind === "api" ? { "chat-completions": "" } : {},
                   credentialEnv: null,
-                  subscriptionHarness: kind === "subscription" ? "codex" : null,
+                  subscriptionHarness: null,
+                  chatgptAccountId: null,
                 });
                 setCatalog([]);
                 setSecret("");
@@ -831,10 +829,10 @@ function ConnectionEditor({
               <div className="cap-api-options">
                 <label className="cap-field">
                   <span>{t("Primary API format")}</span>
-                  <select
+                  <FieldSelect
                     value={primary}
-                    onChange={(e) => {
-                      const p = e.target.value as ConnectionProtocol;
+                    onValueChange={(value) => {
+                      const p = value as ConnectionProtocol;
                       setDraft({
                         ...draft,
                         endpoints: { [p]: draft.endpoints[primary] ?? "" },
@@ -847,13 +845,8 @@ function ConnectionEditor({
                         {protocolNames[p]}
                       </option>
                     ))}
-                  </select>
+                  </FieldSelect>
                 </label>
-                <p>
-                  {t(
-                    "Add another endpoint only if this provider supports it. Host can then use more compatible Harnesses.",
-                  )}
-                </p>
                 {protocols
                   .filter((p) => p !== primary)
                   .map((p) => (
@@ -881,34 +874,50 @@ function ConnectionEditor({
           <>
             <div className="cap-account-options">
               {[
-                { id: "codex", name: "ChatGPT" },
+                { id: "chatgpt", name: "ChatGPT" },
+                { id: "codex", name: "ChatGPT (Codex)" },
                 { id: "claude-code", name: "Claude" },
                 { id: "grok", name: "Grok" },
               ].map((a) => (
                 <button
                   type="button"
                   key={a.id}
-                  aria-pressed={draft.subscriptionHarness === a.id}
+                  aria-pressed={
+                    (draft.subscriptionHarness ?? "chatgpt") === a.id
+                  }
                   onClick={() => {
                     setDraft({
                       ...draft,
-                      subscriptionHarness: a.id,
+                      subscriptionHarness: a.id === "chatgpt" ? null : a.id,
+                      chatgptAccountId: null,
                       models: [],
                     });
                     setError("");
                   }}
                 >
                   {a.name}
-                  {draft.subscriptionHarness === a.id && <Check size={14} />}
+                  {(draft.subscriptionHarness ?? "chatgpt") === a.id && (
+                    <Check size={14} />
+                  )}
                 </button>
               ))}
             </div>
-            <p className="cap-footnote">
-              {t(
-                "Subscriptions use their official Harness login. API connections can be shared across compatible Harnesses.",
-              )}
-            </p>
-            {draft.subscriptionHarness === "codex" ? (
+            {!draft.subscriptionHarness ? (
+              <ChatGPTConnection
+                value={draft.chatgptAccountId}
+                onChange={(id) =>
+                  setDraft((v) => ({ ...v, chatgptAccountId: id, models: [] }))
+                }
+                onModels={(models) =>
+                  setCatalog(
+                    models.map((model) => ({
+                      ...model,
+                      provider: "OpenAI",
+                    })),
+                  )
+                }
+              />
+            ) : draft.subscriptionHarness === "codex" ? (
               <CodexAccount
                 inspection={inspection}
                 onChanged={() => refresh((v) => v + 1)}
@@ -939,13 +948,6 @@ function ConnectionEditor({
               </button>
             )}
           </div>
-          <p>
-            {t(
-              draft.kind === "api"
-                ? "Choose models from the provider, or enter their model IDs."
-                : "Choose specific models, or let Host use the account's available models.",
-            )}
-          </p>
           <div className="cap-model-chips">
             {draft.models.map((m) => (
               <span key={m}>
@@ -988,11 +990,7 @@ function ConnectionEditor({
       </form>
       <footer className="cap-footer">
         <div role={error ? "alert" : undefined}>
-          {error ? (
-            <span className="form-error">{t(error)}</span>
-          ) : (
-            t("Add the connection, then save your team settings.")
-          )}
+          {error ? <span className="form-error">{t(error)}</span> : null}
         </div>
         <button
           type="button"

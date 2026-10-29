@@ -1,3 +1,4 @@
+import { PermissionSelect } from "./PermissionSelect";
 import { isComposing } from "./design-system/motion";
 import {
   forwardRef,
@@ -232,6 +233,14 @@ export function RuntimeControls({
             </Popover.Portal>
           </Popover.Root>
         ),
+      )}
+      {executionConfig && (
+        <PermissionSelect
+          compact
+          config={executionConfig}
+          disabled={disabled}
+          onChange={(permissions) => onChange({ ...config, permissions })}
+        />
       )}
       {showContext && (
         <Tooltip.Root>

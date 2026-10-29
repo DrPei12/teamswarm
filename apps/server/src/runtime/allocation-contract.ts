@@ -4,6 +4,7 @@ import type { AllocationBoundary, AttemptExecutionSnapshot, CompatibilityIssue,
   EffectiveSelection, ExecutionObservation, PortableAllocationPackage,
   ResourceAvailability, ResourceSelection } from "@team/contracts/allocation";
 import { executionConfig, key } from "./validation.js";
+import { modelRouteIssues } from "./model-routing.js";
 
 const version = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 export const resourceSelection = z.object({
@@ -25,6 +26,7 @@ const protocols: Record<string, readonly string[]> = {
  * remains valid. Unknown adapters fail closed for the registered Harness contract.
  */
 export function checkExecutionCompatibility(c: ExecutionConfig): CompatibilityIssue[] {
+  const routed=modelRouteIssues(c);if(routed)return routed;
   const supported = Object.hasOwn(protocols, c.harness) ? protocols[c.harness] : undefined;
   if (!supported) return ["unknown_harness"];
   const issues: CompatibilityIssue[] = [];

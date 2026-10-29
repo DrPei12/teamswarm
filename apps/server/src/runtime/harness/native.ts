@@ -1,4 +1,6 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { validateNativePermissions } from "./permissions.js";
+import { type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawnOwned, confirmOwnedExit } from "./owned-process.js";
 import { randomUUID } from "node:crypto";
 import {
   readFileSync,
@@ -19,6 +21,7 @@ import type {
 import { redact } from "../redact.js";
 import { sessionStoreScope } from "./session-scope.js";
 import { NativeUsage } from "./native-usage.js";
+import { contextObservation } from "../context-budget.js";
 import { preflight, type PreflightInput } from "./preflight.js";
 import { grokModelConfig, isolateGrokEnvironment } from "./grok-config.js";
 import { accountHome, subscriptionEnvironment, subscriptionInspection, subscriptionAccounts, subscriptionScope, claudeSubscriptionFlags } from "./subscriptions.js";
@@ -34,6 +37,7 @@ import {
 
 type NativeId = "claude-code" | "grok" | "pi" | "opencode" | "deepseek-harness";
 type Active = {
+  resourceId: string;
   child: ChildProcessWithoutNullStreams;
   done: Promise<HarnessResult>;
   stopping: boolean;
@@ -47,6 +51,9 @@ export class NativeHarness implements Harness {
     return sessionStoreScope(nativeHome(this.id)) + (this.id === "claude-code" || this.id === "grok" ? ":" + subscriptionScope(this.id) : "") + (this.id === "grok" ? ":acp-profile-v1" : "");
   }
   private active = new Map<string, Active>();
+  resources() {
+    return [...this.active.values()].flatMap(a => a.child.pid ? [{ id: a.resourceId, pid: a.child.pid, sessions: 1 }] : []);
+  }
   constructor(readonly id: NativeId) {
     this.capabilities = {
       dispatchTracking: true,
@@ -57,6 +64,8 @@ export class NativeHarness implements Harness {
       dynamicTools: true,
       interrupt: true,
       usage: true,
+      contextCompaction: id === "pi" || id === "claude-code" || id === "opencode",
+      contextCompactionEvents: id !== "opencode",
       customModel: true,
       customProvider: true,
       nativeChecks: false,
@@ -92,6 +101,9 @@ export class NativeHarness implements Harness {
     }
   }
   validateConfig(config: ExecutionConfig) {
+    validateNativePermissions(config);
+    if (config.permissions && this.id !== "claude-code")
+      throw new Error("This Harness does not support configurable approval modes yet.");
     const entry = nativeEntry(this.id);
     if (config.contextWindowTokens != null && !["pi", "opencode"].includes(this.id))
       throw new Error("An explicit context window requires Pi or OpenCode.");
@@ -152,7 +164,7 @@ export class NativeHarness implements Harness {
     mkdirSync(home, { recursive: true, mode: 0o700 });
     const binding = JSON.stringify({
       workspace: path.resolve(request.workspace),
-      config: c,
+      config: request.modelRoute?.sourceConfig ?? c,
       ...(request.workspaceBoundary ? { workspaceBoundary: request.workspaceBoundary } : {}),
       ...(subscription ? { accountScope: subscriptionScope(this.id as "claude-code" | "grok") } : {}),
     });
@@ -205,6 +217,13 @@ export class NativeHarness implements Harness {
         if (!subscription) {
           env.ANTHROPIC_API_KEY = env[c.credentialEnv!];
           env.ANTHROPIC_BASE_URL = c.baseUrl!;
+          if (request.modelRoute) {
+            env.ANTHROPIC_DEFAULT_SONNET_MODEL = c.model!;
+            env.ANTHROPIC_DEFAULT_OPUS_MODEL = c.model!;
+            env.ANTHROPIC_DEFAULT_HAIKU_MODEL = c.model!;
+            env.CLAUDE_CODE_SUBAGENT_MODEL = c.model!;
+            env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = "1";
+          }
         }
         env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
         env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = "8192";
@@ -225,11 +244,14 @@ export class NativeHarness implements Harness {
           ...(c.model ? ["--model", c.model] : []),
           ...(subscription && c.effort ? ["--effort", c.effort] : []),
           "--permission-mode",
-          "dontAsk",
+          c.permissions?.harness === "claude-code" ? c.permissions.mode : "dontAsk",
+          ...(c.permissions ? ["--permission-prompt-tool", "stdio"] : []),
           "--tools",
           nativeTools,
           "--allowedTools",
-          nativeTools + ",mcp__teamswarm__*",
+          (c.permissions ? "Read,Glob,Grep" : nativeTools) + ",mcp__teamswarm__*" +
+            (c.permissions?.harness === "claude-code" && c.access === "workspace-write" && c.permissions.allow?.length ? "," + c.permissions.allow.join(",") : ""),
+          ...(c.permissions?.harness === "claude-code" && c.permissions.deny?.length ? ["--disallowedTools", c.permissions.deny.join(",")] : []),
           "--mcp-config",
           mcp,
           "--strict-mcp-config",
@@ -409,11 +431,10 @@ export class NativeHarness implements Harness {
     }
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawn(command, args, {
+      child = await spawnOwned(command, args, {
         cwd: request.workspace,
         env,
         windowsHide: true,
-        stdio: "pipe",
         detached: process.platform !== "win32",
       });
     } catch (error) {
@@ -421,6 +442,7 @@ export class NativeHarness implements Harness {
       throw error;
     }
     const receiptPath = path.join(home, `${turnId}.json`);
+    const resourceId = randomUUID();
     const receipt = (result?: HarnessResult) => {
       writeFileSync(
         receiptPath + ".tmp",
@@ -467,6 +489,10 @@ export class NativeHarness implements Harness {
         const observation = usageTotal.observe(u, replace);
         if (observation) emit("usage", observation);
       };
+      const context = (u: any) => {
+        const observation = contextObservation(this.id, u);
+        if (observation) emit("context.usage", { ...observation });
+      };
       lines.on("line", (line) => {
         let event: any;
         try {
@@ -479,6 +505,8 @@ export class NativeHarness implements Harness {
           event = redact(event, c.credentialEnv);
           emit("native.event", { harness: this.id, event });
           if (this.id === "pi" || this.id === "grok") {
+            if (event.type === "pi.event" && event.event.type === "compaction_end" && event.event.result && !event.event.aborted)
+              emit("context.compacted", {});
             if (event.type === "session") nativeSession = event.id;
             if (event.type === "grok.event") {
               const update = event.event;
@@ -499,6 +527,7 @@ export class NativeHarness implements Harness {
               const message = event.event.message;
               if (message.role === "assistant") {
                 usage(message.usage ?? {});
+                context(message.usage ?? {});
                 emit("model.observed", {
                   model: message.model,
                   provider: message.provider,
@@ -507,11 +536,30 @@ export class NativeHarness implements Harness {
             }
             if (event.type === "result") terminal = event;
           } else if (this.id === "claude-code") {
+            if (event.type === "control_request") {
+              const approval = event.request;
+              const answer = async () => {
+                const allowed = approval?.subtype === "can_use_tool" && c.access === "workspace-write" &&
+                  !request.workspaceBoundary && !!c.permissions && (await request.onPermission?.({
+                    nativeId: String(event.request_id), tool: String(approval.tool_name), input: approval.input ?? {},
+                  })) === "allow";
+                if (!child.stdin.destroyed && !child.stdin.writableEnded)
+                  child.stdin.write(JSON.stringify({ type: "control_response", response: {
+                    subtype: "success", request_id: event.request_id,
+                    response: allowed ? { behavior: "allow", updatedInput: approval.input } : { behavior: "deny", message: "Operation was not approved." },
+                  } }) + "\n");
+              };
+              void answer().catch(() => {
+                if (!child.stdin.destroyed && !child.stdin.writableEnded) child.stdin.write(JSON.stringify({ type: "control_response", response: { subtype: "error", request_id: event.request_id, error: "Approval request failed." } }) + "\n");
+              });
+            }
+            if (event.type === "system" && event.subtype === "compact_boundary") emit("context.compacted", {});
             if (event.type === "system" && event.subtype === "init") {
               nativeSession = event.session_id;
               emit("model.observed", { model: event.model });
             }
             if (event.type === "assistant") {
+              context(event.message?.usage ?? {});
               text += (event.message?.content ?? [])
                 .filter((b: any) => b.type === "text")
                 .map((b: any) => b.text)
@@ -550,6 +598,7 @@ export class NativeHarness implements Harness {
               };
             if (event.type === "step_finish") {
               usage(event.part?.tokens ?? {});
+              context(event.part?.tokens ?? {});
               if (["stop", "end_turn"].includes(event.part?.reason))
                 terminal = { status: "completed", text };
               else if (event.part?.reason === "length")
@@ -686,6 +735,8 @@ export class NativeHarness implements Harness {
           ? await active.termination
           : false;
         this.active.delete(id);
+        const reclaimed = await confirmOwnedExit(child);
+        emit(reclaimed ? "resource.released" : "resource.unconfirmed", { id: resourceId, pid: child.pid, scope: "attempt" });
         await bridge.close();
         let result: HarnessResult = observationFailure
           ? { status: "unknown", text, error: observationFailure }
@@ -735,8 +786,9 @@ export class NativeHarness implements Harness {
         }, 2000);
       });
     });
-    this.active.set(id, { child, done, stopping: false });
+    this.active.set(id, { resourceId, child, done, stopping: false });
     try {
+      request.onEvent({ type: "resource.acquired", data: { id: resourceId, pid: child.pid, scope: "attempt" } });
       receipt();
     } catch {
       observationFailure =

@@ -267,6 +267,26 @@ try {
   await page.locator(".collaboration-view .react-flow").waitFor();
   assert.equal(await memberCard.count(), 0);
   assert.equal(await page.locator(".host-node").count(), 1);
+  await page
+    .getByRole("button", { name: "Deleted members", exact: true })
+    .click();
+  await page
+    .getByRole("menuitem", { name: "Temporary member", exact: true })
+    .click();
+  await page.locator(".member-conversation").waitFor();
+  assert.equal(await page.locator(".member-composer").count(), 0);
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Delete member", exact: true })
+      .count(),
+    0,
+  );
+  await page.screenshot({
+    path: path.join(output, "deleted-member-history.png"),
+  });
+  report.checks.push(
+    "Deleted members remain accessible with read-only history and no composer",
+  );
   assert.equal(report.errors.length, 0, report.errors.join("\n"));
   report.checks.push(
     "Member context menu, cancel, header delete and persisted roster after reload; Host is retained",

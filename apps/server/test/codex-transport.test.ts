@@ -67,6 +67,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
         onSession: (id: string) => { sessions.push(id); }, onTurn: () => {},
         onDispatch: (boundary: any) => {boundaries.push(boundary);},
         onEvent: (event: any) => {events.push(event);}, onTool: async () => ({}),
+        onContextRebuild: () => "Fresh project overview and relevant original definitions.",
       };
       const offset = readFileSync(calls, {encoding: "utf8", flag: "a+"}).length;
       try {
@@ -87,6 +88,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
           assert.equal(starts[0].params.dynamicTools[0].name, "team_state");
           assert.equal(turns[0].params.threadId, "fresh-session");
           assert.equal(turns[0].params.input[0].text, request.input);
+          assert.equal(request.input, "Fresh project overview and relevant original definitions.");
         }
       } finally { await harness.close(); }
     }
@@ -207,12 +209,15 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
   process.env.TEAM_CODEX_BIN = entry;
   const harness = new CodexHarness();
   try {
+    let rebuilt = false;
     const result = await harness.execute({
       workspace: root, verificationDirectory: scratch, sessionId: "old-review-session",
       config: {harness:"codex",model:"fixture",provider:null,baseUrl:null,credentialEnv:null,effort:null,access:"read-only",protocol:"responses"},
       instructions:"Verify immutable source.",input:"No real model.",tools:[],
       onSession:()=>{},onTurn:()=>assert.fail("A rejected policy must not start a turn"),onEvent:()=>{},onTool:async()=>({}),
+      onContextRebuild:()=>{rebuilt=true;return "Full current review context.";},
     });
+    assert.equal(rebuilt,true);
     assert.equal(result.status, "failed");
     assert.match(result.error ?? "", /did not enforce/);
     const requests = readFileSync(calls, "utf8").trim().split("\n").map(line=>JSON.parse(line));
