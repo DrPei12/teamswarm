@@ -142,6 +142,8 @@ try {
     assert(box.x>=0 && box.x+box.width<=width+1);
     await page.screenshot({path:path.join(root,`permissions-${width}.png`)});
     await page.keyboard.press('Escape');
+    // Radix restores focus in the focus scope's deferred unmount callback.
+    await page.waitForFunction(trigger=>trigger===document.activeElement,await memberPermissions.elementHandle(),{timeout:1000});
     assert(await memberPermissions.evaluate(el=>el===document.activeElement),'Escape restores permission trigger focus');
   }
   await page.setViewportSize({width:1280,height:900});
