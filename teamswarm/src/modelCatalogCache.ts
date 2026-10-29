@@ -6,9 +6,14 @@ const listeners = new Set<() => void>();
 export function cachedCatalog<T>(
   key: string,
   read: () => Promise<T>,
+  refresh = false,
 ): Promise<T> {
   const current = entries.get(key);
-  if (current && current.expires > Date.now())
+  if (
+    current &&
+    current.expires > Date.now() &&
+    (!refresh || current.expires === Infinity)
+  )
     return current.promise as Promise<T>;
   const entry: Entry = { expires: Infinity, promise: Promise.resolve() };
   entry.promise = read().then(

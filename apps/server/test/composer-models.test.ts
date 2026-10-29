@@ -164,3 +164,20 @@ test("legacy native directory can replace a manual API connection without leakin
   assert.equal(selected.baseUrl, null);
   assert.equal(selected.model, "grok-test");
 });
+
+test("independent subscription choices use their account catalog across Harnesses and preserve saved models", () => {
+  const account = { ...connections[3], id: "chatgpt", subscriptionHarness: null,
+    chatgptAccountId: "account-one", models: ["gpt-fixture", "saved-unlisted"] };
+  const directory = { "chatgpt:account-one": { models: [
+    { model: "gpt-fixture", name: "Account model", provider: "OpenAI" },
+    { model: "not-selected", name: "Not selected" },
+  ] }, codex: { models: [{ model: "gpt-fixture", name: "Wrong account catalog" }] } };
+  for (const harness of ["grok", "claude-code", "codex"]) {
+    const choices = modelChoices({ ...capabilities, connections: [account] }, directory, harness);
+    assert.deepEqual(choices.map(model => model.model), ["gpt-fixture", "saved-unlisted"]);
+    assert.equal(choices[0].name, "Account model");
+    assert.equal(choices[0].provider, "OpenAI");
+    assert.equal(choices[0].unavailable, undefined);
+    assert.equal(choices[1].name, "saved-unlisted");
+  }
+});
