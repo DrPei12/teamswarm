@@ -53,7 +53,7 @@ export type Chat = {
   parent?: { chatId: string; messageId: string };
   inheritedDefinitions?: Definition[];
 };
-export type RuntimeConfig = { harness: string; model: string; effort: string };
+export type RuntimeConfig = { harness: string; model: string; effort: string; permissions?: ExecutionConfig["permissions"] };
 export type DefinitionKind =
   "problem" | "requirement" | "goal" | "understanding";
 export type Definition = {
@@ -142,6 +142,8 @@ export type ConversationEntry = {
   text: string;
   status?: string;
   error?: string;
+  /** Original failed delivery; retry reuses its existing work instead of resending. */
+  retryWorkId?: string;
   items?: TranscriptItem[];
   elapsedMs?: number;
   exchangeId?: string;

@@ -1,3 +1,4 @@
+import { ApprovalRequests } from "./ApprovalRequests";
 import { ComposerChin, ComposerSurface } from "./design-system/ComposerSurface";
 import { SegmentedControl } from "./design-system/SegmentedControl";
 import { Select } from "radix-ui";
@@ -29,6 +30,7 @@ import { ConversationActivity } from "./ConversationActivity";
 import { RuntimeControls } from "./ComposerTools";
 import { harnessLabel } from "./harnessCatalog";
 import { IconButton, useMediaQuery } from "./ui";
+import { executionFeedback } from "./executionFeedback";
 
 const statusLabels: Record<string, string> = {
   queued: "Queued",
@@ -194,6 +196,7 @@ function ConversationThread({
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
   const [sending, setSending] = useState(false);
+  const [retrying, setRetrying] = useState<string | null>(null);
   const [configuring, setConfiguring] = useState(false);
   const configurationLock = useRef(false);
   const team = workspace.teams.find((t) => t.id === member.teamId)!;
@@ -521,6 +524,11 @@ function ConversationThread({
         }}
       >
         <div ref={list} className="member-thread-content">
+          <ApprovalRequests
+            teamId={member.teamId}
+            memberId={member.id}
+            workspace={workspace}
+          />
           {hasMore && (
             <button
               className="load-earlier"
@@ -579,11 +587,7 @@ function ConversationThread({
           {!loading && !entries.length && (
             <div className="thread-empty">
               <MessageSquare size={24} />
-              <p>
-                {t(
-                  "The member's conversation will appear here when work is assigned.",
-                )}
-              </p>
+              <p>{t("No messages yet")}</p>
             </div>
           )}
           {entries.map((entry) => (
@@ -637,7 +641,11 @@ function ConversationThread({
               )}
               {entry.text && (
                 <MessageContent
-                  text={entry.text}
+                  text={
+                    entry.id.startsWith("error:")
+                      ? t(executionFeedback(entry.text))
+                      : entry.text
+                  }
                   pending={entry.status === "running"}
                 />
               )}
@@ -659,6 +667,7 @@ function ConversationThread({
                   <div className="session-progress">{t("Working…")}</div>
                 )}
               {entry.role === "assistant" &&
+                !entry.id.startsWith("error:") &&
                 [
                   "failed",
                   "interrupted",
@@ -666,10 +675,40 @@ function ConversationThread({
                   "waiting",
                 ].includes(entry.status ?? "") && (
                   <div className="session-status">
-                    {entry.error ||
+                    {(entry.error ? t(executionFeedback(entry.error)) : "") ||
                       t(statusLabels[entry.status!] ?? entry.status!)}
                   </div>
                 )}
+              {entry.retryWorkId && !member.removedAt && (
+                <button
+                  className="text-button"
+                  disabled={!!retrying}
+                  onClick={async () => {
+                    const failed = workspace.executions?.[
+                      member.teamId
+                    ]?.works.find((w) => w.id === entry.retryWorkId);
+                    if (!failed) return;
+                    setRetrying(entry.id);
+                    setError("");
+                    try {
+                      await api(
+                        `/teams/${encodeURIComponent(member.teamId)}/works/${encodeURIComponent(failed.id)}/retry`,
+                        { expectedRevision: failed.revision },
+                      );
+                      await product.refresh();
+                    } catch (e) {
+                      setError(executionFeedback((e as Error).message));
+                    } finally {
+                      setRetrying(null);
+                    }
+                  }}
+                >
+                  {retrying === entry.id ? (
+                    <LoaderCircle size={14} className="spin" />
+                  ) : null}
+                  {t("Retry")}
+                </button>
+              )}
             </article>
           ))}
         </div>
@@ -736,16 +775,7 @@ function ConversationThread({
               }
             }}
           />
-          <ComposerChin
-            className="member-composer-toolbar"
-            notice={
-              canSend && member.status === "working" ? (
-                <small className="member-queue-hint">
-                  {t("Received at the next inbox read or turn boundary.")}
-                </small>
-              ) : undefined
-            }
-          >
+          <ComposerChin className="member-composer-toolbar">
             {work && !work.reviewOf && (
               <div className="work-message-mode">
                 <SegmentedControl
@@ -869,11 +899,7 @@ export function ExchangeList({
         {t("Open an exchange to see it in the recipient's conversation.")}
       </p>
       {!exchanges.length && (
-        <div className="thread-empty">
-          {t(
-            "The member has joined. Assignments and exchanges will appear here.",
-          )}
-        </div>
+        <div className="thread-empty">{t("No messages yet")}</div>
       )}
       {[...exchanges].reverse().map((exchange) => (
         <button

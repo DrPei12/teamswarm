@@ -1,3 +1,4 @@
+import { permissionsForHarness } from "./permissions";
 import type { ModelAccess, TeamCapabilities } from "@team/contracts/allocation";
 import type { ExecutionConfig } from "@team/contracts/runtime";
 import type { HarnessInspection } from "./harnessCatalog";
@@ -9,25 +10,18 @@ export type ModelChoice = NonNullable<HarnessInspection["models"]>[number] & {
   unavailable?: string;
 };
 
-const preferredProtocol: Record<string, string> = {
-  codex: "responses",
-  "claude-code": "anthropic-messages",
-  "deepseek-harness": "anthropic-messages",
-};
-
 export function connectionUnavailable(
   connection: ModelAccess,
   harness: string,
 ) {
   if (connection.kind === "subscription")
-    return connection.subscriptionHarness === harness
+    return connection.chatgptAccountId ||
+      connection.subscriptionHarness === harness
       ? undefined
       : `Requires ${connection.subscriptionHarness}`;
-  const protocol = preferredProtocol[harness];
-  return protocol &&
-    !connection.endpoints[protocol as keyof ModelAccess["endpoints"]]
-    ? `Requires ${protocol}`
-    : undefined;
+  return Object.values(connection.endpoints).some(Boolean)
+    ? undefined
+    : "Configure a model endpoint";
 }
 
 /** The directory belongs to connections. Harness compatibility only annotates it. */
@@ -100,6 +94,8 @@ export function selectedModelChoice(
   return models.find((choice) => {
     if (choice.model !== config.model) return false;
     const connection = choice.connection;
+    if (connection?.chatgptAccountId)
+      return config.chatgptAccountId === connection.chatgptAccountId;
     if (!connection || connection.kind === "subscription")
       return (
         !config.baseUrl &&
@@ -138,17 +134,21 @@ export async function chooseModel(
       maxOutputTokens: null,
       contextWindowTokens: null,
       ...(await resolve(connection, config.harness, model!, config.access)),
+      chatgptAccountId: null,
+      permissions: config.permissions,
     };
   if (connection?.kind === "subscription" || model === null)
     return {
       harness: config.harness,
+      permissions: config.permissions,
       model,
       access: config.access,
       effort: null,
       provider: null,
       baseUrl: null,
       credentialEnv: null,
-      protocol: null,
+      chatgptAccountId: connection?.chatgptAccountId ?? null,
+      protocol: connection?.chatgptAccountId ? "responses" : null,
       thinkingFormat: null,
       maxOutputTokens: null,
       contextWindowTokens: null,
@@ -170,6 +170,19 @@ export async function switchHarness(
   resolve: Resolve,
 ): Promise<ExecutionConfig> {
   if (harness === config.harness) return config;
+  config = {
+    ...config,
+    permissions: permissionsForHarness(config, harness),
+  };
+  if (config.chatgptAccountId)
+    return {
+      ...config,
+      harness,
+      effort: null,
+      thinkingFormat: null,
+      maxOutputTokens: null,
+      contextWindowTokens: null,
+    };
   if (config.baseUrl || config.credentialEnv) {
     const connection = connections.find(
       (c) =>
@@ -186,6 +199,7 @@ export async function switchHarness(
         maxOutputTokens: null,
         contextWindowTokens: null,
         ...(await resolve(connection, harness, config.model, config.access)),
+        permissions: config.permissions,
       };
     // Advanced manual connections retain their identity; the server checks compatibility.
     return {

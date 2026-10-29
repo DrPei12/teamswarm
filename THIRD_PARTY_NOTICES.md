@@ -15,6 +15,8 @@ TeamSwarm's own code is licensed under Apache-2.0. The following software and as
 | Codex CLI | Bundled native harness | [Apache-2.0 notice](https://github.com/DrPei12/teamswarm/blob/main/apps/desktop/licenses/codex-LICENSE.txt) |
 | Electron | Desktop shell | Electron and Chromium licenses ship with the desktop runtime |
 | npm and service dependencies | Native tool support and local API | License files ship with the installed packages |
+| [Pi AI](https://github.com/earendil-works/pi) (`@earendil-works/pi-ai` 1.3.0) | Model protocol clients and stream parsing; the selected Harness owns execution | MIT; license included with the installed package |
+| [jose](https://github.com/panva/jose) 6.1.3 | ChatGPT identity-token signature and claim verification | MIT; license included with the installed package |
 
 Every desktop package includes `resources/product/package-inventory.json` (inside `Contents/Resources` on macOS), recording bundled dependency versions and their license files. Supplemental notices for packages that omit a license file are in [apps/desktop/licenses/dependency-notices](https://github.com/DrPei12/teamswarm/tree/main/apps/desktop/licenses/dependency-notices).
 

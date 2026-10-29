@@ -286,7 +286,7 @@ export function memberConversation(
         runtime: {
           harness: attempt.config.harness,
           model: String(
-            attempt.actual?.model ?? attempt.config.model ?? "Default model",
+            attempt.actual?.model ?? attempt.config.model ?? "",
           ),
           effort: String(
             attempt.actual?.requestedTurnEffort ??
@@ -297,7 +297,7 @@ export function memberConversation(
         },
       });
     }
-    if (!workAttempts.length && work.error)
+    if (!workAttempts.length && work.error && !work.interaction?.messageIds.some(id => messages.some(m => m.id === id)))
       entries.push({
         id: `error:${work.id}`,
         createdAt: Date.parse(work.updatedAt),
@@ -324,15 +324,19 @@ export function memberConversation(
       status: message.status,
       exchangeId: message.id,
     });
-    if (message.error)
+    if (message.error) {
+      const failedWork = works.filter(w => ["failed", "interrupted", "rejected"].includes(w.status) &&
+        (w.id === message.workId || w.interaction?.messageIds.includes(message.id))).at(-1);
       entries.push({
         id: `error:${message.id}`,
         createdAt: Date.parse(message.createdAt) + 1,
         role: "assistant",
         sender: member.name,
-        text: message.error,
+        text: failedWork?.error ?? message.error,
         status: "failed",
+        ...(!member.removedAt && failedWork ? { retryWorkId: failedWork.id } : {}),
       });
+    }
   }
   const memberKey = member.kind === "host" ? `host:${teamId}` : member.id;
   for (const message of durableExchanges(runtime, teamId).filter(
@@ -395,6 +399,6 @@ export function memberConversation(
     hasMore: start > 0,
     hasNewer: finish < entries.length,
     before: start,
-    canSend: works.length > 0 && !!runtime.store.settings(teamId),
+    canSend: !member.removedAt && works.length > 0 && !!runtime.store.settings(teamId),
   };
 }

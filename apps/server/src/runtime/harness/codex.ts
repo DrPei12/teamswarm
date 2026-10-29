@@ -1,6 +1,8 @@
+import { validateNativePermissions } from "./permissions.js";
 import { productVersion } from "../../version.js";
-import { createHash } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawnOwned, confirmOwnedExit } from "./owned-process.js";
 import { existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { homedir } from "node:os";
@@ -13,6 +15,7 @@ import { sessionStoreScope } from "./session-scope.js";
 import { deviceEntry } from "./device-tools.js";
 import { preflight, probeCodexExecution, type PreflightInput } from "./preflight.js";
 import { prepareExecutionEnvironment } from "./execution-environment.js";
+import { contextObservation } from "../context-budget.js";
 
 type Obj = Record<string, any>;
 type Pending = {
@@ -181,6 +184,7 @@ export class CodexHarness implements Harness {
     dynamicTools: true,
     interrupt: true,
     usage: true,
+    contextCompaction: true,
     customModel: true,
     customProvider: true,
     nativeChecks: true,
@@ -197,6 +201,33 @@ export class CodexHarness implements Harness {
   private initialized: Obj = {};
   private environmentHashes: Record<string, string> = {};
   private recycling?: Promise<void>;
+  private users = 0;
+  private lastActivity = Date.now();
+  private warmMs = 15000;
+  private resourceId = "";
+  private releaseObserver?: HarnessRequest["onEvent"];
+  private resourceError?: Error;
+
+  resources() {
+    return this.child?.pid ? [{ id: this.resourceId, pid: this.child.pid, sessions: this.executions.size }] : [];
+  }
+  async maintain({ now, pressure }: { now: number; pressure: boolean }) {
+    if (this.resourceError) throw this.resourceError;
+    if (!this.child || this.stopped || this.recycling || this.users || this.pending.size || this.executions.size) return;
+    if (!pressure && now - this.lastActivity < this.warmMs) return;
+    this.recycling = this.releaseProcess();
+    try { await this.recycling; } finally { this.recycling = undefined; }
+  }
+  private async releaseProcess() {
+    const child = this.child;
+    if (!child) return;
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(() => child.kill(), 3000);
+      child.once("close", () => { clearTimeout(timer); resolve(); });
+      child.stdin.end();
+    });
+    await confirmOwnedExit(child);
+  }
 
   private async open(): Promise<void> {
     if (this.recycling) await this.recycling;
@@ -210,12 +241,12 @@ export class CodexHarness implements Harness {
           throw new Error("TEAM_CODEX_HOME must be an absolute directory.");
         mkdirSync(nativeHome, { recursive: true, mode: 0o700 });
       }
-      const child = spawn(
+      const began = Date.now();
+      const child = await spawnOwned(
         executable.command,
-        [...executable.args, "app-server", "--listen", "stdio://"],
+        [...executable.args, "-c", "features.plugins=false", "-c", "features.apps=false", "app-server", "--listen", "stdio://"],
         {
           windowsHide: true,
-          stdio: "pipe",
           env: {
             ...Object.fromEntries(
               Object.entries(process.env).filter(
@@ -230,6 +261,11 @@ export class CodexHarness implements Harness {
           },
         },
       );
+      if (this.stopped) {
+        child.on("error", () => {});
+        await new Promise<void>(resolve => { child.once("close", resolve); child.kill(); });
+        throw new Error("Harness closed while the native process was starting.");
+      }
       this.environmentHashes = Object.fromEntries(
         Object.entries(process.env).map(([key, value]) => [
           key,
@@ -239,6 +275,7 @@ export class CodexHarness implements Harness {
         ]),
       );
       this.child = child;
+      const resourceId = this.resourceId = randomUUID();
       const input = createInterface({
         input: child.stdout,
         crlfDelay: Infinity,
@@ -259,6 +296,12 @@ export class CodexHarness implements Harness {
       child.once("error", (error) => this.fail(error));
       child.once("close", () => {
         input.close();
+        const observer = this.releaseObserver;
+        this.releaseObserver = undefined;
+        void confirmOwnedExit(child).then(confirmed => observer?.({ type: confirmed ? "resource.released" : "resource.unconfirmed", data: { id: resourceId, pid: child.pid, scope: "harness" } })).catch(error => {
+          this.resourceError = error instanceof Error ? error : new Error(String(error));
+          this.fail(this.resourceError);
+        });
         this.child = undefined;
         this.opening = undefined;
         this.fail(
@@ -272,6 +315,8 @@ export class CodexHarness implements Harness {
         capabilities: { experimentalApi: true },
       });
       this.write({ method: "initialized", params: {} });
+      this.lastActivity = Date.now();
+      this.warmMs = Math.max(5000, Math.min(60000, Math.max(this.warmMs, (Date.now() - began) * 4)));
     })();
     try {
       await this.opening;
@@ -288,6 +333,7 @@ export class CodexHarness implements Harness {
     this.child.stdin.write(JSON.stringify(value) + "\n");
   }
   private rpc(method: string, params: unknown): Promise<any> {
+    this.lastActivity = Date.now();
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -405,11 +451,16 @@ export class CodexHarness implements Harness {
         data: { itemId: key, delta: String(params.delta ?? "") },
       });
     }
-    if (message.method === "thread/tokenUsage/updated")
+    if (message.method === "thread/tokenUsage/updated") {
       execution.request.onEvent({
         type: "usage",
         data: params.tokenUsage ?? {},
       });
+      const context = contextObservation("codex", params.tokenUsage ?? {});
+      if (context) execution.request.onEvent({ type: "context.usage", data: { ...context } });
+    }
+    if (message.method === "thread/compacted" || message.method === "item/completed" && params.item?.type === "contextCompaction")
+      execution.request.onEvent({ type: "context.compacted", data: {} });
     if (message.method === "item/completed") {
       const item = params.item ?? {};
       if (item.type === "agentMessage")
@@ -472,15 +523,16 @@ export class CodexHarness implements Harness {
           contentItems: [{ type: "inputText", text: JSON.stringify(value) }],
         };
       } else if (message.method.includes("requestApproval")) {
-        // The product never silently expands the configured execution permissions.
-        result = { decision: "decline" };
-        execution?.request.onEvent({
-          type: "approval.denied",
-          data: {
-            method: message.method,
-            reason: "Requested permission exceeds configured scope.",
-          },
-        });
+        const request = execution?.request;
+        // Approval cannot override a review or shared-file ownership boundary.
+        const bounded = !request || request.config.access === "read-only" ||
+          (request.config.permissions?.harness === "codex" && request.config.permissions.sandbox === "read-only") || !!request.workspaceBoundary || !!request.verificationDirectory;
+        const accepted = !bounded && !!request.config.permissions &&
+          (await request.onPermission?.({ nativeId: String(message.id), tool: message.method, input: message.params ?? {} })) === "allow";
+        result = message.method === "item/permissions/requestApproval"
+          ? { permissions: accepted ? (message.params?.permissions ?? {}) : {}, scope: "turn" }
+          : { decision: accepted ? "accept" : "decline" };
+        request?.onEvent({ type: accepted ? "approval.accepted" : "approval.denied", data: { method: message.method } });
       } else if (message.method === "item/tool/requestUserInput") {
         result = { answers: {} };
         execution?.request.onEvent({
@@ -560,6 +612,7 @@ export class CodexHarness implements Harness {
       }));
   }
   validateConfig(c: HarnessRequest["config"]) {
+    validateNativePermissions(c);
     codexCommand();
     if (c.contextWindowTokens != null)
       throw new Error("An explicit context window requires Pi or OpenCode.");
@@ -609,13 +662,24 @@ export class CodexHarness implements Harness {
     return { ...report, environment };
   }
   async execute(request: HarnessRequest): Promise<HarnessResult> {
+    if (this.child && !this.users) this.warmMs = Math.max(5000, Math.min(60000, this.warmMs * 0.7 + (Date.now() - this.lastActivity) * 1.5 * 0.3));
+    this.users++;
+    try { return await this.executeTurn(request); }
+    finally { this.users--; this.lastActivity = Date.now(); }
+  }
+  private async executeTurn(request: HarnessRequest): Promise<HarnessResult> {
     this.validateConfig(request.config);
-    await this.refreshCredential(request.config.credentialEnv);
+    if (!request.modelRoute) await this.refreshCredential(request.config.credentialEnv);
     await this.open();
-    const c = request.workspaceBoundary ? { ...request.config, access: "read-only" as const } : request.config;
+    this.releaseObserver = request.onEvent;
+    request.onEvent({ type: "resource.acquired", data: { id: this.resourceId, pid: this.child?.pid, scope: "harness" } });
+    const c = request.workspaceBoundary || (request.config.permissions?.harness === "codex" && request.config.permissions.sandbox === "read-only")
+      ? { ...request.config, access: "read-only" as const } : request.config;
     const config: Obj = {
       "features.multi_agent": false,
       "features.memories": false,
+      "features.plugins": false,
+      "features.apps": false,
     };
     const verificationDirectory = request.verificationDirectory;
     let environment = request.executionEnvironment;
@@ -630,7 +694,7 @@ export class CodexHarness implements Harness {
       request.contextIsolation === "branch"
     )
       config["project_doc_max_bytes"] = 0;
-    if (c.baseUrl || request.contextIsolation === "branch") {
+    {
       // A Team executor gets its tools from the Team contract and native coding
       // harness. User-global MCP/plugin inventories are not implicit dependencies.
       const native = await this.rpc("config/read", { includeLayers: false });
@@ -651,7 +715,7 @@ export class CodexHarness implements Harness {
         requires_openai_auth: false,
         request_max_retries: 0,
         stream_max_retries: 0,
-        ...(c.credentialEnv ? { env_key: c.credentialEnv } : {}),
+        ...(request.modelRoute ? { http_headers: { Authorization: "Bearer " + request.modelRoute.token } } : c.credentialEnv ? { env_key: c.credentialEnv } : {}),
       };
     }
     let model = c.model;
@@ -663,8 +727,8 @@ export class CodexHarness implements Harness {
       cwd: request.workspace,
       model,
       modelProvider: c.baseUrl ? "teamswarm" : c.provider,
-      approvalPolicy: "never",
-      ...(verificationDirectory ? { permissions: reviewPermissionProfile } : { sandbox: c.access }),
+      approvalPolicy: c.permissions?.harness === "codex" ? c.permissions.approvalPolicy : "never",
+      ...(verificationDirectory ? { permissions: reviewPermissionProfile } : { sandbox: (c.permissions?.harness === "codex" && c.permissions.sandbox === "danger-full-access") && c.access === "workspace-write" ? "danger-full-access" : c.access }),
       config,
       developerInstructions: request.instructions + (verificationDirectory
         ? `\nIndependent review sandbox: project files are read-only. A prepared execution environment is ready. Run executable checks through this command prefix: ${environment!.commandPrefix.map(p => "'" + p.replaceAll("'", "''") + "'").join(" ")} (in PowerShell prepend &), followed by the executable and its arguments. For Node checks use ${JSON.stringify(process.execPath)} as the executable. This launcher sets TEMP, TMP and TMPDIR to the granted scratch directory, disables first-run telemetry, and preserves the native sandbox. ${environment!.linkFixtures ? "Real hard-link and directory-link fixtures are available in TEAMSWARM_LINK_FIXTURES (hardlink/peer.md, hardlink/alias.md, junction/linked, outside). They are local to this attempt. If a rerun needs fresh links after a check consumed them, call team_execution_environment and use its returned prefix." : ""} Network access is limited to loopback test services. Do not manually prepare environment variables, create fixture links, change source, or start a second environment.\n`
@@ -677,6 +741,8 @@ export class CodexHarness implements Harness {
     };
     // A new review attempt has a new scratch grant; never resume a session with
     // a different permission boundary, even when its model and harness match.
+    if (request.sessionId && verificationDirectory)
+      request.input = request.onContextRebuild?.() ?? request.input;
     let started = request.sessionId && !verificationDirectory
       ? await this.rpc("thread/resume", {
           ...common,
@@ -699,6 +765,7 @@ export class CodexHarness implements Harness {
         if (!(error instanceof Error) || !/list_turns is not supported yet/i.test(error.message)) throw error;
         if (this.stopped) return {status: "interrupted", text: "", error: "Harness closed before the native turn was started."};
         const previousSessionId = started.thread.id;
+        request.input = request.onContextRebuild?.() ?? request.input;
         started = await this.rpc("thread/start", {
           ...common,
           dynamicTools: request.tools.map((t) => ({type: "function", ...t})),
@@ -740,13 +807,13 @@ export class CodexHarness implements Harness {
       return { status: "failed", text: "", error: "Native Codex did not enforce the read-only source boundary." };
     if (
       c.access === "workspace-write" &&
-      started.sandbox?.type !== "workspaceWrite"
+      started.sandbox?.type !== ((c.permissions?.harness === "codex" && c.permissions.sandbox === "danger-full-access") ? "dangerFullAccess" : "workspaceWrite")
     )
       return {
         status: "failed",
         text: "",
         error:
-          "Native Codex did not grant the requested workspace-write sandbox. Configure the native sandbox before executing.",
+          "Native Codex did not grant the configured file access. Check the native sandbox settings before executing.",
       };
     if (this.executions.has(sessionId))
       throw new Error("A session already has an active turn.");
@@ -805,6 +872,7 @@ export class CodexHarness implements Harness {
         error:
           "Native history does not establish a terminal state for this turn.",
       };
+    this.executions.delete(sessionId);
     return {
       status: turn.status,
       text: (turn.items ?? [])
@@ -831,15 +899,6 @@ export class CodexHarness implements Harness {
   }
   async close(): Promise<void> {
     this.stopped = true;
-    const child = this.child;
-    if (!child) return;
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => child.kill(), 3000);
-      child.once("close", () => {
-        clearTimeout(timer);
-        resolve();
-      });
-      child.stdin.end();
-    });
+    await this.releaseProcess();
   }
 }

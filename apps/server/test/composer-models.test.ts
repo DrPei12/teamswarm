@@ -108,21 +108,21 @@ test("changing Harness retains an API model and resolves the correct endpoint wi
   assert.equal(changed.baseUrl, "https://primary.example/anthropic");
   assert.equal(changed.effort, null);
   assert.equal(changed.thinkingFormat, null);
-  await assert.rejects(
-    switchHarness(selected, "codex", connections, resolve),
-    /protocol/i,
-  );
+  const routed = await switchHarness(selected, "codex", connections, resolve);
+  assert.equal(routed.harness, "codex");
+  assert.equal(routed.model, selected.model);
+  assert.equal(routed.protocol, "anthropic-messages");
   assert.equal(selected.harness, "grok");
 });
 
 test("incompatible connections remain visible and native selection clears API credentials", async () => {
   const choices = modelChoices(capabilities, {}, "codex");
   assert.equal(choices.length, 4);
-  assert.equal(choices[0].unavailable, "Requires responses");
-  await assert.rejects(
-    chooseModel(config, "qwen-plus", choices[0], resolve),
-    /Requires responses/,
-  );
+  assert.equal(choices[0].unavailable, undefined);
+  const routed = await chooseModel({ ...config, harness: "codex" }, "qwen-plus", choices[0], resolve);
+  assert.equal(routed.harness, "codex");
+  assert.equal(routed.protocol, "anthropic-messages");
+  assert.equal(routed.credentialEnv, "TEST_PRIMARY");
   const claudeChoices = modelChoices(capabilities, {}, "claude-code");
   const native = await chooseModel(
     {

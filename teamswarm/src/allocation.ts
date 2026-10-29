@@ -5,6 +5,7 @@ import type {
   ResourceSelection,
 } from "@team/contracts/allocation";
 import type { ExecutionConfig } from "@team/contracts/runtime";
+import { modelRouteIssues } from "../../apps/server/src/runtime/model-routing";
 
 export type {
   CompatibilityIssue,
@@ -21,7 +22,7 @@ export type {
  * loaded, so a protocol, credential or install mismatch is never hidden. */
 const protocols: Record<string, readonly string[]> = {
   codex: ["responses"],
-  grok: ["chat-completions"],
+  grok: ["chat-completions", "responses", "anthropic-messages"],
   "claude-code": ["anthropic-messages"],
   "deepseek-harness": ["anthropic-messages"],
   pi: ["chat-completions", "responses", "anthropic-messages"],
@@ -29,6 +30,8 @@ const protocols: Record<string, readonly string[]> = {
 };
 
 export function resourceIssues(config: ExecutionConfig): CompatibilityIssue[] {
+  const routed = modelRouteIssues(config);
+  if (routed) return routed;
   const supported = Object.hasOwn(protocols, config.harness)
     ? protocols[config.harness]
     : undefined;
@@ -83,7 +86,10 @@ export function resourceIssues(config: ExecutionConfig): CompatibilityIssue[] {
  * native account a harness check probes. Its availability comes from its own
  * configuration, never from the native ChatGPT account or model directory. */
 export function isCustomProvider(config: ExecutionConfig | null | undefined) {
-  return Boolean(config && (config.baseUrl || config.credentialEnv));
+  return Boolean(
+    config &&
+    (config.baseUrl || config.credentialEnv || config.chatgptAccountId),
+  );
 }
 
 /** Facts observed by an existing harness check. checkedAt null means the UI has
@@ -183,7 +189,7 @@ export type ResourceConfigField = { label: string; value: string };
 export function configFields(config: ExecutionConfig): ResourceConfigField[] {
   return [
     { label: "Harness", value: config.harness },
-    { label: "Model", value: config.model ?? "Default" },
+    { label: "Model", value: config.model ?? "Not selected" },
     { label: "Protocol", value: config.protocol ?? "Default" },
     { label: "API endpoint", value: config.baseUrl ?? "—" },
     { label: "Credential reference", value: config.credentialEnv ?? "—" },
@@ -250,6 +256,8 @@ const configKeys = new Set([
   "thinkingFormat",
   "maxOutputTokens",
   "contextWindowTokens",
+  "chatgptAccountId",
+  "permissions",
 ]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>

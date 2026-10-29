@@ -829,6 +829,8 @@ class ProductClient {
           config.effort === "Default" ? null : config.effort.toLowerCase(),
       };
     }
+    if (config.permissions !== undefined && harness === previous.harness)
+      next = { ...next, permissions: config.permissions };
     return next;
   }
   async resources(teamId: string) {
@@ -936,7 +938,6 @@ class ProductClient {
         expectedVersion: settings.version,
         workspace: settings.workspace,
         config: settings.config,
-        maxConcurrent: settings.maxConcurrent,
       },
       "PUT",
     );

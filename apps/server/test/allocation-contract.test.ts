@@ -26,8 +26,7 @@ test("all six Harness combinations agree with existing connection resolution", (
   }
   for (const harness of ["codex", "claude-code", "deepseek-harness", "pi", "opencode", "grok"]) {
     for (const protocol of ["responses", "chat-completions", "anthropic-messages"] as const) {
-      const valid = ["pi", "opencode", "grok"].includes(harness) || protocol === (harness === "codex" ? "responses" : "anthropic-messages");
-      assert.equal(checkExecutionCompatibility(config({ harness, protocol })).includes("incompatible_protocol"), !valid);
+      assert.deepEqual(checkExecutionCompatibility(config({ harness, protocol })), []);
     }
   }
 });
@@ -58,7 +57,7 @@ test("portable rejects unknown versions, duplicate IDs/labels and stale or absen
   assert.equal(portableAllocationPackage.safeParse({ ...bundle(), selections: [bundle().selections[0], bundle().selections[0]] }).success, false);
   for (const selection of [{ key: "x", resourceId: "absent", resourceVersion: 1 }, { key: "x", resourceId: "example", resourceVersion: 2 }])
     assert.equal(portableAllocationPackage.safeParse({ ...bundle(), selections: [selection] }).success, false);
-  assert.equal(portableAllocationPackage.safeParse({ ...bundle(), resources: [resource("example", config({ harness: "codex", protocol: "chat-completions" }))] }).success, false);
+  assert.equal(portableAllocationPackage.safeParse({ ...bundle(), resources: [resource("example", config({ harness: "codex", protocol: "chat-completions",credentialEnv:null }))] }).success, false);
 });
 test("portable rejects literal credential fields, executable/native data and unsafe endpoints", () => {
   for (const extra of [{ token: "not-a-real-secret" }, { apiKey: "not-a-real-secret" }, { sessionId: "x" }, { command: "x" }, { installPath: "C:/example" }]) {
@@ -96,8 +95,8 @@ test("availability is reported truthfully and never fakes success", () => {
   assert.equal(assessResourceAvailability(observed({ installed: false })).status, "not_installed");
   assert.equal(assessResourceAvailability(observed({ credentialPresent: false })).status, "missing_credentials");
   // Static incompatibility outranks install/credential observations and keeps the reasons.
-  const bad = assessResourceAvailability(observed({ config: config({ harness: "codex", protocol: "chat-completions" }) }));
-  assert.equal(bad.status, "incompatible"); assert.deepEqual(bad.issues, ["incompatible_protocol"]);
+  const bad = assessResourceAvailability(observed({ config: config({ harness: "codex", protocol: "chat-completions",credentialEnv:null }) }));
+  assert.equal(bad.status, "incompatible"); assert.deepEqual(bad.issues, ["missing_configuration"]);
   assert.equal(assessResourceAvailability(observed({ installed: false, config: config({ credentialEnv: null }) })).status, "incompatible");
 });
 test("legacy records migrate with defaults and no invented provenance", () => {

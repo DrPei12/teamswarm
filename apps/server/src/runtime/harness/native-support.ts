@@ -147,6 +147,7 @@ export function childEnvironment(request: HarnessRequest): NodeJS.ProcessEnv {
   );
   const name = request.config.credentialEnv;
   if (name) {
+    if (request.modelRoute) { env[name] = request.modelRoute.token; return env; }
     if (!process.env[name])
       throw new Error(`Credential environment variable ${name} is not set.`);
     env[name] = process.env[name];

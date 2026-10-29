@@ -1,3 +1,5 @@
+import { permissionsForAccess, permissionsForHarness } from "./permissions";
+import { FieldSelect } from "./FieldSelect";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
@@ -172,13 +174,6 @@ export function AllocationSettings({
 
   return (
     <div className="allocation-settings">
-      {assignmentsOnly && (
-        <p className="allocation-note">
-          {t(
-            "Manual choices override Host for the selected target. Manage available connections in Models and connections.",
-          )}
-        </p>
-      )}
       {!assignmentsOnly && (
         <section
           className="allocation-section"
@@ -217,11 +212,7 @@ export function AllocationSettings({
               </button>
             </div>
           </header>
-          <p className="allocation-note">
-            {t(
-              "Each resource stores a Harness and model connection configuration and can be shared by multiple members.",
-            )}
-          </p>
+
           {loading ? (
             <p role="status">
               <LoaderCircle size={15} className="spinner" /> {t("Loading…")}
@@ -524,11 +515,24 @@ function ResourceForm({
             name: name.trim(),
             description: description.trim(),
             config: {
+              ...config,
+              permissions: permissionsForAccess(
+                {
+                  harness,
+                  access,
+                  permissions: permissionsForHarness(config, harness),
+                },
+                access,
+              ),
               harness,
               model: model.trim() || null,
               provider: provider.trim() || null,
               baseUrl: baseUrl.trim() || null,
               credentialEnv: reference,
+              chatgptAccountId:
+                !apiMode && harness === config?.harness
+                  ? (config?.chatgptAccountId ?? null)
+                  : null,
               effort: effort.trim() || null,
               access,
               protocol: (protocol || null) as ExecutionConfig["protocol"],
@@ -542,7 +546,7 @@ function ResourceForm({
                       ? Number(maxOutputTokens)
                       : null,
                   }
-                : {}),
+                : { contextWindowTokens: null, maxOutputTokens: null }),
             },
           });
         } catch (error) {
@@ -565,10 +569,10 @@ function ResourceForm({
         </label>
         <label>
           {t("Harness")}
-          <select
+          <FieldSelect
             value={harness}
-            onChange={(event) => {
-              setHarness(event.target.value);
+            onValueChange={(value) => {
+              setHarness(value);
               setMaxOutputTokens("");
               setContextWindowTokens("");
               setModel("");
@@ -587,7 +591,7 @@ function ResourceForm({
                 {option.label}
               </option>
             ))}
-          </select>
+          </FieldSelect>
         </label>
       </div>
       <label>
@@ -693,23 +697,23 @@ function ResourceForm({
         {!subscriptionMode && (
           <label>
             {t("Protocol")}
-            <select
+            <FieldSelect
               value={protocol}
-              onChange={(event) => setProtocol(event.target.value)}
+              onValueChange={(value) => setProtocol(value)}
             >
               <option value="">{t("Default")}</option>
               <option value="responses">Responses</option>
               <option value="chat-completions">Chat Completions</option>
               <option value="anthropic-messages">Anthropic Messages</option>
-            </select>
+            </FieldSelect>
           </label>
         )}
         <label>
           {t("Effort")}
           {subscriptionMode ? (
-            <select
+            <FieldSelect
               value={effort}
-              onChange={(event) => setEffort(event.target.value)}
+              onValueChange={(value) => setEffort(value)}
             >
               <option value="">{t("Default")}</option>
               {supportedEfforts(inspection, model).map((option) => (
@@ -720,7 +724,7 @@ function ResourceForm({
                   {effortLabel(option.reasoningEffort)}
                 </option>
               ))}
-            </select>
+            </FieldSelect>
           ) : (
             <input
               value={effort}
@@ -814,17 +818,17 @@ function ResourceForm({
       <div className="form-pair">
         <label>
           {t("Access")}
-          <select
+          <FieldSelect
             value={access}
-            onChange={(event) =>
-              setAccess(event.target.value as "read-only" | "workspace-write")
+            onValueChange={(value) =>
+              setAccess(value as "read-only" | "workspace-write")
             }
           >
             <option value="workspace-write">
               {t("Project read and write")}
             </option>
             <option value="read-only">{t("Read only")}</option>
-          </select>
+          </FieldSelect>
         </label>
       </div>
       {harness === "pi" && (
@@ -914,10 +918,10 @@ function HostAllocation({
         </p>
       )}
       <div className="allocation-picker">
-        <select
+        <FieldSelect
           aria-label={t("Host execution resource")}
           value={selected}
-          onChange={(event) => setSelected(event.target.value)}
+          onValueChange={(value) => setSelected(value)}
           disabled={busy || !value}
         >
           <option value="">{t("Team default")}</option>
@@ -929,7 +933,7 @@ function HostAllocation({
                 {resource.config.model ?? t("Choose model")}
               </option>
             ))}
-        </select>
+        </FieldSelect>
         <button
           className="secondary-button"
           disabled={busy || !value}
@@ -1188,12 +1192,12 @@ function AllocationBoard({
                         </span>
                       </div>
                       <div className="allocation-picker">
-                        <select
+                        <FieldSelect
                           value={draft[rowKey] ?? ""}
-                          onChange={(event) =>
+                          onValueChange={(value) =>
                             setDraft((state) => ({
                               ...state,
-                              [rowKey]: event.target.value,
+                              [rowKey]: value,
                             }))
                           }
                           aria-label={t("Set member default")}
@@ -1204,7 +1208,7 @@ function AllocationBoard({
                               {item.name} · {t("Version")} {item.version}
                             </option>
                           ))}
-                        </select>
+                        </FieldSelect>
                         <button
                           type="button"
                           className="secondary-button"
@@ -1323,12 +1327,12 @@ function AllocationBoard({
                         </span>
                       </div>
                       <div className="allocation-picker">
-                        <select
+                        <FieldSelect
                           value={draft[rowKey] ?? ""}
-                          onChange={(event) =>
+                          onValueChange={(value) =>
                             setDraft((state) => ({
                               ...state,
-                              [rowKey]: event.target.value,
+                              [rowKey]: value,
                             }))
                           }
                           aria-label={t("Set task resource")}
@@ -1339,7 +1343,7 @@ function AllocationBoard({
                               {item.name} · {t("Version")} {item.version}
                             </option>
                           ))}
-                        </select>
+                        </FieldSelect>
                         <button
                           type="button"
                           className="secondary-button"

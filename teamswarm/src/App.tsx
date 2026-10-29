@@ -1,3 +1,5 @@
+import { FieldSelect } from "./FieldSelect";
+import { ApprovalRequests } from "./ApprovalRequests";
 import { Disclosure } from "./Disclosure";
 import { AttachmentChip } from "./AttachmentChip";
 import { ViewBoundary } from "./ViewBoundary";
@@ -1309,6 +1311,10 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 >
                   {chat && (
                     <div className="messages" aria-label={tr("Conversation")}>
+                      <ApprovalRequests
+                        teamId={team.id}
+                        workspace={workspace}
+                      />
                       {chat.historyBefore && (
                         <button
                           className="load-older-messages"
@@ -2234,19 +2240,19 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
             </label>
             <label>
               {tr("Language")}
-              <select
+              <FieldSelect
                 name="language"
                 value={workspace.language}
-                onChange={(event) =>
+                onValueChange={(value) =>
                   update((old) => ({
                     ...old,
-                    language: event.target.value as Language,
+                    language: value as Language,
                   }))
                 }
               >
                 <option value="en">English</option>
                 <option value="zh-CN">简体中文</option>
-              </select>
+              </FieldSelect>
             </label>
             <label>{tr("Appearance")}</label>
             <div className="theme-options">

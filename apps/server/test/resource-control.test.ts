@@ -75,7 +75,7 @@ async function until(check: () => boolean) {
 }
 
 for (const harnessId of ["codex", "pi", "grok"] as const) {
-  test(`Multiple ${harnessId} members share one resource, respect Team concurrency and reuse a member`, async () => {
+  test(`Multiple ${harnessId} members share one resource without a fixed Team ceiling and reuse a member`, async () => {
     const app = await setup();
     const releases: (() => void)[] = [];
     try {
@@ -99,7 +99,8 @@ for (const harnessId of ["codex", "pi", "grok"] as const) {
         }
         if (phase === "initial") {
           phase = "idle";
-          assert.equal(input.current.allocation.memberConcurrencyLimit, 2);
+          assert.equal(input.current.allocation.memberConcurrencyLimit, undefined);
+          assert.equal(input.current.allocation.deviceResources.policy.reserveMemoryMiB, null);
           assert.deepEqual(runtime.catalog.resourceSharing(app.team.id, app.branch.id, "team-default"), {
             mode: "shared", selectedMemberCount: 1, activeAttemptCount: 1, scope: "current_branch"});
           await call(r, "team_define_requirements", {content: "Three independent read-only analyses", affectedWorkIds: []});
@@ -122,11 +123,10 @@ for (const harnessId of ["codex", "pi", "grok"] as const) {
       app.codex.action = action; app[harnessId].action = action;
       const host = await app.send("Start the analyses.");
       assert.equal(host.status, "submitted", host.error ?? undefined);
-      await until(() => started.length === 2);
-      assert.equal(store.get<Work>("works", app.team.id, works[2].id).status, "queued");
+      await until(() => started.length === 3);
+      assert.equal(store.get<Work>("works", app.team.id, works[2].id).status, "running");
       assert.deepEqual(runtime.catalog.resourceSharing(app.team.id, app.branch.id, resource.id), {
-        mode: "shared", selectedMemberCount: 3, activeAttemptCount: 2, scope: "current_branch"});
-      releases[0](); await until(() => started.length === 3);
+        mode: "shared", selectedMemberCount: 3, activeAttemptCount: 3, scope: "current_branch"});
       releases.forEach(release => release());
       await until(() => works.every(w => store.get<Work>("works", app.team.id, w.id).status === "self_checked"));
       const firstAttempts = store.list<Attempt>("attempts", app.team.id).filter(a => works.some(w => w.id === a.workId));

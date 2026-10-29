@@ -8,6 +8,34 @@ import {
 
 export type Language = "en" | "zh-CN";
 export const zhCN: Record<string, string> = {
+  "Run command": "运行命令",
+  "Edit file": "编辑文件",
+  "No messages yet": "暂无对话",
+  "No contributors": "暂无参与成员",
+  "Execution permissions": "执行权限",
+  "Not selected": "未选择",
+  "Harness default": "Harness 现有权限",
+  "Request approval": "请求批准",
+  "Automatic review": "自动判断",
+  "Full access": "完全访问",
+  "Accept edits": "接受编辑",
+  "Approval required": "等待批准",
+  "Allow once": "允许一次",
+  Decline: "拒绝",
+  "This approval request has ended.": "此批准请求已结束。",
+  "This Harness does not support configurable approval modes yet.":
+    "此 Harness 使用自身的权限设置。",
+  "Configure a model endpoint": "请配置模型接口",
+
+  "Deleted members": "已删除成员",
+  "File access": "文件访问",
+  "Execution configuration changed. Select the member's Harness and model, then retry this message.":
+    "执行配置已变更。请重新选择该成员的 Harness 和模型，然后重试此消息。",
+  "This run has reached its work limit. Retry the failed message or ask Host to continue the work.":
+    "本轮工作数量已达上限。可重试失败的消息，或请 Host 接续工作。",
+  Failed: "失败",
+  "Delivery stopped before execution.": "消息未能开始执行。",
+
   Delete: "删除",
   "Delete member": "删除成员",
   "Previous conversations and work will be kept.": "保留已有对话和工作记录。",
@@ -115,6 +143,8 @@ export const zhCN: Record<string, string> = {
   "Requires grok": "需要 Grok 订阅连接",
   "Requires responses": "需要 Responses 接口",
   "Requires anthropic-messages": "需要 Anthropic Messages 接口",
+  "Read device resources": "读取设备资源",
+  "Set device memory reserve": "设置设备内存预留",
   "Context window tokens": "上下文 token 数",
   "Maximum output tokens": "最大输出 token 数",
   "A context window override requires Pi or OpenCode":
@@ -285,6 +315,16 @@ export const zhCN: Record<string, string> = {
   "A previous harness check could not be stopped. Close the harness processes before restarting TeamSwarm.":
     "未能确认上一次 Harness 检查已经停止。请关闭相关进程后重新打开 TeamSwarm。",
   "Subscription account": "订阅账号",
+  "Continue with ChatGPT": "使用 ChatGPT 继续",
+  "Continue with ChatGPT first.": "请先连接 ChatGPT 账号。",
+  "Use your ChatGPT models with any enabled Harness.":
+    "将 ChatGPT 模型用于任意已启用的 Harness。",
+  "ChatGPT account": "ChatGPT 账号",
+  "Choose an account": "选择账号",
+  "Add account": "添加账号",
+  "Open ChatGPT sign-in": "打开 ChatGPT 登录页",
+  "Signed out on this device. Disconnect TeamSwarm in ChatGPT Settings to end remote access.":
+    "已在本机退出。请在 ChatGPT 设置中断开 TeamSwarm，以结束远程授权。",
   "Checking sign-in…": "正在检查登录…",
   "Status unavailable": "未能读取状态",
   "Install to sign in": "安装后可登录",

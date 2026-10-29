@@ -38,7 +38,7 @@ function desktopProtect(value: string, decrypt: boolean): Promise<string> {
   });
 }
 
-async function protect(value: string, decrypt = false): Promise<string> {
+export async function protect(value: string, decrypt = false): Promise<string> {
   if (decrypt && value.startsWith("electron-v1:")) return desktopProtect(value.slice(12), true);
   if (process.platform !== "win32") {
     if (decrypt) throw new Error("This credential belongs to another operating-system account. Configure the key again on this device.");

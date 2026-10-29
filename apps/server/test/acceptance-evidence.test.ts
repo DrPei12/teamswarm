@@ -122,6 +122,13 @@ async function fixture() {
       service = createApp({ dataDir: path.join(root, "data"), harnesses });
       server = service.app.listen(0, "127.0.0.1");
       await new Promise<void>(resolve => server.once("listening", resolve));
+      // Event-driven restart can dispatch a saved Host follow-up before the next
+      // HTTP request. End that controlled fixture turn before testing migration.
+      for (const work of service.runtime.store.list<Work>("works",team.id).filter(w => w.title === "Host follow-up" && ["queued","running"].includes(w.status))) {
+        await until(() => capable.calls.has(work.id));
+        capable.calls.get(work.id)!.finish({status:"interrupted",text:"Fixture checkpoint"});
+        await until(() => state(work.id).status === "interrupted");
+      }
       hostId = await message();
       await tool(hostId, "team_define_requirements", { content: "Verify the original criteria after restart.", affectedWorkIds: [] });
     },

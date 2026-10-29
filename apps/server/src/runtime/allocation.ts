@@ -1,3 +1,4 @@
+import { readOnlyExecution } from "./harness/permissions.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { conflict, notFound } from "../errors.js";
@@ -312,7 +313,7 @@ export function resolveExecution(
     const hostChoice = member.kind === "host" && branchId ? member.hostSelections?.[branchId] : undefined;
     const retained = effective.selection.resourceId.startsWith("cap_") && hostChoice?.selection?.resourceId === effective.selection.resourceId && hostChoice.selection.resourceVersion === effective.selection.resourceVersion ? hostChoice.config : undefined;
     if ((!resource || resource.version !== effective.selection.resourceVersion) && retained)
-      return { config: {...retained,access:"read-only"}, selection: {...effective.selection}, conflict: null };
+      return { config: readOnlyExecution(retained), selection: {...effective.selection}, conflict: null };
     if (!resource)
       return {
         config,
@@ -329,7 +330,7 @@ export function resolveExecution(
     selection = { ...effective.selection };
   }
   if (member.config.access === "read-only" || work.interaction || work.kind === "collaboration")
-    config = { ...config, access: "read-only" };
+    config = readOnlyExecution(config);
   if (member.kind !== "host" && !deps.catalog.capabilities.allowed(teamId,config))
     return {config,selection,conflict:"This Harness or model connection is no longer enabled for the Team. Ask Host to choose an enabled combination."};
   return { config, selection, conflict: null };
