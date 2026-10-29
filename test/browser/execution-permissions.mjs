@@ -25,7 +25,7 @@ const harness = {
 };
 const server = createServer().listen(0, '127.0.0.1');
 await new Promise(r => server.once('listening', r));
-const service = createApp({ dataDir: path.join(root, 'data'), apiPort: server.address().port, harnesses: [harness], webDistDir: path.resolve('teamswarm/dist') });
+const service = createApp({ dataDir: path.join(root, 'data'), apiPort: server.address().port, harnesses: [harness, { ...harness, id: 'claude-code' }], webDistDir: path.resolve('teamswarm/dist') });
 server.on('request', service.app);
 const origin = `http://127.0.0.1:${server.address().port}`;
 const call = async (route, body, method = body ? 'POST' : 'GET') => {
@@ -61,8 +61,23 @@ try {
     await page.getByText(accepted ? 'Approval fixture allowed' : 'Approval fixture declined', { exact: true }).waitFor();
   }
   assert.deepEqual(answers, [false, true]);
+  await page.getByRole('button', { name: 'Collaboration', exact: true }).click();
+  await page.getByRole('button', { name: 'Add member', exact: true }).click();
+  const form = page.getByRole('dialog', { name: 'Add member', exact: true });
+  await form.getByRole('textbox', { name: 'Name', exact: true }).fill('Claude permission member');
+  await form.getByRole('textbox', { name: 'Responsibility', exact: true }).fill('Isolated member configuration fixture');
+  await form.getByRole('textbox', { name: 'Harness', exact: true }).fill('Claude Code');
+  await form.getByRole('textbox', { name: 'Model', exact: true }).fill('claude-fixture');
+  await form.getByRole('button', { name: 'Add member', exact: true }).click();
+  await form.waitFor({state:'hidden'});
+  const member = service.runtime.store.list('members', team.id).find(m=>m.name==='Claude permission member');
+  assert.equal(member.config.harness, 'claude-code');
+  assert.equal(member.config.model, 'claude-fixture');
+  assert.deepEqual(member.config.permissions, { harness: 'claude-code', mode: 'default' });
+  assert.equal(member.config.effort, null);
+  assert.equal(service.runtime.store.settings(team.id).config.permissions.harness, 'codex');
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ passed: true, root, checks: ['permission persists', 'native request visible', 'decline delivered', 'allow delivered', 'internal IDs omitted'] }));
+  console.log(JSON.stringify({ passed: true, root, checks: ['permission persists', 'native request visible', 'decline delivered', 'allow delivered', 'internal IDs omitted', 'member creation resolves Harness and model without stale policy'] }));
 } catch (error) {
   await page?.screenshot({ path: path.join(root, 'failure.png') }).catch(() => {});
   console.log(root);

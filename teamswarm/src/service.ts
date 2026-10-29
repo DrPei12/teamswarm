@@ -800,6 +800,52 @@ class ProductClient {
       throw error;
     }
   }
+  async addMember(
+    teamId: string,
+    name: string,
+    responsibility: string,
+    config: RuntimeConfig,
+    clientRequestId: string,
+  ) {
+    const settings = this.state.workspace?.executions?.[teamId]?.settings;
+    if (!settings) throw new Error("Team settings are not available.");
+    let next = await this.resolveRuntimeChoice(teamId, settings.config, config);
+    // The form can change Harness and model together; the composer changes one at a time.
+    if (
+      config.model &&
+      config.model !== settings.config.model &&
+      config.model !== next.model
+    )
+      next = await chooseModel(
+        next,
+        config.model,
+        undefined,
+        resolveModelConnection,
+      );
+    const key = `teamswarm.member-create:${teamId}`;
+    const signature = JSON.stringify({ name, responsibility, config: next });
+    const previous = JSON.parse(inputStorage.getItem(key) ?? "null");
+    const request =
+      previous?.signature === signature
+        ? previous
+        : { signature, clientRequestId };
+    inputStorage.setItem(key, JSON.stringify(request));
+    const result = await this.command(
+      `/teams/${encodeURIComponent(teamId)}/members`,
+      {
+        clientRequestId: request.clientRequestId,
+        name,
+        responsibility,
+        config: next,
+      },
+    );
+    if (
+      JSON.parse(inputStorage.getItem(key) ?? "null")?.clientRequestId ===
+      request.clientRequestId
+    )
+      inputStorage.removeItem(key);
+    return result;
+  }
   private async resolveRuntimeChoice(
     teamId: string,
     previous: ExecutionConfig,

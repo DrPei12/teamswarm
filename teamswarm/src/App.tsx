@@ -2050,29 +2050,20 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
               responsibility = String(data.get("responsibility")).trim();
             const settings = workspace.executions?.[team.id]?.settings;
             if (!name || !responsibility || !settings) return;
-            const ids: Record<string, string> = {
-              Codex: "codex",
-              "Claude Code": "claude-code",
-              Grok: "grok",
-              pi: "pi",
-              OpenCode: "opencode",
-              "DeepSeek Harness": "deepseek-harness",
-            };
             const model = String(data.get("model")).trim();
             setBusy(true);
             try {
-              await product.command(`/teams/${team.id}/members`, {
-                clientRequestId: crypto.randomUUID(),
+              await product.addMember(
+                team.id,
                 name,
                 responsibility,
-                config: {
-                  ...settings.config,
-                  harness:
-                    ids[String(data.get("harness"))] ??
-                    String(data.get("harness")),
-                  model: !model || model === "Default model" ? null : model,
+                {
+                  harness: String(data.get("harness")).trim(),
+                  model,
+                  effort: settings.config.effort ?? "Default",
                 },
-              });
+                crypto.randomUUID(),
+              );
               setScreen(null);
             } catch (error) {
               setNotice((error as Error).message);
@@ -2097,6 +2088,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 name="responsibility"
                 placeholder={tr("e.g. Design & typography")}
                 maxLength={160}
+                required
               />
             </label>
             <div className="form-columns">
