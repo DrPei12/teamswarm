@@ -10,10 +10,25 @@ export function readSubscriptionCatalog(
     return cachedCatalog(
       id,
       async () => {
+        const { accounts } = await cachedCatalog(
+          "chatgpt-accounts",
+          () =>
+            api<{ accounts: { id: string; connected: boolean }[] }>(
+              "/model-accounts/chatgpt",
+            ),
+          refresh,
+        );
+        if (
+          !accounts.some(
+            (account) => account.id === id.slice(8) && account.connected,
+          )
+        )
+          return { authenticated: false, models: [] };
         const result = await api<{
           models: NonNullable<HarnessInspection["models"]>;
         }>(`/model-accounts/chatgpt/${encodeURIComponent(id.slice(8))}/models`);
         return {
+          authenticated: true,
           models: result.models.map((model) => ({
             ...model,
             provider: "OpenAI",

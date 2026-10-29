@@ -32,6 +32,9 @@ export function cachedCatalog<T>(
 export function invalidateModelCatalog(teamId?: string) {
   for (const key of entries.keys())
     if (!teamId || key === `team:${teamId}`) entries.delete(key);
+  notifyModelCatalog();
+}
+export function notifyModelCatalog() {
   for (const listener of listeners) listener();
 }
 export function subscribeModelCatalog(listener: () => void) {

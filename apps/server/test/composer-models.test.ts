@@ -6,6 +6,7 @@ import {
   chooseModel,
   selectedModelChoice,
   switchHarness,
+  connectionSource,
 } from "../../../teamswarm/src/modelCatalog.js";
 import { resolveConnection } from "../src/runtime/connections.js";
 import { executionConfig } from "../src/runtime/validation.js";
@@ -77,7 +78,7 @@ test("Grok exposes configured models across vendors and retains duplicate model 
   assert.equal(choices.filter((c) => c.model === "qwen-plus").length, 2);
   assert.equal(new Set(choices.map((c) => c.key)).size, 4);
   assert.equal(choices[0].unavailable, undefined);
-  assert.equal(choices[3].unavailable, "Requires claude-code");
+  assert.equal(choices[3].unavailable, "Native sign-in cannot be shared across Harnesses");
   const selected = await chooseModel(config, "qwen-plus", choices[2], resolve);
   assert.equal(selected.harness, "grok");
   assert.equal(selected.provider, "secondary");
@@ -85,6 +86,24 @@ test("Grok exposes configured models across vendors and retains duplicate model 
   assert.equal(selected.baseUrl, "https://secondary.example/v1");
   assert.equal(selected.protocol, "chat-completions");
   assert.equal(selectedModelChoice(choices, selected)?.key, choices[2].key);
+});
+
+test("native sign-in, independent authorization and reconnect status stay distinct", () => {
+  const native = { ...connections[3], name: "ChatGPT", subscriptionHarness: "codex" };
+  const directory = (connection: ModelAccess, harness: string, authenticated: boolean) => modelChoices(
+    { ...capabilities, connections: [connection] },
+    { [connection.chatgptAccountId ? `chatgpt:${connection.chatgptAccountId}` : "codex"]: { authenticated } }, harness,
+  )[0];
+  assert.equal(connectionSource(native), "Codex local sign-in");
+  assert.equal(directory(native, "codex", true).unavailable, undefined);
+  assert.equal(directory(native, "codex", false).unavailable, "Sign in to this account");
+  assert.equal(directory(native, "claude-code", true).unavailable, "Authorize ChatGPT for TeamSwarm");
+  const independent = { ...native, subscriptionHarness: null, chatgptAccountId: "account" };
+  assert.equal(connectionSource(independent), "ChatGPT account");
+  for (const harness of ["codex", "claude-code", "grok", "pi", "opencode", "deepseek-harness"]) {
+    assert.equal(directory(independent, harness, false).unavailable, "Reconnect ChatGPT");
+    assert.equal(directory(independent, harness, true).unavailable, undefined);
+  }
 });
 
 test("changing Harness retains an API model and resolves the correct endpoint without old effort", async () => {

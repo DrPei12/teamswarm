@@ -69,7 +69,8 @@ const errors = [],
   requests = [];
 let failCatalog = false,
   catalogDelay = 0,
-  extraModel = false;
+  extraModel = false,
+  accountConnected = true;
 try {
   const team = await request("/product/teams", {
     name: "Subscription catalog regression",
@@ -110,7 +111,11 @@ try {
     route.fulfill({
       json: {
         accounts: [
-          { id: accountId, email: "first@example.invalid", connected: true },
+          {
+            id: accountId,
+            email: "first@example.invalid",
+            connected: accountConnected,
+          },
           {
             id: secondAccountId,
             email: "second@example.invalid",
@@ -119,6 +124,25 @@ try {
         ],
       },
     }),
+  );
+  await page.route(
+    "**/api/model-accounts/chatgpt/*/sign-out",
+    async (route) => {
+      accountConnected = false;
+      await route.fulfill({ json: { revoked: true } });
+    },
+  );
+  await page.route("**/api/model-accounts/chatgpt/sign-in", (route) =>
+    route.fulfill({
+      json: { id: "fixture-login", url: "https://example.invalid/sign-in" },
+    }),
+  );
+  await page.route(
+    "**/api/model-accounts/chatgpt/sign-in/fixture-login",
+    async (route) => {
+      accountConnected = true;
+      await route.fulfill({ json: { state: "complete", accountId } });
+    },
   );
   await page.route("**/api/model-accounts/chatgpt/*/models", async (route) => {
     const first = route.request().url().includes(accountId);
@@ -276,7 +300,7 @@ try {
   );
   catalogDelay = 0;
   await page
-    .getByRole("button", { name: "ChatGPT (Codex)", exact: true })
+    .getByRole("button", { name: "Codex local sign-in", exact: true })
     .click();
   await list.getByText("8 / 8 selected", { exact: true }).waitFor();
   await page.screenshot({
@@ -287,6 +311,51 @@ try {
   await page.getByRole("button", { name: "Choose model", exact: true }).click();
   await page.getByRole("button", { name: /^OpenAI 3$/ }).click();
   await page.getByRole("button", { name: /GPT Catalog Reasoning/ }).waitFor();
+  // Revocation and a completed sign-in update the mounted composer without reload.
+  const openConnection = async () => {
+    await page
+      .getByRole("button", { name: "Configure models", exact: true })
+      .click();
+    await page
+      .locator(".cap-connection")
+      .filter({ hasText: "ChatGPT catalog" })
+      .getByRole("button", { name: "Edit", exact: true })
+      .click();
+  };
+  const returnToModels = async () => {
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Choose model", exact: true })
+      .click();
+    await page.getByRole("button", { name: /^OpenAI 3$/ }).click();
+  };
+  await openConnection();
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Continue with ChatGPT", exact: true })
+    .waitFor();
+  await returnToModels();
+  const reconnectModel = page.getByRole("button", {
+    name: /gpt-catalog-reasoning.*Reconnect ChatGPT/,
+  });
+  await reconnectModel.waitFor();
+  assert(await reconnectModel.isDisabled());
+  await openConnection();
+  await page
+    .getByRole("button", { name: "Continue with ChatGPT", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Sign out", exact: true }).waitFor();
+  await returnToModels();
+  const restoredModel = page.getByRole("button", {
+    name: /GPT Catalog Reasoning/,
+  });
+  await restoredModel.waitFor();
+  assert(await restoredModel.isEnabled());
+  assert.equal(
+    await page.getByText("Reconnect ChatGPT", { exact: true }).count(),
+    0,
+  );
   assert(!requests.some((url) => /\/harnesses\/(null|undefined)\//.test(url)));
   assert.deepEqual(errors, []);
   const report = {
@@ -304,6 +373,7 @@ try {
       "native subscription",
       "Harness independence",
       "composer account catalog",
+      "sign-out and completed sign-in update the composer without reload",
       "390 and 760 px layout",
     ],
   };
