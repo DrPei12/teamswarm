@@ -766,6 +766,40 @@ class ProductClient {
     );
     return this.saveSettings(teamId, { ...settings, config: next });
   }
+  async configurePermissions(
+    teamId: string,
+    memberId: string,
+    permissions: NonNullable<ExecutionConfig["permissions"]>,
+  ) {
+    const workspace = this.state.workspace;
+    const host = workspace?.executions?.[teamId]?.host;
+    const isHost = memberId.startsWith("host:") || memberId === host?.memberId;
+    const member = workspace?.members.find(
+      (m) => m.teamId === teamId && m.id === memberId,
+    );
+    const config = isHost ? host?.config : member?.executionConfig;
+    const version = isHost
+      ? host?.permissionVersion
+      : member?.configurationVersion;
+    if (!host || !config || !version)
+      throw new Error("Execution permissions are not available. Try again.");
+    try {
+      return await this.command(
+        `/product/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(isHost ? host.memberId : memberId)}/permissions`,
+        {
+          permissions,
+          harness: config.harness,
+          expectedVersion: version,
+          branchId: host.branchId,
+        },
+        "PUT",
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "version_conflict")
+        await this.refresh();
+      throw error;
+    }
+  }
   async configureMember(
     teamId: string,
     memberId: string,

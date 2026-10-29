@@ -1,4 +1,5 @@
 import { validateNativePermissions } from "./permissions.js";
+import { codexPermissionOptions } from "../permission-options.js";
 import { productVersion } from "../../version.js";
 import { createHash, randomUUID } from "node:crypto";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -167,6 +168,7 @@ export function codexCommand(): { command: string; args: string[] } {
 }
 
 export class CodexHarness implements Harness {
+  permissionOptions() { return codexPermissionOptions; }
   readonly id = "codex";
   get sessionScope(): string {
     const directory = path.resolve(

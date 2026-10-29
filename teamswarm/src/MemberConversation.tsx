@@ -60,7 +60,7 @@ type ConversationProps = {
   anchor?: string;
   workId?: string;
   onUpdate: (change: (old: Workspace) => Workspace) => boolean;
-  onSettings: (tab?: "harnesses" | "connections") => void;
+  onSettings: (tab?: "harnesses" | "connections" | "runtime") => void;
 };
 const rootOf = (work: Work) => work.threadId ?? work.id;
 export function MemberConversation(props: ConversationProps) {
@@ -201,7 +201,8 @@ function ConversationThread({
   const configurationLock = useRef(false);
   const team = workspace.teams.find((t) => t.id === member.teamId)!;
   const executionConfig = member.id.startsWith("host:")
-    ? workspace.executions?.[member.teamId]?.settings?.config
+    ? (workspace.executions?.[member.teamId]?.host?.config ??
+      workspace.executions?.[member.teamId]?.settings?.config)
     : member.executionConfig;
   const runtimeConfig = executionConfig
     ? {
@@ -799,6 +800,14 @@ function ConversationThread({
                 config={runtimeConfig}
                 executionConfig={executionConfig}
                 showContext={false}
+                running={!!activeWork || member.status === "working"}
+                onPermissionChange={(permissions) =>
+                  product.configurePermissions(
+                    member.teamId,
+                    member.id,
+                    permissions,
+                  )
+                }
                 disabled={configuring || sending || !executionConfig}
                 onSettings={onSettings}
                 onChange={async (config, choice) => {

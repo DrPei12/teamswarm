@@ -1,3 +1,4 @@
+import { memberPermissions } from "./permission-options.js";
 import { readOnlyExecution } from "./harness/permissions.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -313,7 +314,7 @@ export function resolveExecution(
     const hostChoice = member.kind === "host" && branchId ? member.hostSelections?.[branchId] : undefined;
     const retained = effective.selection.resourceId.startsWith("cap_") && hostChoice?.selection?.resourceId === effective.selection.resourceId && hostChoice.selection.resourceVersion === effective.selection.resourceVersion ? hostChoice.config : undefined;
     if ((!resource || resource.version !== effective.selection.resourceVersion) && retained)
-      return { config: readOnlyExecution(retained), selection: {...effective.selection}, conflict: null };
+      return { config: readOnlyExecution(memberPermissions(retained, member)), selection: {...effective.selection}, conflict: null };
     if (!resource)
       return {
         config,
@@ -329,6 +330,7 @@ export function resolveExecution(
     config = { ...resource.config };
     selection = { ...effective.selection };
   }
+  config = memberPermissions(config, member);
   if (member.config.access === "read-only" || work.interaction || work.kind === "collaboration")
     config = readOnlyExecution(config);
   if (member.kind !== "host" && !deps.catalog.capabilities.allowed(teamId,config))

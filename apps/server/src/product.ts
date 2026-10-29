@@ -1,3 +1,5 @@
+import { permissionCatalog, mergePermissionChoice } from "./runtime/permission-options.js";
+import { nativePermissions } from "./runtime/harness/permissions.js";
 import express, { Router } from "express";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
@@ -357,6 +359,10 @@ export class ProductStore {
         : this.runtime.history.ensure(team.id).id;
       const hostAllocation = hostMember ? this.runtime.catalog.memberExecution(team.id, activeBranch, hostMember) : null;
       const hostConfig = hostAllocation?.config ?? settings?.config;
+      if (hostMember && hostConfig) workspace.executions![team.id].host = {
+        config: hostConfig, permissionVersion: hostMember.permissionVersion ?? 1,
+        memberId: hostMember.id, branchId: activeBranch,
+      };
       const latestUsage = attempts
         .filter(
           (a) =>
@@ -1007,6 +1013,39 @@ export function productRoutes(runtime: TeamRuntime): Router {
       );
     },
   );
+  router.get("/product/permission-options", (_req, res) => res.json(permissionCatalog(runtime.harnesses)));
+  router.put("/product/teams/:teamId/members/:memberId/permissions", (req, res) => {
+    const teamId = parse(key, req.params.teamId), memberId = parse(key, req.params.memberId);
+    const input = parse(z.object({ expectedVersion: z.number().int().positive(), branchId: key,
+      harness: z.string(), permissions: nativePermissions }).strict(), req.body);
+    runtime.history.branch(teamId, input.branchId);
+    const member = runtime.store.activeMember(teamId, memberId);
+    const current = runtime.catalog.memberExecution(teamId, input.branchId, member);
+    const version = member.kind === "host" ? member.permissionVersion ?? 1 : current.allocationRevision;
+    if (version !== input.expectedVersion || current.config.harness !== input.harness)
+      throw conflict("version_conflict", "Execution permissions changed. Reload and try again.");
+    const options = runtime.harnesses.get(input.harness)?.permissionOptions?.();
+    const selected = options?.options.find(option => JSON.stringify(option.permissions) === JSON.stringify(input.permissions));
+    if (!selected) throw badRequest("permission_choice", "This permission mode is unavailable for the current Harness.");
+    if (selected.requiresWrite && current.config.access === "read-only")
+      throw badRequest("permission_access", "Read-only access prevents this permission mode.");
+    const next = mergePermissionChoice(current.config, input.permissions);
+    runtime.validateConfig(next);
+    runtime.store.transaction(() => {
+      if (member.kind === "host") {
+        member.permissionOverride = next.permissions;
+        member.permissionVersion = version + 1;
+      } else {
+        member.config = next;
+        delete member.selection;
+        delete member.permissionOverride;
+        member.allocationVersion = version + 1;
+      }
+      runtime.store.save("members", member);
+      runtime.store.event(teamId, "member.configuration", { memberId, permissions: true });
+    });
+    res.json({ config: next, version: version + 1 });
+  });
   router.put("/product/teams/:teamId/members/:memberId/runtime", (req, res) => {
     const teamId = parse(key, req.params.teamId);
     const memberId = parse(key, req.params.memberId);

@@ -422,7 +422,7 @@ type Props = {
   onUpdate: (change: (old: Workspace) => Workspace) => boolean;
   onNavigate: (chatId: string, messageId?: string) => void;
   onAddMember: () => void;
-  onSettings: (tab?: "harnesses" | "connections") => void;
+  onSettings: (tab?: "harnesses" | "connections" | "runtime") => void;
   onDelivery: (id: string) => void;
   onNavigateMember: (
     memberId: string,

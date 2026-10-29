@@ -747,7 +747,13 @@ try {
           };
         }),
       );
-    assert.equal(controls.length, 3);
+    assert.equal(controls.length, 4);
+    assert.equal(
+      await memberComposer
+        .getByRole("button", { name: /^Execution permissions:/ })
+        .count(),
+      1,
+    );
     assert(
       controls.every(
         (r) =>

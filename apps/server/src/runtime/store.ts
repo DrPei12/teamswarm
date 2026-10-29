@@ -422,6 +422,8 @@ export class RuntimeStore {
         config: { ...settings.config, access: "read-only" },
         createdAt: host?.createdAt ?? timestamp(),
         ...(host?.hostSelections ? { hostSelections: host.hostSelections } : {}),
+        ...(host?.permissionOverride ? { permissionOverride: host.permissionOverride } : {}),
+        ...(host?.permissionVersion ? { permissionVersion: host.permissionVersion } : {}),
       });
       this.event(teamId, "runtime.configured", {
         version: settings.version,

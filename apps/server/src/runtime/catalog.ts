@@ -1,4 +1,5 @@
 import { readOnlyExecution } from "./harness/permissions.js";
+import { memberPermissions } from "./permission-options.js";
 import { z } from "zod";
 import { conflict, notFound } from "../errors.js";
 import { RuntimeStore, activeStates, hash } from "./store.js";
@@ -300,7 +301,7 @@ export class TeamCatalog {
     const selected = selection ? this.resources(teamId).find(r => r.id === selection.resourceId) : undefined;
     const selectionCurrent = !selection || selected?.version === selection.resourceVersion;
     const selectionRetained = !selectionCurrent && !!choice?.config && !!selection?.resourceId.startsWith("cap_");
-    const configuration = selectionCurrent ? selected?.config ?? member.config : choice?.config ?? member.config;
+    const configuration = memberPermissions(selectionCurrent ? selected?.config ?? member.config : choice?.config ?? member.config, member);
     return {
       harness: configuration.harness, model: configuration.model, effort: configuration.effort,
       config: member.config.access === "read-only" ? readOnlyExecution(configuration) : configuration,

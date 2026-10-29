@@ -180,25 +180,27 @@ export function Startup({
 }
 
 type Inspection = HarnessInspection;
-export function ExecutionSettings(props: {
+type ExecutionSettingsProps = {
   open: boolean;
   onClose: () => void;
   teamId: string;
   workspace: Workspace;
-  initialTab?: "harnesses" | "connections";
-}) {
-  const [manual, setManual] = useState(false);
+  initialTab?: "harnesses" | "connections" | "runtime";
+};
+export function ExecutionSettings(props: ExecutionSettingsProps) {
+  return props.open ? <ExecutionSettingsContent {...props} /> : null;
+}
+function ExecutionSettingsContent(props: ExecutionSettingsProps) {
+  const [manual, setManual] = useState(props.initialTab === "runtime");
   const [configurationTab, setConfigurationTab] = useState<
     "harnesses" | "connections"
-  >("harnesses");
-  useEffect(() => {
-    if (!props.open) setManual(false);
-    else setConfigurationTab(props.initialTab ?? "harnesses");
-  }, [props.open, props.initialTab]);
+  >(props.initialTab === "connections" ? "connections" : "harnesses");
   return manual ? (
     <ManualExecutionSettings
       {...props}
-      onClose={() => setManual(false)}
+      onClose={() =>
+        props.initialTab === "runtime" ? props.onClose() : setManual(false)
+      }
       onConfigureModels={() => {
         setConfigurationTab("connections");
         setManual(false);
@@ -728,16 +730,14 @@ function ManualExecutionSettings({
                 </FieldSelect>
               </label>
             </div>
-            {["codex", "claude-code"].includes(settings.config.harness) && (
-              <label>
-                {t("Execution permissions")}
-                <PermissionSelect
-                  config={settings.config}
-                  disabled={busy}
-                  onChange={(permissions) => config({ permissions })}
-                />
-              </label>
-            )}
+            <label>
+              {t("Default execution permissions")}
+              <PermissionSelect
+                config={settings.config}
+                disabled={busy}
+                onChange={(permissions) => config({ permissions })}
+              />
+            </label>
             {!subscriptionMode && (
               <div
                 className="advanced-settings"

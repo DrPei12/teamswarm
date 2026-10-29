@@ -36,6 +36,8 @@ export function RuntimeControls({
   config: runtimeConfig,
   showContext = true,
   disabled = false,
+  running = false,
+  onPermissionChange,
   onChange,
   onSettings,
 }: {
@@ -44,8 +46,12 @@ export function RuntimeControls({
   config?: RuntimeConfig;
   showContext?: boolean;
   disabled?: boolean;
+  running?: boolean;
+  onPermissionChange?: (
+    permissions: NonNullable<ExecutionConfig["permissions"]>,
+  ) => Promise<unknown>;
   onChange: (config: RuntimeConfig, choice?: ModelChoice) => void;
-  onSettings: (tab?: "harnesses" | "connections") => void;
+  onSettings: (tab?: "harnesses" | "connections" | "runtime") => void;
 }) {
   const { t: tr, locale } = useI18n();
   const config = runtimeConfig ?? team.runtime ?? defaultRuntime;
@@ -239,7 +245,19 @@ export function RuntimeControls({
           compact
           config={executionConfig}
           disabled={disabled}
-          onChange={(permissions) => onChange({ ...config, permissions })}
+          running={running}
+          open={!disabled && edit === "permissions"}
+          onOpenChange={(open) =>
+            setEdit((current) =>
+              open ? "permissions" : current === "permissions" ? null : current,
+            )
+          }
+          onChange={(permissions) =>
+            onPermissionChange
+              ? onPermissionChange(permissions)
+              : onChange({ ...config, permissions })
+          }
+          onAdvanced={() => onSettings("runtime")}
         />
       )}
       {showContext && (

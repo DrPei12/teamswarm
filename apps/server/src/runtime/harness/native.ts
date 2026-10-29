@@ -1,4 +1,5 @@
 import { validateNativePermissions } from "./permissions.js";
+import { claudePermissionOptions } from "../permission-options.js";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnOwned, confirmOwnedExit } from "./owned-process.js";
 import { randomUUID } from "node:crypto";
@@ -46,6 +47,7 @@ type Active = {
 
 /** Native loops stay in their own executable/SDK. No model-loop emulation here. */
 export class NativeHarness implements Harness {
+  permissionOptions() { return this.id === "claude-code" ? claudePermissionOptions : { defaultId: "", options: [] }; }
   readonly capabilities;
   get sessionScope(): string {
     return sessionStoreScope(nativeHome(this.id)) + (this.id === "claude-code" || this.id === "grok" ? ":" + subscriptionScope(this.id) : "") + (this.id === "grok" ? ":acp-profile-v1" : "");

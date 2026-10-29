@@ -12,6 +12,7 @@ import type {
 } from "./runtime";
 export type { ProjectNode, ProjectBranch, ProjectDocument } from "./runtime";
 export type TeamExecution = {
+  host?: { config: ExecutionConfig; permissionVersion: number; memberId: string; branchId: string };
   settings: RuntimeSettings | null;
   works: Work[];
   runs: Run[];
