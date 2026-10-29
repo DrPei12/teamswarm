@@ -13,6 +13,23 @@ export const zhCN: Record<string, string> = {
   "No messages yet": "暂无对话",
   "No contributors": "暂无参与成员",
   "Execution permissions": "执行权限",
+  "Default execution permissions": "团队默认权限",
+  "Deny extra permissions": "拒绝额外授权",
+  "Harness settings": "Harness 现有权限",
+  "Custom permissions": "自定义权限",
+  "Uses this Harness's native settings": "使用此 Harness 的原生设置",
+  "Permission options unavailable": "权限选项暂不可用",
+  "Permissions saved": "权限已保存",
+  "Applies to the next execution": "下次执行生效",
+  "Could not save permissions": "权限保存失败",
+  "Read-only access prevents this permission mode.":
+    "当前为只读，无法使用此权限模式。",
+  "Execution permissions changed. Reload and try again.":
+    "权限配置已变更，请重试。",
+  "This permission mode is unavailable for the current Harness.":
+    "当前 Harness 不支持此权限模式。",
+  "Execution permissions are not available. Try again.":
+    "暂时无法读取执行权限，请重试。",
   "Not selected": "未选择",
   "Harness default": "Harness 现有权限",
   "Request approval": "请求批准",
@@ -217,8 +234,6 @@ export const zhCN: Record<string, string> = {
     "接入已有订阅，或添加自己的 API。一条连接可以选择多个型号。",
   "Add connection": "添加连接",
   "Account default model": "账号默认型号",
-  "Works with": "可搭配",
-  "Add a compatible endpoint": "请添加兼容接口",
   "Allow team to use": "允许团队使用",
   "Connect your first models": "接入你的模型",
   "Use an existing subscription or add an API key from your provider.":
@@ -277,9 +292,6 @@ export const zhCN: Record<string, string> = {
   "Choose specific models, or let Host use the account's available models.":
     "可指定型号；不指定时，由 Host 从该账号提供的型号中选择。",
   "Add model…": "添加型号…",
-  "Enabled compatible Harnesses": "当前可搭配",
-  "Select a compatible Harness in the Harness tab":
-    "请在 Harness 页面启用兼容工具",
   "Add the connection, then save your team settings.":
     "添加后，保存团队设置即可供 Host 使用。",
   "Apply changes": "应用修改",

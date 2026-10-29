@@ -13,6 +13,10 @@ export interface NativePermissionRequest {
   input: unknown;
   reason?: string;
 }
+export interface PermissionOptions {
+  defaultId: string;
+  options: { id: string; label: string; group?: "native"; requiresWrite?: boolean; permissions: NativePermissions }[];
+}
 export interface ExecutionApproval {
   id: string; teamId: string; memberId: string; workId: string; attemptId: string;
   tool: string; details: string; createdAt: string;
@@ -56,6 +60,8 @@ export interface RuntimeSettings {
   version: number;
 }
 export interface Member {
+  permissionOverride?: NativePermissions;
+  permissionVersion?: number;
   id: string;
   teamId: string;
   name: string;
@@ -419,6 +425,7 @@ export interface HarnessResult {
 
 export interface Harness {
   id: string;
+  permissionOptions?(): PermissionOptions;
   readonly sessionScope?: string;
   capabilities: Record<string, boolean | string>;
   inspect(): Promise<Record<string, unknown>>;

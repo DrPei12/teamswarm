@@ -158,9 +158,9 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   };
   const [screen, setScreen] = useState<Screen>(null);
   const [executionSettings, setExecutionSettings] = useState(false);
-  const [executionTab, setExecutionTab] = useState<"harnesses" | "connections">(
-    "harnesses",
-  );
+  const [executionTab, setExecutionTab] = useState<
+    "harnesses" | "connections" | "runtime"
+  >("harnesses");
   const serviceState = useProduct();
   const sendLock = useRef(false);
   const [sidebar, setSidebar] = useState(false);
@@ -1568,7 +1568,10 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                       workspace={workspace}
                       teamId={team.id}
                       chatId={chat?.id}
-                      onSettings={() => setExecutionSettings(true)}
+                      onSettings={() => {
+                        setExecutionTab("harnesses");
+                        setExecutionSettings(true);
+                      }}
                     />
                     <ComposerSurface
                       className="composer"
@@ -1672,7 +1675,24 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                           <RuntimeControls
                             team={team}
                             executionConfig={
+                              workspace.executions?.[team.id]?.host?.config ??
                               workspace.executions?.[team.id]?.settings?.config
+                            }
+                            running={workspace.executions?.[
+                              team.id
+                            ]?.works.some(
+                              (w) =>
+                                w.memberId ===
+                                  workspace.executions?.[team.id]?.host
+                                    ?.memberId &&
+                                ["running", "stopping"].includes(w.status),
+                            )}
+                            onPermissionChange={(permissions) =>
+                              product.configurePermissions(
+                                team.id,
+                                `host:${team.id}`,
+                                permissions,
+                              )
                             }
                             onChange={(runtime, choice) => {
                               void product

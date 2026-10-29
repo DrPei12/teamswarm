@@ -306,7 +306,7 @@
 }
 .composer-leading-controls .runtime-controls {
   flex: 0 1 auto;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   margin-left: auto;
 }
 .composer-leading-controls .context-ring {

@@ -46,12 +46,6 @@ const protocolNames = {
   responses: "Responses",
   "anthropic-messages": "Anthropic Messages",
 };
-const compatible = (c: ModelAccess, id: string) =>
-  c.chatgptAccountId || (c.kind === "subscription" && !c.subscriptionHarness)
-    ? true
-    : c.kind === "subscription"
-      ? c.subscriptionHarness === id
-      : Object.keys(c.endpoints).length > 0;
 type Installation = { installed: boolean; version: string | null };
 type Tab = "harnesses" | "connections" | "preferences";
 
@@ -220,7 +214,6 @@ export function CapabilitySettings({
           key={editor === "new" ? "new" : editor.id}
           teamId={teamId}
           initial={editor === "new" ? null : editor}
-          enabledHarnesses={draft.enabledHarnesses}
           onCancel={() => setEditor(null)}
           onSave={(connection) => {
             setDraft({
@@ -370,13 +363,6 @@ export function CapabilitySettings({
                         </div>
                       )}
                       <div className="cap-connection-footer">
-                        <span>
-                          {t("Works with")}:{" "}
-                          {harnesses
-                            .filter((h) => compatible(c, h.id))
-                            .map((h) => h.name)
-                            .join(" · ") || t("Add a compatible endpoint")}
-                        </span>
                         <label className="cap-enable">
                           <input
                             type="checkbox"
@@ -575,13 +561,11 @@ export function CapabilitySettings({
 function ConnectionEditor({
   teamId,
   initial,
-  enabledHarnesses,
   onCancel,
   onSave,
 }: {
   teamId: string;
   initial: ModelAccess | null;
-  enabledHarnesses: string[];
   onCancel: () => void;
   onSave: (c: ModelAccess) => void;
 }) {
@@ -977,16 +961,6 @@ function ConnectionEditor({
             }}
           />
         </div>
-        <p className="cap-compatibility">
-          <Check size={14} />
-          {t("Enabled compatible Harnesses")}:{" "}
-          {harnesses
-            .filter(
-              (h) => enabledHarnesses.includes(h.id) && compatible(draft, h.id),
-            )
-            .map((h) => h.name)
-            .join(" · ") || t("Select a compatible Harness in the Harness tab")}
-        </p>
       </form>
       <footer className="cap-footer">
         <div role={error ? "alert" : undefined}>

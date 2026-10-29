@@ -185,7 +185,7 @@ export function ExecutionSettings(props: {
   onClose: () => void;
   teamId: string;
   workspace: Workspace;
-  initialTab?: "harnesses" | "connections";
+  initialTab?: "harnesses" | "connections" | "runtime";
 }) {
   const [manual, setManual] = useState(false);
   const [configurationTab, setConfigurationTab] = useState<
@@ -193,6 +193,7 @@ export function ExecutionSettings(props: {
   >("harnesses");
   useEffect(() => {
     if (!props.open) setManual(false);
+    else if (props.initialTab === "runtime") setManual(true);
     else setConfigurationTab(props.initialTab ?? "harnesses");
   }, [props.open, props.initialTab]);
   return manual ? (
@@ -728,16 +729,14 @@ function ManualExecutionSettings({
                 </FieldSelect>
               </label>
             </div>
-            {["codex", "claude-code"].includes(settings.config.harness) && (
-              <label>
-                {t("Execution permissions")}
-                <PermissionSelect
-                  config={settings.config}
-                  disabled={busy}
-                  onChange={(permissions) => config({ permissions })}
-                />
-              </label>
-            )}
+            <label>
+              {t("Default execution permissions")}
+              <PermissionSelect
+                config={settings.config}
+                disabled={busy}
+                onChange={(permissions) => config({ permissions })}
+              />
+            </label>
             {!subscriptionMode && (
               <div
                 className="advanced-settings"
