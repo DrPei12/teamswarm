@@ -32,6 +32,7 @@ jobs:
       - run: node test/browser/offline-drafts.mjs
       - run: node test/browser/project-history.mjs
       - run: node teamswarm/scripts/verify-composer.mjs
+      - run: node teamswarm/scripts/verify-subscription-models.mjs
       - run: node teamswarm/scripts/verify-frontend-stability.mjs
       - run: node teamswarm/scripts/verify-files.mjs
       - run: npm run harness:install -- pi opencode

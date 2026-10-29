@@ -7,20 +7,19 @@ type Account = { id: string; email: string; connected: boolean };
 export function ChatGPTConnection({
   value,
   onChange,
-  onModels,
+  onChanged,
 }: {
   value?: string | null;
   onChange: (id: string) => void;
-  onModels: (models: { model: string; name: string }[]) => void;
+  onChanged: () => void;
 }) {
   const { t } = useI18n();
   const [accounts, setAccounts] = useState<Account[]>([]),
     [error, setError] = useState("");
   const [login, setLogin] = useState<{ id: string; url: string } | null>(null),
     [busy, setBusy] = useState(false);
-  const [revision, refresh] = useState(0);
-  const callbacks = useRef({ onChange, onModels });
-  callbacks.current = { onChange, onModels };
+  const callbacks = useRef({ onChange, onChanged });
+  callbacks.current = { onChange, onChanged };
   useEffect(() => {
     let live = true;
     void api<{ accounts: Account[] }>("/model-accounts/chatgpt")
@@ -30,21 +29,6 @@ export function ChatGPTConnection({
       live = false;
     };
   }, []);
-  useEffect(() => {
-    if (!value) return;
-    let live = true;
-    setError("");
-    void api<{ models: { model: string; name: string }[] }>(
-      `/model-accounts/chatgpt/${value}/models`,
-    )
-      .then((v) => {
-        if (live) callbacks.current.onModels(v.models);
-      })
-      .catch((e) => live && setError(e.message));
-    return () => {
-      live = false;
-    };
-  }, [value, revision]);
   useEffect(() => {
     if (!login) return;
     let live = true;
@@ -64,7 +48,7 @@ export function ChatGPTConnection({
           if (!live) return;
           setAccounts(list.accounts);
           callbacks.current.onChange(state.accountId);
-          refresh((v) => v + 1);
+          callbacks.current.onChanged();
           setLogin(null);
           return;
         }
@@ -112,6 +96,7 @@ export function ChatGPTConnection({
       setAccounts((v) =>
         v.map((a) => (a.id === value ? { ...a, connected: false } : a)),
       );
+      callbacks.current.onChanged();
       if (!result.revoked)
         setError(
           t(
@@ -137,28 +122,11 @@ export function ChatGPTConnection({
       setBusy(false);
     }
   }
+  const connected = accounts.some(
+    (account) => account.id === value && account.connected,
+  );
   return (
     <div className="cap-account-panel">
-      {value && accounts.some((a) => a.id === value && a.connected) && (
-        <div>
-          <button
-            type="button"
-            className="text-button"
-            disabled={busy || !!login}
-            onClick={() => refresh((v) => v + 1)}
-          >
-            {t("Load model list")}
-          </button>
-          <button
-            type="button"
-            className="text-button"
-            disabled={busy || !!login}
-            onClick={() => void signOut()}
-          >
-            {t("Sign out")}
-          </button>
-        </div>
-      )}
       {!!accounts.length && (
         <label className="cap-field">
           <span>{t("ChatGPT account")}</span>
@@ -179,24 +147,38 @@ export function ChatGPTConnection({
           </FieldSelect>
         </label>
       )}
-      <button
-        type="button"
-        className="secondary-button"
-        disabled={busy || !!login}
-        onClick={() => void start(value ?? undefined)}
-      >
-        {t("Continue with ChatGPT")}
-      </button>
-      {value && (
-        <button
-          type="button"
-          className="text-button"
-          disabled={busy || !!login}
-          onClick={() => void start()}
-        >
-          {t("Add account")}
-        </button>
-      )}
+      <div className="cap-account-actions">
+        {!connected && (
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={busy || !!login}
+            onClick={() => void start(value ?? undefined)}
+          >
+            {t("Continue with ChatGPT")}
+          </button>
+        )}
+        {value && (
+          <button
+            type="button"
+            className="text-button"
+            disabled={busy || !!login}
+            onClick={() => void start()}
+          >
+            {t("Add account")}
+          </button>
+        )}
+        {connected && (
+          <button
+            type="button"
+            className="text-button"
+            disabled={busy || !!login}
+            onClick={() => void signOut()}
+          >
+            {t("Sign out")}
+          </button>
+        )}
+      </div>
       {login && (
         <p>
           <a href={login.url} target="_blank" rel="noreferrer">

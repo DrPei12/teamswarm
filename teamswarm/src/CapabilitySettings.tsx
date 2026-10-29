@@ -24,6 +24,9 @@ import { Disclosure } from "./Disclosure";
 import { HarnessInstallation } from "./HarnessInstallation";
 import { HarnessAccount } from "./HarnessAccount";
 import { ChatGPTConnection } from "./ChatGPTConnection";
+import { SubscriptionModelList } from "./SubscriptionModelList";
+import { subscriptionCatalogId } from "./modelCatalog";
+import { useSubscriptionCatalog } from "./useSubscriptionCatalog";
 import { ModelPicker, modelProvider } from "./ModelPicker";
 import type { HarnessInspection } from "./harnessCatalog";
 import "./capabilities.css";
@@ -591,30 +594,21 @@ function ConnectionEditor({
     [catalog, setCatalog] = useState<NonNullable<HarnessInspection["models"]>>(
       [],
     ),
-    [inspection, setInspection] = useState<HarnessInspection | null>(null),
-    [revision, refresh] = useState(0);
+    [followCatalog, setFollowCatalog] = useState(!initial?.models.length);
+  const subscriptionId =
+    draft.kind === "subscription" ? subscriptionCatalogId(draft) : null;
+  const subscription = useSubscriptionCatalog(subscriptionId);
+  const selectedModels =
+    draft.kind === "subscription" && followCatalog
+      ? [
+          ...new Set([
+            ...subscription.models.map((model) => model.model),
+            ...draft.models,
+          ]),
+        ]
+      : draft.models;
   const primary = (Object.keys(draft.endpoints)[0] ??
     "chat-completions") as ConnectionProtocol;
-  useEffect(() => {
-    if (draft.kind !== "subscription" || !draft.subscriptionHarness) return;
-    let live = true;
-    setCatalog([]);
-    setInspection(null);
-    void api<HarnessInspection>(
-      `/harnesses/${draft.subscriptionHarness}/check`,
-      {},
-    )
-      .then((r) => {
-        if (live) {
-          setCatalog(r.models ?? []);
-          setInspection(r);
-        }
-      })
-      .catch((e) => live && setError(e.message));
-    return () => {
-      live = false;
-    };
-  }, [draft.kind, draft.subscriptionHarness, revision]);
   async function credential() {
     if (!secret.trim()) return draft.credentialEnv;
     const r = await api<{ reference: string }>(
@@ -668,13 +662,13 @@ function ConnectionEditor({
     try {
       if (!draft.name.trim())
         throw new Error(t("Give this connection a name."));
-      if (draft.kind === "api" && !draft.models.length)
-        throw new Error(t("Add at least one model."));
       if (draft.kind === "subscription" && !draft.subscriptionHarness) {
         if (!draft.chatgptAccountId)
           throw new Error(t("Continue with ChatGPT first."));
-        if (!draft.models.length) throw new Error(t("Add at least one model."));
       }
+      if (!selectedModels.length) throw new Error(t("Add at least one model."));
+      if (selectedModels.length > 100)
+        throw new Error(t("Select up to {count} models.", { count: 100 }));
       const ref = draft.kind === "api" ? await credential() : null;
       if (draft.kind === "api" && !ref)
         throw new Error(t("Enter an API key first."));
@@ -685,6 +679,7 @@ function ConnectionEditor({
         throw new Error(t("Enter the API address."));
       onSave({
         ...draft,
+        models: selectedModels,
         name: draft.name.trim(),
         credentialEnv: ref,
         endpoints,
@@ -738,6 +733,7 @@ function ConnectionEditor({
                   chatgptAccountId: null,
                 });
                 setCatalog([]);
+                setFollowCatalog(true);
                 setSecret("");
                 setError("");
               }}
@@ -870,12 +866,15 @@ function ConnectionEditor({
                     (draft.subscriptionHarness ?? "chatgpt") === a.id
                   }
                   onClick={() => {
+                    if ((draft.subscriptionHarness ?? "chatgpt") === a.id)
+                      return;
                     setDraft({
                       ...draft,
                       subscriptionHarness: a.id === "chatgpt" ? null : a.id,
                       chatgptAccountId: null,
                       models: [],
                     });
+                    setFollowCatalog(true);
                     setError("");
                   }}
                 >
@@ -889,78 +888,96 @@ function ConnectionEditor({
             {!draft.subscriptionHarness ? (
               <ChatGPTConnection
                 value={draft.chatgptAccountId}
-                onChange={(id) =>
-                  setDraft((v) => ({ ...v, chatgptAccountId: id, models: [] }))
-                }
-                onModels={(models) =>
-                  setCatalog(
-                    models.map((model) => ({
-                      ...model,
-                      provider: "OpenAI",
-                    })),
-                  )
-                }
+                onChange={(id) => {
+                  if (id !== draft.chatgptAccountId) {
+                    setDraft((v) => ({
+                      ...v,
+                      chatgptAccountId: id,
+                      models: [],
+                    }));
+                    setFollowCatalog(true);
+                    setError("");
+                  }
+                }}
+                onChanged={subscription.refresh}
               />
             ) : draft.subscriptionHarness === "codex" ? (
               <CodexAccount
-                inspection={inspection}
-                onChanged={() => refresh((v) => v + 1)}
+                inspection={subscription.inspection}
+                onChanged={subscription.refresh}
               />
             ) : (
               draft.subscriptionHarness && (
                 <HarnessAccount
                   harness={draft.subscriptionHarness}
-                  model={draft.models[0] ?? null}
-                  onChanged={() => refresh((v) => v + 1)}
+                  model={selectedModels[0] ?? null}
+                  onChanged={subscription.refresh}
                 />
               )
             )}
           </>
         )}
-        <div className="cap-model-section">
-          <div>
-            <h4>{t("Models available to Host")}</h4>
-            {draft.kind === "api" && (
-              <button
-                className="text-button"
-                type="button"
-                disabled={busy}
-                onClick={() => void loadModels()}
-              >
-                {busy ? <LoaderCircle size={13} className="spinner" /> : null}
-                {t("Load model list")}
-              </button>
-            )}
-          </div>
-          <div className="cap-model-chips">
-            {draft.models.map((m) => (
-              <span key={m}>
-                {m}
-                <button
-                  type="button"
-                  aria-label={t("Remove {name}", { name: m })}
-                  onClick={() =>
-                    setDraft({
-                      ...draft,
-                      models: draft.models.filter((v) => v !== m),
-                    })
-                  }
-                >
-                  <X size={12} />
-                </button>
-              </span>
-            ))}
-          </div>
-          <ModelPicker
-            label={t("Add model…")}
-            value={null}
-            models={catalog}
-            onChange={(model) => {
-              if (model && !draft.models.includes(model))
-                setDraft({ ...draft, models: [...draft.models, model] });
+        {draft.kind === "subscription" ? (
+          <SubscriptionModelList
+            key={subscriptionId ?? "unselected"}
+            models={subscription.models}
+            selected={selectedModels}
+            loading={subscription.loading}
+            error={subscription.error}
+            connected={!!subscriptionId}
+            onRefresh={subscription.refresh}
+            onChange={(models, all = false) => {
+              setDraft((value) => ({ ...value, models }));
+              setFollowCatalog(all);
+              setError("");
             }}
           />
-        </div>
+        ) : (
+          <div className="cap-model-section">
+            <div>
+              <h4>{t("Models available to Host")}</h4>
+              {draft.kind === "api" && (
+                <button
+                  className="text-button"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void loadModels()}
+                >
+                  {busy ? <LoaderCircle size={13} className="spinner" /> : null}
+                  {t("Load model list")}
+                </button>
+              )}
+            </div>
+            <div className="cap-model-chips">
+              {draft.models.map((m) => (
+                <span key={m}>
+                  {m}
+                  <button
+                    type="button"
+                    aria-label={t("Remove {name}", { name: m })}
+                    onClick={() =>
+                      setDraft({
+                        ...draft,
+                        models: draft.models.filter((v) => v !== m),
+                      })
+                    }
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <ModelPicker
+              label={t("Add model…")}
+              value={null}
+              models={catalog}
+              onChange={(model) => {
+                if (model && !draft.models.includes(model))
+                  setDraft({ ...draft, models: [...draft.models, model] });
+              }}
+            />
+          </div>
+        )}
       </form>
       <footer className="cap-footer">
         <div role={error ? "alert" : undefined}>
@@ -978,7 +995,7 @@ function ConnectionEditor({
           type="submit"
           form="cap-connection-form"
           className="primary-button"
-          disabled={busy}
+          disabled={busy || (followCatalog && subscription.loading)}
         >
           {t(initial ? "Apply changes" : "Add connection")}
         </button>

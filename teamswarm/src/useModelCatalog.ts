@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import type { TeamCapabilities } from "@team/contracts/allocation";
 import type { HarnessInspection } from "./harnessCatalog";
 import { api } from "./service";
-import { modelChoices } from "./modelCatalog";
+import { modelChoices, subscriptionCatalogId } from "./modelCatalog";
+import { readSubscriptionCatalog } from "./subscriptionCatalog";
 import {
   cachedCatalog,
   subscribeModelCatalog,
@@ -45,18 +46,14 @@ export function useModelCatalog(
             ...(value.version === 0 ? ["codex", "claude-code", "grok"] : []),
             ...value.connections
               .filter((c) => c.enabled && c.kind === "subscription")
-              .map((c) => c.subscriptionHarness!),
+              .map(subscriptionCatalogId)
+              .filter((id): id is string => !!id),
           ]),
         ];
         await Promise.all(
           ids.map(async (id) => {
             try {
-              const inspection = await cachedCatalog(`harness:${id}`, () =>
-                api<HarnessInspection>(
-                  `/harnesses/${encodeURIComponent(id)}/check`,
-                  {},
-                ),
-              );
+              const inspection = await readSubscriptionCatalog(id);
               if (current)
                 setInspections((old) => ({ ...old, [id]: inspection }));
             } catch (e) {

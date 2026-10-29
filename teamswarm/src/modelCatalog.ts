@@ -3,6 +3,14 @@ import type { ModelAccess, TeamCapabilities } from "@team/contracts/allocation";
 import type { ExecutionConfig } from "@team/contracts/runtime";
 import type { HarnessInspection } from "./harnessCatalog";
 
+export function subscriptionCatalogId(
+  connection: Pick<ModelAccess, "chatgptAccountId" | "subscriptionHarness">,
+) {
+  return connection.chatgptAccountId
+    ? `chatgpt:${connection.chatgptAccountId}`
+    : connection.subscriptionHarness;
+}
+
 export type ModelChoice = NonNullable<HarnessInspection["models"]>[number] & {
   key?: string;
   connection?: ModelAccess;
@@ -34,7 +42,7 @@ export function modelChoices(
   for (const connection of capabilities.connections.filter((c) => c.enabled)) {
     const native =
       connection.kind === "subscription"
-        ? (inspections[connection.subscriptionHarness ?? ""]?.models ?? [])
+        ? (inspections[subscriptionCatalogId(connection) ?? ""]?.models ?? [])
         : [];
     const models = connection.models.length
       ? connection.models.map(

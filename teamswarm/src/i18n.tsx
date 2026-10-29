@@ -8,6 +8,15 @@ import {
 
 export type Language = "en" | "zh-CN";
 export const zhCN: Record<string, string> = {
+  Models: "模型",
+  "Available models": "可用模型",
+  "Refresh models": "刷新列表",
+  "Select all": "全选",
+  "{selected} / {total} selected": "已选 {selected} / {total}",
+  "Choose an account to view models.": "选择账号后显示模型",
+  "Model list unavailable": "暂时无法获取模型列表",
+  "No models returned": "账号未返回模型",
+  "Select up to {count} models.": "最多选择 {count} 个模型。",
   "Run command": "运行命令",
   "Edit file": "编辑文件",
   "No messages yet": "暂无对话",
