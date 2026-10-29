@@ -144,6 +144,15 @@ try {
     await page.keyboard.press('Escape');
     assert(await memberPermissions.evaluate(el=>el===document.activeElement),'Escape restores permission trigger focus');
   }
+  await page.setViewportSize({width:1280,height:900});
+  await page.goto(origin + `/#/team/${team.id}/agent`);
+  await permissions().click();
+  await page.getByRole('menuitem',{name:'Advanced settings →',exact:true}).click();
+  const settingsDialog = page.getByRole('dialog',{name:'Advanced settings',exact:true});
+  await settingsDialog.waitFor();
+  await settingsDialog.getByRole('button',{name:'Close',exact:true}).click();
+  await settingsDialog.waitFor({state:'hidden'});
+  assert.equal(await page.getByRole('dialog').count(),0,'Closing direct advanced settings returns to the conversation');
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ passed: true, root, checks: ['Host and member scopes stay separate from team defaults', 'failed save retains selection and retries', 'read-only mode disables wider permissions', 'running attempt remains frozen', 'native request visible and answers delivered', 'member creation inherits team defaults', 'native extension persists', 'stable menu bounds and no repeat catalogue request'] }));
 } catch (error) {

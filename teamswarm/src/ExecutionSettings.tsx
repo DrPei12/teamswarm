@@ -180,26 +180,27 @@ export function Startup({
 }
 
 type Inspection = HarnessInspection;
-export function ExecutionSettings(props: {
+type ExecutionSettingsProps = {
   open: boolean;
   onClose: () => void;
   teamId: string;
   workspace: Workspace;
   initialTab?: "harnesses" | "connections" | "runtime";
-}) {
-  const [manual, setManual] = useState(false);
+};
+export function ExecutionSettings(props: ExecutionSettingsProps) {
+  return props.open ? <ExecutionSettingsContent {...props} /> : null;
+}
+function ExecutionSettingsContent(props: ExecutionSettingsProps) {
+  const [manual, setManual] = useState(props.initialTab === "runtime");
   const [configurationTab, setConfigurationTab] = useState<
     "harnesses" | "connections"
-  >("harnesses");
-  useEffect(() => {
-    if (!props.open) setManual(false);
-    else if (props.initialTab === "runtime") setManual(true);
-    else setConfigurationTab(props.initialTab ?? "harnesses");
-  }, [props.open, props.initialTab]);
+  >(props.initialTab === "connections" ? "connections" : "harnesses");
   return manual ? (
     <ManualExecutionSettings
       {...props}
-      onClose={() => setManual(false)}
+      onClose={() =>
+        props.initialTab === "runtime" ? props.onClose() : setManual(false)
+      }
       onConfigureModels={() => {
         setConfigurationTab("connections");
         setManual(false);
