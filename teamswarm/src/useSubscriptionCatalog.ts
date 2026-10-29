@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { HarnessInspection } from "./harnessCatalog";
 import { readSubscriptionCatalog } from "./subscriptionCatalog";
+import { notifyModelCatalog } from "./modelCatalogCache";
 
 export function useSubscriptionCatalog(id: string | null) {
   const [revision, setRevision] = useState(0);
@@ -21,14 +22,16 @@ export function useSubscriptionCatalog(id: string | null) {
       error: "",
     }));
     void readSubscriptionCatalog(id, revision > 0).then(
-      (inspection) =>
-        live &&
+      (inspection) => {
+        if (!live) return;
         setSnapshot({
           id,
           inspection,
           loading: false,
           error: inspection.error ?? "",
-        }),
+        });
+        if (revision > 0) notifyModelCatalog();
+      },
       (error: Error) =>
         live &&
         setSnapshot((old) => ({

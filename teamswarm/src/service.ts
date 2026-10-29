@@ -69,8 +69,13 @@ export async function api<T>(
   if (changedCapabilities)
     invalidateModelCatalog(decodeURIComponent(changedCapabilities[1]));
   if (
-    method !== "GET" &&
-    /\/harnesses\/[^/]+\/(?:login|install|logout)/.test(url)
+    (method !== "GET" &&
+      /\/harnesses\/[^/]+\/(?:login|install|logout)/.test(url)) ||
+    (method === "POST" &&
+      /^\/model-accounts\/chatgpt\/[^/]+\/sign-out$/.test(url)) ||
+    (method === "GET" &&
+      /^\/model-accounts\/chatgpt\/sign-in\/[^/]+$/.test(url) &&
+      payload?.state === "complete")
   )
     invalidateModelCatalog();
   return payload as T;

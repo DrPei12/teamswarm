@@ -25,7 +25,7 @@ import { HarnessInstallation } from "./HarnessInstallation";
 import { HarnessAccount } from "./HarnessAccount";
 import { ChatGPTConnection } from "./ChatGPTConnection";
 import { SubscriptionModelList } from "./SubscriptionModelList";
-import { subscriptionCatalogId } from "./modelCatalog";
+import { connectionSource, subscriptionCatalogId } from "./modelCatalog";
 import { useSubscriptionCatalog } from "./useSubscriptionCatalog";
 import { ModelPicker, modelProvider } from "./ModelPicker";
 import type { HarnessInspection } from "./harnessCatalog";
@@ -343,13 +343,7 @@ export function CapabilitySettings({
                         </span>
                         <div>
                           <h4>{c.name}</h4>
-                          <span>
-                            {t(
-                              c.kind === "api"
-                                ? "API connection"
-                                : "Subscription account",
-                            )}
-                          </span>
+                          <span>{t(connectionSource(c))}</span>
                         </div>
                         <button
                           className="secondary-button"
@@ -855,7 +849,7 @@ function ConnectionEditor({
             <div className="cap-account-options">
               {[
                 { id: "chatgpt", name: "ChatGPT" },
-                { id: "codex", name: "ChatGPT (Codex)" },
+                { id: "codex", name: "Codex local sign-in" },
                 { id: "claude-code", name: "Claude" },
                 { id: "grok", name: "Grok" },
               ].map((a) => (

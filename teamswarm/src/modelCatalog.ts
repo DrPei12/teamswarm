@@ -21,18 +21,41 @@ export type ModelChoice = NonNullable<HarnessInspection["models"]>[number] & {
 export function connectionUnavailable(
   connection: ModelAccess,
   harness: string,
+  inspection?: HarnessInspection,
 ) {
-  if (connection.kind === "subscription")
-    return connection.chatgptAccountId ||
-      connection.subscriptionHarness === harness
-      ? undefined
-      : `Requires ${connection.subscriptionHarness}`;
+  if (connection.kind === "subscription") {
+    if (connection.chatgptAccountId)
+      return inspection?.authenticated === false
+        ? "Reconnect ChatGPT"
+        : undefined;
+    if (connection.subscriptionHarness !== harness)
+      return connection.subscriptionHarness === "codex"
+        ? "Authorize ChatGPT for TeamSwarm"
+        : "Native sign-in cannot be shared across Harnesses";
+    return inspection?.authenticated === false
+      ? "Sign in to this account"
+      : undefined;
+  }
   return Object.values(connection.endpoints).some(Boolean)
     ? undefined
     : "Configure a model endpoint";
 }
 
-/** The directory belongs to connections. Harness compatibility only annotates it. */
+export function connectionSource(connection: ModelAccess) {
+  if (connection.kind === "api") return "API connection";
+  if (connection.chatgptAccountId) return "ChatGPT account";
+  const nativeSources: Record<string, string> = {
+    codex: "Codex local sign-in",
+    "claude-code": "Claude Code local sign-in",
+    grok: "Grok local sign-in",
+  };
+  return (
+    nativeSources[connection.subscriptionHarness ?? ""] ??
+    "Subscription account"
+  );
+}
+
+/** Account authorization and the model directory belong to each connection. */
 export function modelChoices(
   capabilities: TeamCapabilities,
   inspections: Record<string, HarnessInspection>,
@@ -59,7 +82,11 @@ export function modelChoices(
         // API providers may host models from several vendors. The model ID groups them.
         provider:
           connection.kind === "subscription" ? model.provider : undefined,
-        unavailable: connectionUnavailable(connection, harness),
+        unavailable: connectionUnavailable(
+          connection,
+          harness,
+          inspections[subscriptionCatalogId(connection) ?? ""],
+        ),
       });
   }
   // Legacy teams can use a native account before configuring a capabilities directory.
@@ -87,7 +114,11 @@ export function modelChoices(
           key: JSON.stringify([connection.id, model.model]),
           connection,
           detail: connection.name,
-          unavailable: connectionUnavailable(connection, harness),
+          unavailable: connectionUnavailable(
+            connection,
+            harness,
+            inspections[id],
+          ),
         })),
       );
     }
