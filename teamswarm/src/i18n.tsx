@@ -730,6 +730,9 @@ export const zhCN: Record<string, string> = {
   "Attach images, files, or videos": "添加图片、文件或视频",
   "Bring along": "额外带入",
   Cancel: "取消",
+  "Stop and reconcile pending work before changing runtime settings.":
+    "有任务正在运行或排队，结束后可调整。",
+  "Runtime settings changed. Reload before saving.": "配置已更新，请重试。",
   "Carry to": "带入节点",
   Chat: "对话",
   "Chat history": "对话历史",

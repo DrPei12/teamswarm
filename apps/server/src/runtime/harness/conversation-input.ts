@@ -12,7 +12,7 @@ export function conversationInput(input: string): string {
     : typeof value.work.instructions === "string"
       ? [{ role: "user", content: value.work.instructions }] : [];
   if (!current.length) return input;
-  const { history, conversationHistory, ...context } = value;
+  const { history, conversationHistory, incomingMessages, ...context } = value;
   const earlier = (direct ? conversationHistory : history) ?? [];
   const messages = Array.isArray(earlier) ? earlier
     .filter((message: any) => typeof message.content === "string")
@@ -21,10 +21,13 @@ export function conversationInput(input: string): string {
       content: message.content,
       ...(message.partial ? { partial: true } : {}),
     })) : [];
+  const messageText = (message: { role: string; content: string; partial?: boolean }) =>
+    `${message.role === "assistant" ? "Assistant" : message.role === "user" ? "User" : "Member"}${message.partial ? " (excerpt)" : ""}:\n${message.content}`;
   return [
     "Answer the current message below. Earlier messages are actual conversation history. Previous assignments are background, not a new request.",
     "Background context:", JSON.stringify(context),
-    "Earlier messages:", JSON.stringify(messages),
-    "Current message:", JSON.stringify(current),
+    ...(messages.length > 2 ? ["Earlier messages (oldest first):", messages.slice(0, -2).map(messageText).join("\n\n")] : []),
+    ...(messages.length ? ["Most recent messages (oldest first):", messages.slice(-2).map(messageText).join("\n\n")] : []),
+    "Current message:", current.map(messageText).join("\n\n"),
   ].join("\n\n");
 }
