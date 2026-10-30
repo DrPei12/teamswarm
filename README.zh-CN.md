@@ -6,6 +6,8 @@ TeamSwarm 面向需要跨成员、会话和多轮修改推进代码与文本项�
 
 [English](README.md) · [安装](#install) · [第一个项目](#first-project) · [Harness 与模型](#harnesses-and-models) · [数据与恢复](#data-and-recovery)
 
+[观看产品宣传片 · 36 秒，4K / 120 fps](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-ZH.mp4)
+
 - **保持项目决定一致。** 维护带来源的当前项目定义。明确决定采用讨论分支后，将内容融入主线，并在历史中查看文档变化。
 - **接续同一项工作。** 在原工作线程修改成果，跨会话保留要求、文件归属与历史版本。
 - **组织独立代理。** 使用 Codex、Claude Code、Grok、Pi、DeepSeek Harness 或 OpenCode。成员相互交流，重复责任复用已有工作，等待中的成员在新信息到达后继续。
@@ -28,7 +30,7 @@ TeamSwarm 面向本地单用户场景。Harness 使用你配置的账号或 API 
 Windows 安装器未签名，系统会显示未知发布者。将文件哈希与同版校验文件比较：
 
 ```powershell
-Get-FileHash .\TeamSwarm-0.5.1-Windows-x64.exe -Algorithm SHA256
+Get-FileHash .\TeamSwarm-0.6.0-Windows-x64.exe -Algorithm SHA256
 ```
 
 运行安装器，从开始菜单打开 **TeamSwarm**。默认按用户安装。升级时先关闭应用、[备份服务数据](#data-and-recovery)，然后在同一系统账号和安装目录运行新版安装器。更新通过手动安装完成，卸载保留服务数据和项目文件。

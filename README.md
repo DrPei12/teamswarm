@@ -6,6 +6,8 @@ TeamSwarm is for AI builders working on code and text projects across multiple a
 
 [简体中文](README.zh-CN.md) · [Install](#install) · [First project](#first-project) · [Harnesses and models](#harnesses-and-models) · [Data and recovery](#data-and-recovery)
 
+[Watch the product film · 36 seconds, 4K / 120 fps](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-EN.mp4)
+
 - **Keep project decisions aligned.** Maintain current project definitions with their sources. Adopt a discussion branch into the mainline after an explicit decision, with document changes visible in project history.
 - **Continue the same work.** Revise a deliverable in its original work thread, keeping requirements, file ownership and earlier versions available across sessions.
 - **Coordinate independent agents.** Use Codex, Claude Code, Grok, Pi, DeepSeek Harness or OpenCode. Members exchange messages; duplicate responsibilities reuse existing work, and waiting members resume when new information arrives.
@@ -28,7 +30,7 @@ Download the Windows x64 installer and `SHA256SUMS.txt` from the same [GitHub Re
 The Windows installer is unsigned and Windows displays an unknown publisher. Compare its hash with the release checksum file:
 
 ```powershell
-Get-FileHash .\TeamSwarm-0.5.1-Windows-x64.exe -Algorithm SHA256
+Get-FileHash .\TeamSwarm-0.6.0-Windows-x64.exe -Algorithm SHA256
 ```
 
 Run the installer, then open **TeamSwarm** from the Start menu. Installation is per user. For upgrades, close the application, [back up service data](#data-and-recovery), and run the new installer using the same OS account and installation directory. Updates are installed manually. Uninstalling preserves service data and your project files.
