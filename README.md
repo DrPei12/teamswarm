@@ -6,7 +6,9 @@ TeamSwarm is for AI builders working on code and text projects across multiple a
 
 [简体中文](README.zh-CN.md) · [Install](#install) · [First project](#first-project) · [Harnesses and models](#harnesses-and-models) · [Data and recovery](#data-and-recovery)
 
-[Watch the product film · 36 seconds, 4K / 120 fps](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-EN.mp4)
+[![Watch the TeamSwarm product film — 36 seconds, 4K at 120 fps](.github/media/teamswarm-film-cover-en.jpg)](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-EN.mp4)
+
+[▶ Watch the product film](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-EN.mp4) · 36 seconds · 4K / 120 fps · [中文版](README.zh-CN.md)
 
 - **Keep project decisions aligned.** Maintain current project definitions with their sources. Adopt a discussion branch into the mainline after an explicit decision, with document changes visible in project history.
 - **Continue the same work.** Revise a deliverable in its original work thread, keeping requirements, file ownership and earlier versions available across sessions.
