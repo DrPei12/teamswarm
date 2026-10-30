@@ -38,9 +38,15 @@ async function setup(harness = new ContextHarness()) {
   const root = mkdtempSync(path.join(process.cwd(), ".test-context-"));
   const workspace = path.join(root, "project");
   mkdirSync(workspace);
+  const resourceSampling = {
+    sample: async () => ({ totalPhysical: 64 * 1024 ** 3, availablePhysical: 48 * 1024 ** 3,
+      availableCommit: 64 * 1024 ** 3, cpuCores: 8, cpuBusyPercent: 5, systemProcessCount: 100, processes: [] }),
+    availablePhysical: () => 48 * 1024 ** 3,
+  };
   let service = createApp({
     dataDir: path.join(root, "data"),
     harnesses: [harness],
+    resourceSampling,
   });
   let server = service.app.listen(0, "127.0.0.1");
   await new Promise<void>((r) => server.once("listening", r));
@@ -90,7 +96,7 @@ async function setup(harness = new ContextHarness()) {
     for (;;) {
       const w = service.runtime.store.get<Work>("works", team.id, sent.workId);
       if (["submitted", "failed", "interrupted"].includes(w.status)) return w;
-      if (Date.now() - start > 6000) throw new Error("Fixture timeout");
+      if (Date.now() - start > 6000) throw new Error(`Fixture timeout: ${w.status}: ${w.error ?? ""}`);
       await new Promise((r) => setTimeout(r, 10));
     }
   }
@@ -117,6 +123,7 @@ async function setup(harness = new ContextHarness()) {
       service = createApp({
         dataDir: path.join(root, "data"),
         harnesses: [harness],
+        resourceSampling,
       });
       server = service.app.listen(0, "127.0.0.1");
       await new Promise<void>((r) => server.once("listening", r));
@@ -323,6 +330,7 @@ test("bounded long history, exact frame identity, searchable originals and recov
     );
     assert.ok(frame.inputTokensEstimate <= frame.budget.inputTokens);
     assert.ok(frame.input.history.length > 0, JSON.stringify({budget:frame.budget, tokens:frame.inputTokensEstimate, access:frame.input.historyAccess, index:frame.input.navigation.index.length, notes:frame.input.current.notes.length}));
+    assert.ok(frame.input.history.some((message: any) => message.content.startsWith("Archive 999:")));
     assert.equal(frame.input.turnPurpose, "dialogue");
     assert.equal(frame.input.historyAccess.omittedMessages, frame.input.historyAccess.totalMessages - frame.input.history.length);
     assert.equal(

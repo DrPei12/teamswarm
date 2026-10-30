@@ -450,6 +450,19 @@ export class HostContext {
         ? "Answer the incoming messages and finish the turn. No artifact submission or yield checkpoint is needed. File changes require assigned production work."
         : "Handle useful messages at work boundaries. Preserve responsibility and shared interface agreements. End the turn after delegation or submission; use team_yield only to save unfinished work and wait for a specific event.",
     };
+    // Keep a bounded set of unresolved decisions alongside the latest exchange.
+    // Both must precede optional navigation when a fresh session is reconstructed.
+    if (host) {
+      let noteTokens = 0;
+      for (const { material: m } of this.materials.rank(all.filter(m => m.kind === "note" && !m.stale), work)) {
+        if (seen[m.ref] === m.revision) continue;
+        const tokens = estimateTokens(m.data) + 2;
+        if (noteTokens + tokens > budget.inputTokens * 0.15) continue;
+        input.current.notes.push(m.data);
+        seen[m.ref] = m.revision;
+        noteTokens += tokens;
+      }
+    }
     // The 60% fresh-input target reserves space for optional context. Required
     // work/inbox data may use the rest after system, output and tool reserves.
     const requiredTokens = estimateTokens(input) + 100;
@@ -525,7 +538,9 @@ export class HostContext {
     // Harness headers already occupy the allocation index. Expand their sections
     // on demand instead of evicting project definitions and sourced notes.
     const ranked = this.materials.rank(all.filter(m => m.kind !== "harness"), work);
-    const fullCeiling = ceiling(0.78);
+    // Leave room for serialized message identifiers and a readable excerpt,
+    // even when native session overhead leaves a small context allowance.
+    const fullCeiling = ceiling(0.65);
     for (const { material: m, score, related } of ranked) {
       const header = materialHeader(m, work.instructions);
       if (
@@ -641,7 +656,7 @@ export class HostContext {
       input.conversationHistory.sort((a: any, b: any) => a.createdAt.localeCompare(b.createdAt));
     }
     const remaining = Math.max(0, budget.inputTokens - used - 100);
-    const candidateCount = Math.max(1, Math.ceil(remaining / 40));
+    const candidateCount = Math.max(2, Math.ceil(remaining / 40) + 1);
     const related = this.materials.messages(run, {
       query: work.instructions,
       boundary,
