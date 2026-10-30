@@ -24,7 +24,6 @@ export const zhCN: Record<string, string> = {
   "Execution permissions": "执行权限",
   "Default execution permissions": "团队默认权限",
   "Deny extra permissions": "拒绝额外授权",
-  "Harness settings": "Harness 现有权限",
   "Custom permissions": "自定义权限",
   "Permission switching is unavailable for this Harness.":
     "此 Harness 暂不支持权限切换",
@@ -41,7 +40,6 @@ export const zhCN: Record<string, string> = {
   "Execution permissions are not available. Try again.":
     "暂时无法读取执行权限，请重试。",
   "Not selected": "未选择",
-  "Harness default": "Harness 现有权限",
   "Request approval": "请求批准",
   "Automatic review": "自动判断",
   "Full access": "完全访问",

@@ -624,6 +624,7 @@ export class HostContext {
           seen[`correspondence:${m.id}`] = hash(m.content);
         else addExcerpt(input.conversationHistory, m, ceiling(0.9));
       }
+      input.conversationHistory.sort((a: any, b: any) => a.createdAt.localeCompare(b.createdAt));
     }
     const boundary =
       work.kind === "host-followup" || work.kind === "collaboration"

@@ -306,6 +306,34 @@ test("member HTTP input is idempotent, streams typed activity, and does not repl
   }
 });
 
+test("rebuilt member context retains the preceding final reply in chronological order and isolates other members", async () => {
+  const f = await fixture();
+  try {
+    const route = `/product/teams/${f.team.id}/members/${f.a.id}/messages`;
+    const first = await f.api(route, { clientRequestId: randomUUID(), content: "Read the current proof file." });
+    assert.equal(first.status, 200);
+    await until(() => f.harness.requests.length === 1);
+    f.harness.finish({ status: "completed", text: "PROOF_CURRENT_MEMBER_721" });
+    await until(() => f.store.list<Work>("works", f.team.id).some(w => w.result === "PROOF_CURRENT_MEMBER_721" && w.status === "submitted"));
+    const unrelated = f.store.createWork(f.run, f.b.id, "Other conversation", "Other input", [], [], []);
+    unrelated.interaction = { messageIds: [] };
+    unrelated.result = "UNRELATED_MEMBER_REPLY";
+    f.store.setStatus(unrelated, "submitted");
+    const second = await f.api(route, { clientRequestId: randomUUID(), content: "Repeat the full content from your immediately preceding reply." });
+    assert.equal(second.status, 200);
+    await until(() => f.harness.requests.length === 2);
+    const input = JSON.parse(f.harness.requests[1].input);
+    const history = input.conversationHistory;
+    assert(history.some((m: any) => m.content === "Read the current proof file."));
+    assert.equal(history.at(-1).content, "PROOF_CURRENT_MEMBER_721");
+    assert.equal(history.at(-1).senderId, f.a.id);
+    assert(!JSON.stringify(history).includes("UNRELATED_MEMBER_REPLY"));
+    f.harness.finish();
+  } finally {
+    await f.close();
+  }
+});
+
 test("graph links assignments and actual exchanges, never dependency chains; stopped mail stays stopped", async () => {
   const f = await fixture();
   try {

@@ -139,6 +139,9 @@ test("memory reserve is shared, versioned and retained; memory/commit/CPU pressu
       f.service.runtime.store.settings(f.team.id)!.maxConcurrent,
       undefined,
     );
+    assert.equal(r.admission("codex", true).floor.physical, 0);
+    assert.equal(r.admission("codex", false).floor.physical, 0);
+    assert.equal(r.admission("codex", false).floor.commit, 0);
     r.configure({ expectedVersion: 0, reserveMemoryMiB: 8 * 1024 });
     assert.equal(r.policy().reserveMemoryMiB, 8192);
     assert.throws(
@@ -183,6 +186,7 @@ test("memory reserve is shared, versioned and retained; memory/commit/CPU pressu
     await other.close();
     r.configure({ expectedVersion: 1, reserveMemoryMiB: null });
     assert.equal(r.policy().reserveMemoryMiB, null);
+    assert.equal(r.admission("codex", false).floor.physical, 0);
   } finally {
     await f.close();
   }
@@ -283,7 +287,7 @@ test("twelve native members run concurrently; pressure notifies once, preserves 
         await r.refresh();
       }
       if (started.length === 12) {
-        f.sample = { ...f.sample, availablePhysical: 512 * MiB };
+        f.sample = { ...f.sample, availablePhysical: 1 * MiB };
         f.advance();
         await r.refresh();
       }
@@ -378,19 +382,19 @@ test("twelve native members run concurrently; pressure notifies once, preserves 
     const messages = () =>
       f.service.store.getConversationDetail(f.team.id, f.chat.id)!.messages;
     await until(() =>
-      messages().some((m) => m.content.startsWith("资源提醒：")),
+      messages().some((m) => m.content.startsWith("等待资源：")),
     );
     for (let n = 0; n < 4; n++) {
       f.advance();
       await r.refresh();
     }
     assert.equal(
-      messages().filter((m) => m.content.startsWith("资源提醒：")).length,
+      messages().filter((m) => m.content.startsWith("等待资源：")).length,
       1,
     );
     assert.match(
-      messages().find((m) => m.content.startsWith("资源提醒："))!.content,
-      /没有新的指示时/,
+      messages().find((m) => m.content.startsWith("等待资源："))!.content,
+      /设备可用内存/,
     );
     const notifier = new ResourceNotifications(f.service.runtime.store);
     notifier.sync(
@@ -398,7 +402,7 @@ test("twelve native members run concurrently; pressure notifies once, preserves 
       r.summary(),
     );
     assert.equal(
-      messages().filter((m) => m.content.startsWith("资源提醒：")).length,
+      messages().filter((m) => m.content.startsWith("等待资源：")).length,
       1,
       "restart does not repeat the notice",
     );
@@ -421,6 +425,69 @@ test("twelve native members run concurrently; pressure notifies once, preserves 
     );
   } finally {
     releases.forEach((release) => release());
+    await f.close();
+  }
+});
+
+test("resource wait and resume flapping updates one persisted notice and waits for actual dispatch", async () => {
+  const f = fixture(),
+    store = f.service.runtime.store;
+  try {
+    await f.service.runtime.resources.refresh();
+    const user = f.service.store.recordMessage(
+      f.team.id,
+      f.chat.id,
+      "读取文件。",
+      randomUUID(),
+    )!.message;
+    const host = store.enqueueHost(f.team.id, f.chat.id, user.id, true);
+    store.setStatus(host, "submitted");
+    const run = store.get<Run>("runs", f.team.id, host.runId);
+    const member = store.createMember(
+      f.team.id,
+      "Reader",
+      "Read",
+      store.settings(f.team.id)!.config,
+    );
+    const snapshot = f.service.runtime.resources.summary();
+    const decision = {
+      ...f.service.runtime.resources.admission("codex", false),
+      allowed: false,
+      reason: "physical_memory" as const,
+    };
+    const notifier = new ResourceNotifications(store);
+    const notices = () =>
+      f.service.store
+        .getConversationDetail(f.team.id, f.chat.id)!
+        .messages.filter((m) => m.role === "assistant");
+    let noticeId: string | undefined;
+    for (let n = 0; n < 3; n++) {
+      const work = store.createWork(run, member.id, "Read", "Read", [], [], []);
+      notifier.sync([{ work, decision }], snapshot);
+      assert.equal(notices().length, 1);
+      noticeId ??= notices()[0].id;
+      assert.equal(notices()[0].id, noticeId);
+      assert.match(notices()[0].content, /^等待资源：/);
+      assert(!notices()[0].content.includes("预留"));
+      const attempt = store.start(work, store.settings(f.team.id)!.config);
+      notifier.sync([], snapshot);
+      assert.match(
+        notices()[0].content,
+        /^等待资源：/,
+        "prepared is not dispatched",
+      );
+      attempt.dispatch = { ...attempt.dispatch, state: "dispatched" };
+      store.save("attempts", attempt);
+      notifier.sync([], snapshot);
+      assert.match(notices()[0].content, /1 项任务已继续执行/);
+      assert.equal(notices().length, 1);
+      assert.equal(notices()[0].id, noticeId);
+      store.setStatus(work, "submitted");
+    }
+    // Restart retains the same quiet period and the same message.
+    new ResourceNotifications(store).sync([], snapshot);
+    assert.equal(notices().length, 1);
+  } finally {
     await f.close();
   }
 });
@@ -513,7 +580,7 @@ test("unavailable per-process metrics retain conservative parallel admission wit
   }
 });
 
-test("a heavy member's history does not consume the Host reserve for a light Harness", async () => {
+test("a heavy member's history does not create a reserve for a light Harness", async () => {
   const f = fixture(),
     r = f.service.runtime.resources;
   try {
@@ -548,7 +615,7 @@ test("a heavy member's history does not consume the Host reserve for a light Har
     );
     await resources.refresh();
     assert.equal(resources.canStart("pi", false), true);
-    assert.ok(resources.summary().floors.physical < 2 * 1024 * MiB);
+    assert.equal(resources.summary().floors.physical, 0);
     await resources.close();
   } finally {
     await f.close();

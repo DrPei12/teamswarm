@@ -903,10 +903,15 @@ export class TeamRuntime {
       currentOutputCount: outputs.length,
       incomingMessages: this.correspondence.take(work, attempt.id),
       conversationHistory: work.interaction
-        ? this.correspondence.list(work.teamId).filter((m) =>
+        ? [...this.correspondence.list(work.teamId).filter((m) =>
             (m.senderId === member.id || m.recipientId === member.id) &&
             m.branchId === branchId && (!m.threadId || m.threadId === threadOf(work)) && m.attemptId !== attempt.id,
-          ).map((m) => ({ id: m.id, senderId: m.senderId, recipientId: m.recipientId, content: m.content, status: m.status, createdAt: m.createdAt }))
+          ).map((m) => ({ id: m.id, senderId: m.senderId, recipientId: m.recipientId, content: m.content, status: m.status, createdAt: m.createdAt })),
+          ...this.store.list<Work>("works", work.teamId).filter((w) =>
+            w.id !== work.id && w.memberId === member.id && w.interaction && w.result && w.status === "submitted" &&
+            threadOf(w) === threadOf(work) && this.history.forRun(this.store.get<Run>("runs", work.teamId, w.runId)).id === branchId,
+          ).map((w) => ({id: `work-result:${w.id}`, senderId: member.id, content: w.result!, status: w.status, createdAt: w.updatedAt})),
+          ].sort((a,b) => a.createdAt.localeCompare(b.createdAt))
         : undefined,
       recentMemberWork: member.kind === "host" ? undefined : this.store.list<Work>("works", work.teamId)
         .filter((w) => w.memberId === member.id && w.id !== work.id && threadOf(w) === threadOf(work) &&

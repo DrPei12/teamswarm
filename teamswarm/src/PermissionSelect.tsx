@@ -81,7 +81,7 @@ export function PermissionSelect({
       ? "Execution permissions"
       : current
         ? "Custom permissions"
-        : "Harness settings");
+        : "Execution permissions");
   async function save(policy: NativePermissions) {
     if (lock.current) return;
     lock.current = true;
