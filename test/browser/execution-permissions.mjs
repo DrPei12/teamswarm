@@ -46,10 +46,21 @@ try {
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto(origin + `/#/team/${team.id}/agent`);
   const permissions = () => page.getByRole('button', { name: /^Execution permissions:/ });
+  const waitForPermissionSave = async action => {
+    const [response] = await Promise.all([
+      page.waitForResponse(response => /\/members\/[^/]+\/permissions$/.test(new URL(response.url()).pathname) && response.request().method() === 'PUT'),
+      action(),
+    ]);
+    assert(response.ok(), await response.text());
+    await page.locator('.permission-menu').waitFor({state:'hidden'});
+  };
   await permissions().click();
   assert.deepEqual(await page.getByRole('menuitemradio').allTextContents(), ['Request approval', 'Automatic review', 'Full access']);
   assert.equal(await page.getByRole('menuitemradio', {name:'Full access',exact:true}).getAttribute('aria-disabled'), 'true');
-  await page.getByRole('menuitemradio', { name: 'Request approval', exact: true }).click();
+  // Change from the inherited default before testing an explicit Host override.
+  await waitForPermissionSave(() => page.getByRole('menuitemradio', {name:'Automatic review',exact:true}).click());
+  await permissions().click();
+  await waitForPermissionSave(() => page.getByRole('menuitemradio', { name: 'Request approval', exact: true }).click());
   await page.waitForFunction(() => document.querySelector('.permission-select')?.textContent.includes('Request approval'));
   assert.equal(service.runtime.store.settings(team.id).config.permissions, undefined);
   const host = () => service.runtime.store.list('members', team.id).find(m => m.kind === 'host');
@@ -65,11 +76,11 @@ try {
   await page.getByRole('menuitemradio',{name:'Automatic review',exact:true}).click();
   await page.getByRole('alert').filter({hasText:'Permission save fixture failed'}).waitFor();
   assert.match(await permissions().innerText(), /Request approval/);
-  await page.getByRole('button',{name:'Retry',exact:true}).click();
+  await waitForPermissionSave(() => page.getByRole('button',{name:'Retry',exact:true}).click());
   await page.waitForFunction(() => document.querySelector('.permission-select')?.textContent.includes('Automatic review'));
   await page.unroute('**/members/*/permissions');
   await permissions().click();
-  await page.getByRole('menuitemradio',{name:'Request approval',exact:true}).click();
+  await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:'Request approval',exact:true}).click());
   await page.waitForFunction(() => document.querySelector('.permission-select')?.textContent.includes('Request approval'));
   for (const accepted of [false, true]) {
     await page.locator('.composer textarea').fill(`Approval test ${accepted}`);
@@ -80,7 +91,7 @@ try {
     assert.doesNotMatch(await card.innerText(), /internal-thread|internal-turn|requestApproval/);
     if (!accepted) {
       await permissions().click();
-      await page.getByRole('menuitemradio',{name:'Automatic review',exact:true}).click();
+      await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:'Automatic review',exact:true}).click());
       await page.getByRole('status').filter({hasText:'Applies to the next execution'}).waitFor();
       const attempt = service.runtime.store.list('attempts',team.id).at(-1);
       assert.equal(attempt.config.permissions.approvalPolicy,'untrusted');
@@ -93,7 +104,7 @@ try {
     await page.getByText(accepted ? 'Approval fixture allowed' : 'Approval fixture declined', { exact: true }).waitFor();
     if (!accepted) {
       await permissions().click();
-      await page.getByRole('menuitemradio',{name:'Request approval',exact:true}).click();
+      await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:'Request approval',exact:true}).click());
       await page.waitForFunction(() => document.querySelector('.permission-select')?.textContent.includes('Request approval'));
     }
   }
@@ -117,7 +128,7 @@ try {
   const memberPermissions = page.getByRole('dialog').getByRole('button',{name:/^Execution permissions:/});
   await memberPermissions.click();
   assert.deepEqual(await page.getByRole('menuitemradio').allTextContents(), ['Request approval', 'Automatic review', 'Full access']);
-  await page.getByRole('menuitemradio',{name:'Automatic review',exact:true}).click();
+  await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:'Automatic review',exact:true}).click());
   await page.waitForFunction(() => [...document.querySelectorAll('.permission-select')].some(el=>el.textContent.includes('Automatic review')));
   assert.equal(service.runtime.store.get('members',team.id,member.id).config.permissions.mode,'auto');
   assert.equal(host().permissionOverride.approvalPolicy,'untrusted');
