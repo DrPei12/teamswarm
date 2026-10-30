@@ -26,7 +26,8 @@ export const zhCN: Record<string, string> = {
   "Deny extra permissions": "拒绝额外授权",
   "Harness settings": "Harness 现有权限",
   "Custom permissions": "自定义权限",
-  "Uses this Harness's native settings": "使用此 Harness 的原生设置",
+  "Permission switching is unavailable for this Harness.":
+    "此 Harness 暂不支持权限切换",
   "Permission options unavailable": "权限选项暂不可用",
   "Permissions saved": "权限已保存",
   "Applies to the next execution": "下次执行生效",

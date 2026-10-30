@@ -6,6 +6,10 @@ import path from "node:path";
 import net from "node:net";
 import { chromium } from "playwright";
 import { createApp } from "../../apps/server/dist/app.js";
+import {
+  codexPermissionOptions,
+  claudePermissionOptions,
+} from "../../apps/server/dist/runtime/permission-options.js";
 
 await mkdir(path.resolve(".local"), { recursive: true });
 const root = await mkdtemp(path.resolve(".local/composer-regression-"));
@@ -23,6 +27,13 @@ const harnesses = [
 ].map((id) => ({
   id,
   capabilities: { resume: true },
+  permissionOptions() {
+    return id === "codex"
+      ? codexPermissionOptions
+      : id === "claude-code"
+        ? claudePermissionOptions
+        : { defaultId: "", options: [] };
+  },
   async inspect() {
     return {
       id,
@@ -175,6 +186,16 @@ try {
       catalogRequests++;
   });
   await page.goto(base + `/#/team/${team.id}/agent`);
+  await page
+    .locator(
+      '.permission-select[title="Permission switching is unavailable for this Harness."]',
+    )
+    .waitFor();
+  assert(
+    await page
+      .getByRole("button", { name: /^Execution permissions:/ })
+      .isDisabled(),
+  );
   const modelMenu = () =>
     page.getByRole("button", { name: "Choose model", exact: true }).click();
   await modelMenu();
@@ -212,6 +233,25 @@ try {
   assert.equal(settings.config.model, "qwen-plus");
   assert.equal(settings.config.protocol, "anthropic-messages");
   assert.equal(settings.config.baseUrl, "https://secondary.example/anthropic");
+  await page.getByRole("button", { name: /^Execution permissions:/ }).click();
+  for (const name of [
+    "Request approval",
+    "Automatic review",
+    "Full access",
+    "Accept edits",
+    "Deny extra permissions",
+  ])
+    assert.equal(
+      await page.getByRole("menuitemradio", { name, exact: true }).count(),
+      1,
+    );
+  assert.equal(
+    await page
+      .getByText("Uses this Harness's native settings", { exact: true })
+      .count(),
+    0,
+  );
+  await page.keyboard.press("Escape");
   await page.reload();
   await modelMenu();
   await page.getByRole("button", { name: /^Qwen 2$/ }).click();
