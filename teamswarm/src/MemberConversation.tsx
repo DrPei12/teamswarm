@@ -1,6 +1,5 @@
 import { ApprovalRequests } from "./ApprovalRequests";
 import { ComposerChin, ComposerSurface } from "./design-system/ComposerSurface";
-import { SegmentedControl } from "./design-system/SegmentedControl";
 import { Select } from "radix-ui";
 import { isComposing } from "./design-system/motion";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -215,7 +214,6 @@ function ConversationThread({
         model: member.model,
         effort: member.effort ?? "Default",
       };
-  const [mode, setMode] = useState<"discuss" | "revise">("discuss");
   const [hasMore, setHasMore] = useState(false);
   const [hasNewer, setHasNewer] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
@@ -459,7 +457,7 @@ function ConversationThread({
     setError("");
     try {
       if (work)
-        await product.sendWork(member.teamId, work, draft, mode, draftKey);
+        await product.sendWork(member.teamId, work, draft, "discuss", draftKey);
       else await product.sendMember(member.teamId, member.id, draft);
       if (!mounted.current) return;
       setRequestAnchor(undefined);
@@ -777,23 +775,6 @@ function ConversationThread({
             }}
           />
           <ComposerChin className="member-composer-toolbar">
-            {work && !work.reviewOf && (
-              <div className="work-message-mode">
-                <SegmentedControl
-                  value={mode}
-                  onChange={setMode}
-                  label={t("Message purpose")}
-                  options={[
-                    { value: "discuss", label: t("Ask a question") },
-                    {
-                      value: "revise",
-                      label: t("Continue modifying"),
-                      disabled: !!activeWork,
-                    },
-                  ]}
-                />
-              </div>
-            )}
             <div className="member-composer-config">
               <RuntimeControls
                 team={team}
@@ -831,16 +812,10 @@ function ConversationThread({
                   }
                 }}
               />
-              {canSend && (
+              {canSend && !work && (
                 <IconButton
                   className="member-composer-help"
-                  label={t(
-                    work
-                      ? mode === "discuss"
-                        ? "Questions keep project files unchanged."
-                        : "Continue this work using its existing files and requirements."
-                      : "Follow up here. Assign project changes through Host.",
-                  )}
+                  label={t("Follow up here. Assign project changes through Host.")}
                   aria-label={t("About member conversations")}
                 >
                   <CircleHelp size={14} />
@@ -874,8 +849,7 @@ function ConversationThread({
                 !canSend ||
                 !draft.trim() ||
                 sending ||
-                configuring ||
-                (mode === "revise" && !!activeWork)
+                configuring
               }
               aria-label={t("Send message")}
             >
