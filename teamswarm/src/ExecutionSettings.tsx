@@ -36,10 +36,11 @@ import { useI18n } from "./i18n";
 import { Modal } from "./ui";
 import { isCustomProvider } from "./allocation";
 import {
+  useHarnessCatalog,
   supportedEfforts,
   effortLabel,
   type HarnessInspection,
-} from "./harnessCatalog";
+} from "./harnessCatalog.ts";
 
 export function Startup({
   state,
@@ -315,13 +316,7 @@ function ManualExecutionSettings({
   const [login, setLogin] = useState<{ loginId: string; url: string } | null>(
     null,
   );
-  const [catalog, setCatalog] = useState<{ id: string }[]>([]);
-  useEffect(() => {
-    if (open)
-      void api<{ harnesses: { id: string }[] }>("/harnesses")
-        .then((r) => setCatalog(r.harnesses))
-        .catch((e) => setError(e.message));
-  }, [open]);
+  const catalog = useHarnessCatalog((error) => setError(error.message));
   useEffect(() => {
     if (!open || !login || settings?.config.harness !== "codex") return;
     let current = true;
@@ -462,17 +457,9 @@ function ManualExecutionSettings({
                     }
                   }}
                 >
-                  {catalog.map(({ id }) => (
+                  {catalog.map(({ id, name }) => (
                     <option key={id} value={id}>
-                      {(
-                        {
-                          codex: "Codex",
-                          grok: "Grok",
-                          "claude-code": "Claude Code",
-                          "deepseek-harness": "DeepSeek Harness",
-                          opencode: "OpenCode",
-                        } as Record<string, string>
-                      )[id] ?? id}
+                      {name}
                     </option>
                   ))}
                 </FieldSelect>

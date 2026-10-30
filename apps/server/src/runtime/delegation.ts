@@ -17,7 +17,7 @@ export function delegationIdentity(input: Record<string, any>) {
     reviewOf: input.reviewOf ?? null, verification: input.verification ?? "independent",
     continuationOf: input.continuationOf ?? null, writePaths: paths ? set(paths) : null,
     executionRequirements: Object.fromEntries(Object.entries(input.executionRequirements ?? {}).filter(([,v]) => v).sort()),
-    workspaceMode: input.workspaceMode ?? "shared", integratesWorkIds: set(input.integratesWorkIds),
+    workspaceMode: input.workspaceMode ?? "isolated", publicationMode: input.publicationMode ?? "automatic", integratesWorkIds: set(input.integratesWorkIds), permissions: input.permissions ?? null,
   };
   return {
     key: input.responsibilityKey ?? (paths?.length

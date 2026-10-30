@@ -123,7 +123,8 @@ try {
       retry: { enabled: false },
     }),
     tools: [
-      ...(spec.config.access === "read-only"
+      ...(spec.config.permissions?.harness === "pi" ? spec.config.permissions.tools.filter((tool: string) =>
+        (!["bash", "powershell"].includes(tool) || spec.nativeCommands) && (!["write", "edit"].includes(tool) || spec.config.access === "workspace-write")) : spec.config.access === "read-only"
         ? ["read", "grep", "find", "ls"]
         : [
             "read",
@@ -134,6 +135,7 @@ try {
             "edit",
             process.platform === "win32" ? "powershell" : "bash",
           ]),
+      ...(spec.nativeCommands && spec.config.access === "read-only" && !spec.config.permissions ? [process.platform === "win32" ? "powershell" : "bash"] : []),
       ...spec.tools.map((t: any) => t.name),
     ],
     customTools,

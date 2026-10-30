@@ -79,3 +79,14 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
+
+
+test("all shipped permission menu choices pass the shared adapter schema", async () => {
+  const { codexPermissionOptions, claudePermissionOptions } = await import("../src/runtime/permission-options.js");
+  const { validateNativePermissions } = await import("../src/runtime/harness/permissions.js");
+  for (const catalog of [codexPermissionOptions, claudePermissionOptions]) {
+    assert.deepEqual(catalog.options.slice(0, 3).map(o => o.id), ["manual", "auto", "full-access"]);
+    for (const option of catalog.options) validateNativePermissions({ harness: option.permissions.harness, model: null,
+      provider: null, baseUrl: null, credentialEnv: null, effort: null, access: "workspace-write", permissions: option.permissions });
+  }
+});

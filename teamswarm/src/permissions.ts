@@ -1,11 +1,12 @@
 import type {
+  BuiltinNativePermissions,
   ExecutionConfig,
   NativePermissions,
 } from "@team/contracts/runtime";
 
 export type PermissionMode = "manual" | "auto" | "full-access" | "accept-edits";
 export function permissionMode(config: ExecutionConfig): PermissionMode | "" {
-  const p = config.permissions;
+  const p = config.permissions as BuiltinNativePermissions | undefined;
   if (p?.harness === "codex") {
     if (p.sandbox === "danger-full-access") return "full-access";
     if (p.approvalPolicy === "untrusted") return "manual";
@@ -72,7 +73,7 @@ export function permissionsForAccess(
   config: Pick<ExecutionConfig, "harness" | "access" | "permissions">,
   access: ExecutionConfig["access"],
 ): NativePermissions | undefined {
-  const p = config.permissions;
+  const p = config.permissions as BuiltinNativePermissions | undefined;
   if (access !== "read-only" || !p) return p;
   if (p.harness === "codex")
     return {

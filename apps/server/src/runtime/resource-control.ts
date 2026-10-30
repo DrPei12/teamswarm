@@ -6,7 +6,7 @@ import type { Member, Work, Run } from "./types.js";
 import type { z } from "zod";
 import type { tools } from "./validation.js";
 
-export const resourceTools = ["team_check_resource", "team_select_resource", "team_derive_resource", "team_device_resources", "team_set_device_reserve"];
+export const resourceTools = ["team_check_resource", "team_select_resource", "team_derive_resource", "team_device_resources", "team_set_device_reserve", "team_pending_permissions", "team_answer_permission"];
 
 function resource(runtime: TeamRuntime, teamId: string, id: string, version: number) {
   const value = runtime.catalog.resource(teamId, id);

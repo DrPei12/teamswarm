@@ -295,7 +295,7 @@ test("bounded long history, exact frame identity, searchable originals and recov
       first.attemptId!,
     );
     assert.ok(frame.inputTokensEstimate <= frame.budget.inputTokens);
-    assert.ok(frame.input.history.length > 0);
+    assert.ok(frame.input.history.length > 0, JSON.stringify({budget:frame.budget, tokens:frame.inputTokensEstimate, access:frame.input.historyAccess, index:frame.input.navigation.index.length, notes:frame.input.current.notes.length}));
     assert.equal(frame.input.turnPurpose, "dialogue");
     assert.equal(frame.input.historyAccess.omittedMessages, frame.input.historyAccess.totalMessages - frame.input.history.length);
     assert.equal(

@@ -5,6 +5,39 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { CodexHarness, codexReviewPermissions, isBoundedReviewSandbox } from "../src/runtime/harness/codex.js";
 
+test("Codex native approvals retain their policy, exact request identity and scoped sandbox", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "teamswarm-codex-permission-"));
+  const entry = path.join(root, "fixture.js"), calls = path.join(root, "calls.jsonl");
+  writeFileSync(path.join(root, "package.json"), '{"type":"commonjs"}');
+  writeFileSync(entry, `const fs=require('node:fs');const send=v=>console.log(JSON.stringify(v));require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+    const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(calls)},line+'\\n');
+    if(r.id==='approval'){send({method:'turn/completed',params:{threadId:'permission-session',turn:{id:'permission-turn',status:'completed'}}});return;}
+    if(r.id===undefined)return;
+    const result=r.method==='thread/start'?{thread:{id:'permission-session'},model:'fixture',sandbox:{type:r.params.sandbox==='read-only'?'readOnly':'workspaceWrite'}}:r.method==='turn/start'?{turn:{id:'permission-turn'}}:{userAgent:'fixture'};
+    send({id:r.id,result});if(r.method==='turn/start')setTimeout(()=>send({id:'approval',method:'item/commandExecution/requestApproval',params:{threadId:'permission-session',turnId:'permission-turn',itemId:'native-command',command:'echo fixture',reason:'Fixture permission'}}),10);
+  });`);
+  const old = process.env.TEAM_CODEX_BIN; process.env.TEAM_CODEX_BIN = entry;
+  try {
+    for (const scenario of [{ policy: "on-request", decision: "allow", expected: "accept", bounded: false }, { policy: "on-request", decision: "deny", expected: "decline", bounded: false }, { policy: "never", decision: "allow", expected: "decline", bounded: false }, { policy: "on-request", decision: "allow", expected: "decline", bounded: true }] as const) {
+      const harness = new CodexHarness(), asked: any[] = [];
+      try {
+        const result = await harness.execute({ workspace: root,
+          ...(scenario.bounded ? {workspaceBoundary: "shared-read-only" as const} : {}),
+          config: { harness: "codex", model: "fixture", provider: null, baseUrl: null, credentialEnv: null, effort: null, access: "workspace-write", permissions: { harness: "codex", approvalPolicy: scenario.policy, sandbox: "workspace-write" } },
+          instructions: "Fixture", input: "Fixture", tools: [], onSession: () => {}, onTurn: () => {}, onEvent: () => {}, onTool: async () => ({}),
+          onPermission: async (request, signal) => { assert.equal(signal?.aborted, false); asked.push(request); return scenario.decision; } });
+        assert.equal(result.status, "completed");
+        assert.equal(asked.length, scenario.policy === "on-request" && !scenario.bounded ? 1 : 0);
+        if (asked.length) assert.equal(asked[0].nativeId, "native-command");
+        const packets = readFileSync(calls, "utf8").trim().split("\n").map(line => JSON.parse(line));
+        const started = packets.filter(r => r.method === "thread/start").at(-1);
+        assert.equal(started.params.approvalPolicy, scenario.policy); assert.equal(started.params.sandbox, scenario.bounded ? "read-only" : "workspace-write");
+        assert.equal(packets.filter(r => r.id === "approval").at(-1).result.decision, scenario.expected);
+      } finally { await harness.close(); }
+    }
+  } finally { if (old === undefined) delete process.env.TEAM_CODEX_BIN; else process.env.TEAM_CODEX_BIN = old; rmSync(root, { recursive: true, force: true }); }
+});
+
 test("lost turn identity recovers only the single new native turn after its durable start boundary", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "teamswarm-codex-start-boundary-"));
   const entry = path.join(root, "fixture.js");

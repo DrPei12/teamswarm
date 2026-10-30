@@ -28,17 +28,9 @@ import { SubscriptionModelList } from "./SubscriptionModelList";
 import { connectionSource, subscriptionCatalogId } from "./modelCatalog";
 import { useSubscriptionCatalog } from "./useSubscriptionCatalog";
 import { ModelPicker, modelProvider } from "./ModelPicker";
-import type { HarnessInspection } from "./harnessCatalog";
+import { useHarnessCatalog, type HarnessInspection } from "./harnessCatalog.ts";
 import "./capabilities.css";
 
-const harnesses = [
-  { id: "codex", name: "Codex" },
-  { id: "claude-code", name: "Claude Code" },
-  { id: "grok", name: "Grok" },
-  { id: "pi", name: "Pi" },
-  { id: "opencode", name: "OpenCode" },
-  { id: "deepseek-harness", name: "DeepSeek Harness" },
-];
 const protocols: ConnectionProtocol[] = [
   "chat-completions",
   "responses",
@@ -68,6 +60,7 @@ export function CapabilitySettings({
   initialTab?: Tab;
 }) {
   const { t } = useI18n();
+  const harnesses = useHarnessCatalog((error) => setError(error.message));
   const [draft, setDraft] = useState<TeamCapabilities | null>(null),
     [saved, setSaved] = useState("");
   const [tab, setTab] = useState<Tab>("harnesses"),
@@ -118,7 +111,7 @@ export function CapabilitySettings({
     return () => {
       live = false;
     };
-  }, [open, revision]);
+  }, [open, revision, harnesses]);
   const dirty = !!draft && JSON.stringify(draft) !== saved;
   async function save() {
     if (!draft || busy) return;
@@ -567,6 +560,7 @@ function ConnectionEditor({
   onSave: (c: ModelAccess) => void;
 }) {
   const { t } = useI18n();
+
   const [draft, setDraft] = useState<ModelAccess>(() =>
     initial
       ? structuredClone(initial)

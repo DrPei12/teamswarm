@@ -1,3 +1,4 @@
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import { z } from "zod";
 import { conflict, notFound } from "../errors.js";
 import { hash, type RuntimeStore } from "./store.js";
@@ -14,7 +15,7 @@ export const modelAccessInput = z
     name: z.string().trim().min(1).max(100),
     kind: z.enum(["subscription", "api"]),
     enabled: z.boolean(),
-    subscriptionHarness: z.enum(["codex", "claude-code", "grok"]).nullable(),
+    subscriptionHarness: z.string().min(1).max(64).refine(id => !!harnessManifest(id)?.models.nativeLogin, "This Harness has no native account connection.").nullable(),
     chatgptAccountId: z.string().uuid().nullable().optional(),
     endpoints: z
       .object({
@@ -87,7 +88,7 @@ export class CapabilityStore {
       const c = r.config,
         api = !!(c.baseUrl || c.credentialEnv), independent = !!c.chatgptAccountId;
       if (api && (!c.baseUrl || !c.credentialEnv || !c.model)) continue;
-      if (!api && !independent && !["codex", "claude-code", "grok"].includes(c.harness))
+      if (!api && !independent && !harnessManifest(c.harness)?.models.nativeLogin)
         continue;
       const identity = independent ? ["chatgpt",c.chatgptAccountId] : api ? [c.provider, c.credentialEnv] : [c.harness];
       const id = "existing_" + hash(JSON.stringify(identity)).slice(0, 24);
@@ -112,11 +113,7 @@ export class CapabilityStore {
       // Different endpoints on the same protocol remain separate connections.
       const protocol =
         c.protocol ??
-        (c.harness === "codex"
-          ? "responses"
-          : ["claude-code", "deepseek-harness"].includes(c.harness)
-            ? "anthropic-messages"
-            : "chat-completions");
+        (harnessManifest(c.harness)?.models.preferredProtocol ?? "chat-completions");
       if (
         api &&
         connection.endpoints[protocol] &&
@@ -291,11 +288,7 @@ export class CapabilityStore {
         return false;
       const wire =
         config.protocol ??
-        (config.harness === "codex"
-          ? "responses"
-          : ["claude-code", "deepseek-harness"].includes(config.harness)
-            ? "anthropic-messages"
-            : "chat-completions");
+        (harnessManifest(config.harness)?.models.preferredProtocol ?? "chat-completions");
       if (c.endpoints[wire] !== config.baseUrl) return false;
       try {
         resolveConnection(

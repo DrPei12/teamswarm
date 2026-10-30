@@ -1694,13 +1694,9 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                                 permissions,
                               )
                             }
-                            onChange={(runtime, choice) => {
-                              void product
-                                .configure(team.id, runtime, choice)
-                                .catch((error) =>
-                                  setNotice((error as Error).message),
-                                );
-                            }}
+                            onChange={(runtime, choice) =>
+                              product.configure(team.id, runtime, choice)
+                            }
                             onSettings={(tab = "harnesses") => {
                               setExecutionTab(tab);
                               setExecutionSettings(true);

@@ -166,6 +166,10 @@ export const zhCN: Record<string, string> = {
   "No configured models": "暂无已配置的模型",
   "Authorize ChatGPT for TeamSwarm": "需授权 ChatGPT 给 TeamSwarm",
   "Reconnect ChatGPT": "重新连接 ChatGPT",
+  "ChatGPT authorization expired. Reconnect this account.":
+    "ChatGPT 授权已过期，请重新连接此账号。",
+  "ChatGPT authorization is temporarily unavailable. Try again shortly.":
+    "暂时无法访问 ChatGPT 授权服务，请稍后重试。",
   "Sign in to this account": "登录此账号",
   "Native sign-in cannot be shared across Harnesses":
     "此本机登录无法跨 Harness 使用",

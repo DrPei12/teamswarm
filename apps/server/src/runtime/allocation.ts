@@ -18,6 +18,7 @@ import {
   previewPortableImport,
 } from "./allocation-portable.js";
 import { executionConfig } from "./validation.js";
+import { readOnlyPermissions } from "./harness/permissions.js";
 import type { TeamCatalog } from "./catalog.js";
 import type { RuntimeStore } from "./store.js";
 import type { Attempt, ExecutionConfig, Member, Work, WorkStatus } from "./types.js";
@@ -330,9 +331,14 @@ export function resolveExecution(
     config = { ...resource.config };
     selection = { ...effective.selection };
   }
-  config = memberPermissions(config, member);
+  const permissions = work.permissions ?? (member.permissionOverride?.harness === config.harness ? member.permissionOverride : undefined) ?? (member.config.harness === config.harness ? member.config.permissions : undefined) ?? config.permissions;
+  if (permissions) {
+    if (permissions.harness !== config.harness)
+      return { config, selection, conflict: "Select a native permission policy for the chosen Harness." };
+    config = { ...config, permissions };
+  }
   if (member.config.access === "read-only" || work.interaction || work.kind === "collaboration")
-    config = readOnlyExecution(config);
+    config = readOnlyPermissions(config);
   if (member.kind !== "host" && !deps.catalog.capabilities.allowed(teamId,config))
     return {config,selection,conflict:"This Harness or model connection is no longer enabled for the Team. Ask Host to choose an enabled combination."};
   return { config, selection, conflict: null };
@@ -365,6 +371,7 @@ export function canReuseSession(
   previous: ExecutionConfig,
   next: ExecutionConfig,
 ): boolean {
+  if (JSON.stringify(previous.permissions ?? null) !== JSON.stringify(next.permissions ?? null)) return false;
   if (KNOWN_HARNESSES.has(next.harness)) return canReuseNativeSession(previous, next);
   return JSON.stringify(previous) === JSON.stringify(next);
 }

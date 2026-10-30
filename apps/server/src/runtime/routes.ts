@@ -1,3 +1,4 @@
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import { applicationDataBase } from "../../../../scripts/platform.cjs";
 import { projectFileRoutes } from "../project-files.js";
 import { Router } from "express";
@@ -46,10 +47,16 @@ import {
 
 export function runtimeRoutes(runtime: TeamRuntime): Router {
   const router = Router();
-  router.get("/teams/:teamId/approvals", (req, res) => res.json(runtime.approvals.list(param(req.params.teamId), true)));
+  router.get("/teams/:teamId/approvals", (req, res) => {
+    const teamId = param(req.params.teamId);
+    res.json([...runtime.approvals.list(teamId, true), ...runtime.nativePermissions.approvals(teamId)]);
+  });
   router.post("/teams/:teamId/approvals/:approvalId", (req, res) => {
     const input = parse(z.object({ accepted: z.boolean() }).strict(), req.body);
-    res.json(runtime.approvals.answer(param(req.params.teamId), param(req.params.approvalId), input.accepted));
+    const teamId = param(req.params.teamId), id = param(req.params.approvalId);
+    res.json(runtime.nativePermissions.has(teamId, id)
+      ? runtime.nativePermissions.answerFromUI(teamId, id, input.accepted)
+      : runtime.approvals.answer(teamId, id, input.accepted));
   });
   router.use(projectFileRoutes(runtime));
   const store = runtime.store;
@@ -60,10 +67,27 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
   };
   router.get("/model-accounts/chatgpt", (_req,res) => res.json({ accounts:runtime.models.accounts.list() }));
   router.post("/model-accounts/chatgpt/sign-in", async (req,res) => {
-    const input = parse(z.object({accountId:z.string().uuid().optional()}).strict(),req.body);
-    res.json(await modelAccountOperation(()=>runtime.models.accounts.start(input.accountId)));
+    const input = parse(z.object({accountId:z.string().uuid().optional(), language:z.enum(["en","zh-CN"]).optional(), theme:z.enum(["light","dark"]).optional(), client:z.enum(["web","desktop"]).optional(), returnPath:z.string().max(2000).optional()}).strict(),req.body);
+    const origin = req.headers.origin ?? `http://127.0.0.1:${req.socket.localPort}`;
+    const target = new URL(input.returnPath ?? "/", origin);
+    if (target.origin !== origin || !target.pathname.startsWith("/")) throw badRequest("invalid_return_location", "Return to the current TeamSwarm window.");
+    res.json(await modelAccountOperation(()=>runtime.models.accounts.start(input.accountId, { returnUrl:target.href, language:input.language, theme:input.theme, desktop:input.client === "desktop" })));
   });
   router.get("/model-accounts/chatgpt/sign-in/:id", (req,res) => res.json(runtime.models.accounts.status(param(req.params.id))));
+  router.get("/model-accounts/chatgpt/sign-in/:id/events", (req,res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+    const unsubscribe = runtime.models.accounts.watch(param(req.params.id), event => {
+      if (!res.destroyed && !res.writableEnded) {
+        res.write(`event: sign-in\ndata: ${event}\n\n`);
+        if (event === "close") res.end();
+      }
+    });
+    const heartbeat = setInterval(() => { if (!res.writableNeedDrain) res.write(": keepalive\n\n"); }, 15000).unref();
+    res.on("close", () => { unsubscribe(); clearInterval(heartbeat); });
+  });
   router.delete("/model-accounts/chatgpt/sign-in/:id",(req,res)=>res.json(runtime.models.accounts.cancel(param(req.params.id))));
   router.get("/model-accounts/chatgpt/:id/models", async (req,res) => res.json({models:await modelAccountOperation(()=>runtime.models.accounts.models(parse(z.string().uuid(),req.params.id)))}));
   router.post("/model-accounts/chatgpt/:id/sign-out",async(req,res)=>res.json(await modelAccountOperation(()=>runtime.models.disconnect(parse(z.string().uuid(),req.params.id)))));
@@ -603,6 +627,8 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
     res.json({
       harnesses: [...runtime.harnesses.values()].map((h) => ({
         id: h.id,
+        name: harnessManifest(h.id)?.name ?? h.id,
+        manifest: harnessManifest(h.id) ?? null,
         capabilities: h.capabilities,
       })),
     }),

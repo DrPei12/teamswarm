@@ -45,6 +45,46 @@ test("ChatGPT registration validates callback, PKCE, identity and encrypted refr
 });
 
 function deferred() {let resolve!:()=>void; const promise=new Promise<void>(r=>resolve=r);return {promise,resolve};}
+
+test("signing in to an existing ChatGPT identity retains its connection ID", async () => {
+  const root = mkdtempSync(path.join(process.cwd(), ".test-chatgpt-reuse-"));
+  const auth = new ChatGPTAccounts(root, fixtureServices());
+  try {
+    const firstLogin = await callback(auth, "existing");
+    assert.equal((await fetch(firstLogin.target)).status, 200);
+    const first = auth.status(firstLogin.start.id).accountId!;
+    const secondLogin = await callback(auth, "existing");
+    assert.equal((await fetch(secondLogin.target)).status, 200);
+    assert.equal(auth.status(secondLogin.start.id).accountId, first);
+    assert.equal(auth.list().length, 1);
+    assert.equal(auth.list()[0].id, first);
+    assert.ok(await auth.accessToken(first));
+  } finally { await auth.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("temporary ChatGPT refresh failures preserve authorization and can retry", async () => {
+  const root = mkdtempSync(path.join(process.cwd(), ".test-chatgpt-retry-"));
+  const services = fixtureServices(), original = services.fetch;
+  let failure = 503;
+  services.fetch = async (url, init) => {
+    if (new URLSearchParams(init.body).get("grant_type") === "refresh_token" && failure)
+      return Response.json({ error: failure === 400 ? "invalid_grant" : "server_error" }, { status: failure });
+    return original(url, init);
+  };
+  const auth = new ChatGPTAccounts(root, services);
+  try {
+    const login = await callback(auth, "retry");
+    assert.equal((await fetch(login.target)).status, 200);
+    const id = auth.status(login.start.id).accountId!;
+    await assert.rejects(auth.accessToken(id), /temporarily unavailable.*Try again/);
+    assert.equal(auth.list()[0].connected, true);
+    failure = 400;
+    await assert.rejects(auth.accessToken(id), /authorization expired.*Reconnect/);
+    failure = 0;
+    assert.ok(await auth.accessToken(id));
+    assert.equal(auth.list()[0].id, id);
+  } finally { await auth.close(); rmSync(root, { recursive: true, force: true }); }
+});
 function fixtureServices(){
   let renew=0;
   const services={
@@ -115,4 +155,55 @@ test("cancelling sign-in closes its callback and allows a fresh attempt",async()
   const root=mkdtempSync(path.join(process.cwd(),".test-chatgpt-cancel-")),auth=new ChatGPTAccounts(root,fixtureServices());
   try{const first=await auth.start();assert.equal(auth.cancel(first.id).state,"failed");const next=await auth.start();assert.notEqual(first.id,next.id);assert.equal(auth.status(next.id).state,"pending");}
   finally{await auth.close();rmSync(root,{recursive:true,force:true});}
+});
+
+test("the result page retains a safe receipt and returns the desktop window only from its own origin",async()=>{
+  const root=mkdtempSync(path.join(process.cwd(),".test-chatgpt-return-")),auth=new ChatGPTAccounts(root,fixtureServices());
+  const returned:string[]=[];
+  try {
+    await assert.rejects(auth.start(undefined,{returnUrl:"https://example.test/"}),/local TeamSwarm/);
+    await assert.rejects(auth.start(undefined,{returnUrl:"http://user:password@localhost/"}),/local TeamSwarm/);
+    const start=await auth.start(undefined,{returnUrl:"http://127.0.0.1:4393/#/team/fixture",language:"zh-CN",theme:"dark",desktop:true});
+    const events:string[]=[];
+    const unsubscribe=auth.watch(start.id,event=>{events.push(event);if(event==="return")returned.push(start.id);});
+    const url=new URL(start.url), target=new URL(url.searchParams.get("redirect_uri")!);
+    target.search=new URLSearchParams({state:url.searchParams.get("state")!,client_id:"oaiapp_fixture",code:JSON.stringify({sub:"return",nonce:url.searchParams.get("nonce"),email:"<fixture>@example.test"})}).toString();
+    const response=await fetch(target), html=await response.text();
+    assert.equal(response.status,200); assert.match(html,/ChatGPT 已连接/); assert.match(html,/返回 TeamSwarm/);
+    assert.match(html,/&lt;fixture&gt;@example.test/); assert.match(html,/data-theme="dark"/);
+    assert.equal(response.headers.get("cache-control"),"no-store"); assert.equal(response.headers.get("referrer-policy"),"no-referrer");
+    assert.match(response.headers.get("content-security-policy")!,/frame-ancestors 'none'/);
+    for (const secret of [url.searchParams.get("state")!,url.searchParams.get("nonce")!,"access-0","refresh-0"]) assert.ok(!html.includes(secret));
+    const receipt=JSON.parse(html.match(/const c=(.*);const status=/)![1]).receipt;
+    const resultURL=start.callbackOrigin+"/auth/result?receipt="+receipt;
+    assert.equal((await fetch(resultURL)).status,200);
+    assert.equal((await fetch(resultURL+"wrong")).status,404);
+    const returnURL=start.callbackOrigin+"/auth/return?receipt="+receipt;
+    assert.equal((await fetch(returnURL)).status,403);
+    assert.equal((await fetch(returnURL,{method:"POST",headers:{Origin:"https://example.test"}})).status,403);
+    assert.deepEqual(returned,[]);
+    assert.equal((await fetch(returnURL,{method:"POST",headers:{Origin:start.callbackOrigin}})).status,204);
+    assert.deepEqual(returned,[start.id]);
+    const replay:string[]=[];const unwatch=auth.watch(start.id,event=>replay.push(event));
+    assert.deepEqual(replay,["return"]);unwatch();
+    assert.deepEqual(events,["state","state","return"]);
+    assert.equal(auth.status(start.id).state,"complete");
+    unsubscribe();await auth.close();assert.deepEqual(events,["state","state","return"]);
+  } finally {await auth.close();rmSync(root,{recursive:true,force:true});}
+});
+
+test("declined sign-in has a result page and can return to the desktop without saving an account",async()=>{
+  const root=mkdtempSync(path.join(process.cwd(),".test-chatgpt-decline-")),auth=new ChatGPTAccounts(root,fixtureServices());
+  const events:string[]=[];
+  try {
+    const start=await auth.start(undefined,{returnUrl:"http://localhost:4393/",desktop:true}),url=new URL(start.url),target=new URL(url.searchParams.get("redirect_uri")!);
+    auth.watch(start.id,event=>events.push(event));
+    target.search=new URLSearchParams({state:url.searchParams.get("state")!,error:"access_denied"}).toString();
+    const response=await fetch(target),html=await response.text();
+    assert.equal(response.status,400);assert.match(html,/连接未完成/);assert.equal(auth.list().length,0);
+    const receipt=JSON.parse(html.match(/const c=(.*);const status=/)![1]).receipt;
+    assert.equal((await fetch(start.callbackOrigin+"/auth/return?receipt="+receipt,{method:"POST",headers:{Origin:start.callbackOrigin}})).status,204);
+    assert.deepEqual(events,["state","state","return"]);
+    await auth.close();assert.equal(events.at(-1),"close");
+  } finally {await auth.close();rmSync(root,{recursive:true,force:true});}
 });

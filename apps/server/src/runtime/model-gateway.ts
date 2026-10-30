@@ -1,3 +1,4 @@
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import {
   createServer,
   type Server,
@@ -61,15 +62,15 @@ function nativeConfig(
   return {
     ...c,
     chatgptAccountId: undefined,
-    protocol: harnessProtocol(c.harness, c.protocol),
+    protocol: harnessProtocol(c.harness, c.protocol, c.chatgptAccountId ? "chatgpt" : "api"),
     baseUrl,
     credentialEnv: "TEAMSWARM_ROUTE_KEY",
     effort: null,
     thinkingFormat: null,
-    maxOutputTokens: ["pi", "opencode"].includes(c.harness)
+    maxOutputTokens: harnessManifest(c.harness)?.models.outputBudget
       ? c.maxOutputTokens
       : null,
-    contextWindowTokens: ["pi", "opencode"].includes(c.harness)
+    contextWindowTokens: harnessManifest(c.harness)?.models.contextWindow
       ? c.contextWindowTokens
       : null,
   };

@@ -5,6 +5,7 @@ export function grokPermissionOutcome(
   sessionId: string,
   tools: { name: string }[],
   access: "read-only" | "workspace-write" = "read-only",
+  nativeCommands = false,
 ) {
   const denied = { outcome: "cancelled" as const };
   if (!sessionId || params?.sessionId !== sessionId) return denied;
@@ -18,6 +19,7 @@ export function grokPermissionOutcome(
     if (access === "workspace-write")
       for (const variant of ["Bash", "SearchReplace", "Write"])
         permitted.add(variant);
+    if (nativeCommands) permitted.add("Bash");
     if (!permitted.has(input?.variant)) return denied;
   }
   const option = Array.isArray(params.options)

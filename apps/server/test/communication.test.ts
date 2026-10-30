@@ -47,7 +47,7 @@ test("repair continuation preserves its unpublished candidate instead of an olde
       writePaths: ["continuation.txt"], verification: "self-check",
     });
     await until(() => t.harness.call(first.id));
-    const file = path.join(t.workspace, "continuation.txt");
+    const file = path.join(t.harness.call(first.id).request.workspace, "continuation.txt");
     writeFileSync(file, "published");
     await t.tool(first.id, "team_submit_result", {
       summary: "Published", files: ["continuation.txt"], usedArtifactIds: [],
@@ -149,7 +149,7 @@ test("explicit repairs retain their responsibility key while retries remain idem
     };
     const first = await t.tool(t.hostId, "team_delegate", args);
     await until(() => t.harness.call(first.id));
-    const file = path.join(t.workspace, "catalog.txt");
+    const file = path.join(t.harness.call(first.id).request.workspace, "catalog.txt");
     writeFileSync(file, "candidate");
     await t.tool(first.id, "team_submit_result", { summary: "Candidate", files: ["catalog.txt"], usedArtifactIds: [] });
     t.harness.finish(first.id);
@@ -1039,10 +1039,11 @@ test("formal review delegation binds every immutable input, original criteria an
     assert.deepEqual(review.acceptanceCriteria, a.acceptanceCriteria);
     assert.equal((await t.tool(t.hostId, "team_review", args)).id, review.id);
     await until(() => t.harness.call(review.id));
-    assert.equal(
+    assert.notEqual(
       t.harness.call(review.id).request.workspace,
       t.harness.call(a.id).request.workspace,
     );
+    assert.equal(t.state(review.id).sourceWorkspace, t.harness.call(a.id).request.workspace);
     assert.match(review.instructions, /team_accept_work/);
     const evidence = await t.tool(review.id, "team_read_exchange", {
       exchangeId: exchange.exchange.id,
@@ -1462,10 +1463,11 @@ test("three real concurrent workspaces, in-work crossed requests, yielded contin
       reviewOf: a.id,
     });
     await until(() => t.harness.call(review.id));
-    assert.equal(
+    assert.notEqual(
       t.harness.call(review.id).request.workspace,
       t.harness.call(a.id).request.workspace,
     );
+    assert.equal(t.state(review.id).sourceWorkspace, t.harness.call(a.id).request.workspace);
     assert.equal(
       readFileSync(
         path.join(t.harness.call(review.id).request.workspace, "A.txt"),
@@ -1766,6 +1768,10 @@ test("isolated acceptance cannot deliver before independently accepted integrati
   const t = await setup();
   try {
     const [a, b, c] = t.works;
+    for (const w of [a, b, c]) {
+      const current = t.state(w.id); current.publicationMode = "integration";
+      t.service.runtime.store.save("works", current);
+    }
     const extraFiles = Array.from({ length: 32 }, (_, i) => `fixture-${i}.txt`);
     for (const w of [a, b, c]) {
       writeFileSync(
@@ -1893,7 +1899,7 @@ test("isolated acceptance cannot deliver before independently accepted integrati
         t.harness.finish(call.work.id);
       await delay(20);
     }
-    assert.equal(oldRun().state, "completed");
+    assert.equal(oldRun().state, "completed", JSON.stringify({ run:oldRun(), works:t.service.runtime.store.list<Work>("works",t.team.id).map(w=>({id:w.id,title:w.title,status:w.status,error:w.error})) }));
     const background = t.harness.calls.filter(
       (c) => c.work.kind === "host-followup",
     );
@@ -2313,7 +2319,8 @@ test("user review request keeps a held Host untouched, binds submission, and rej
     assert.equal(response.status,200);
     const review = response.body;
     assert.equal(review.memberId,reviewer.id);
-    assert.equal(review.workspace,workspace);
+    assert.equal(review.sourceWorkspace,workspace);
+    assert.notEqual(review.workspace,workspace);
     assert.deepEqual(review.inputs,target.artifactIds);
     assert.deepEqual(review.acceptanceCriteria,target.acceptanceCriteria);
     assert.equal((await t.api(route,body)).body.id,review.id);

@@ -18,6 +18,9 @@ import { badRequest, conflict, notFound } from "../errors.js";
 import { ownedRuntimeLocks, processIdentity, processStartedAfterFile } from "./process-identity.js";
 import type { ProjectHistory } from "./project-history.js";
 import { RuntimeChanges } from "./changes.js";
+import { createMemberDirectory } from "./member-workspaces.js";
+import { WorkspaceAccess } from "./workspace-access.js";
+import { successfulCommand, finishedCommand } from "./harness/command-observations.js";
 import type {
   Acceptance,
   ArtifactVersion,
@@ -90,6 +93,7 @@ export class RuntimeStore {
   history?: ProjectHistory;
   private lockPath: string;
   private lockId = randomUUID();
+  private commitFrames: Array<Array<() => void>> = [];
   constructor(readonly teams: TeamStore) {
     this.db = teams.database;
     this.changes = new RuntimeChanges(this.db);
@@ -213,16 +217,29 @@ export class RuntimeStore {
   transaction<T>(fn: () => T): T {
     const savepoint = "runtime_" + randomUUID().replaceAll("-", "");
     this.db.exec(`SAVEPOINT ${savepoint}`);
+    const callbacks: Array<() => void> = [];
+    this.commitFrames.push(callbacks);
+    let result: T;
     try {
-      const result = fn();
+      result = fn();
       this.db.exec(`RELEASE SAVEPOINT ${savepoint}`);
-      return result;
     } catch (error) {
+      this.commitFrames.pop();
       this.db.exec(
         `ROLLBACK TO SAVEPOINT ${savepoint}; RELEASE SAVEPOINT ${savepoint}`,
       );
       throw error;
     }
+    this.commitFrames.pop();
+    const parent = this.commitFrames.at(-1);
+    if (parent) parent.push(...callbacks);
+    else for (const callback of callbacks) callback();
+    return result;
+  }
+  afterCommit(callback: () => void) {
+    const frame = this.commitFrames.at(-1);
+    if (frame) frame.push(callback);
+    else callback();
   }
   save(table: Table, value: Entity): void {
     const id = "id" in value ? value.id : value.teamId;
@@ -455,6 +472,7 @@ export class RuntimeStore {
       createdAt: timestamp(),
       branchId: branchId ?? this.history?.ensure(teamId).id,
     };
+    member.workspaceRoot = createMemberDirectory(this.teams.dataDir, teamId, member.id);
     this.save("members", member);
     this.event(teamId, "member.created", { memberId: member.id, name });
     return member;
@@ -611,6 +629,7 @@ export class RuntimeStore {
       inputs,
       dependsOn,
       reviewOf,
+      ...(recipient.kind !== "host" && run.settings.allowIsolatedWorkspaces !== false ? { workspaceMode: "isolated" as const } : {}),
       artifactIds: [],
       status: "queued",
       attemptId: null,
@@ -839,6 +858,9 @@ export class RuntimeStore {
     const submitted = new Map<string, { path: string; bytes: Buffer }>();
     let totalBytes = Buffer.byteLength(summary);
     for (const name of files) {
+      if (work.workspaceMode === "isolated" && work.writePaths !== undefined &&
+          !work.writePaths.some(owned => WorkspaceAccess.overlaps(owned, WorkspaceAccess.relative(name, false))))
+        throw conflict("artifact_outside_ownership", `The submitted path is outside this work's writePaths: ${name}`);
       const bytes = this.readWorkspaceFile(workspace, name);
       const canonical = path
         .relative(
@@ -940,7 +962,7 @@ export class RuntimeStore {
           )
           .get(id, work.teamId, work.attemptId!);
         const event = row ? JSON.parse(String(row.data)) : null;
-        if (!event || event.type !== "commandExecution" || event.exitCode !== 0 || event.status !== "completed")
+        if (!successfulCommand(event))
           throw conflict(
             "invalid_check",
             "Self-check evidence must reference a successful command from this attempt.",
@@ -1077,10 +1099,8 @@ export class RuntimeStore {
               `No command evidence matches '${id}' in this review attempt. Copy the complete id returned by team_review_evidence, not an abbreviated ID, nativeItemId, or transcript event ID.`,
             );
           if (
-            check.type !== "commandExecution" ||
-            !Number.isInteger(check.exitCode) ||
-            check.status !== "completed" ||
-            (criterion.passed && check.exitCode !== 0)
+            !finishedCommand(check) ||
+            (criterion.passed && !successfulCommand(check))
           )
             throw conflict(
               "invalid_check",
@@ -1099,6 +1119,11 @@ export class RuntimeStore {
         );
     }
     const artifacts = this.verifyArtifacts(target);
+    if (reviewer.workspaceMode === "isolated") {
+      for (const artifact of artifacts)
+        if (artifact.path !== "@result" && hash(this.readWorkspaceFile(this.workspace(reviewer), artifact.path)) !== artifact.sha256)
+          throw conflict("review_workspace_changed", `Restore the assigned artifact version before reviewing: ${artifact.path}`);
+    }
     for (const artifact of artifacts) {
       const received = this.db
         .prepare(

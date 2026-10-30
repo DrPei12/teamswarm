@@ -824,6 +824,7 @@ function ConversationThread({
                     );
                   } catch (error) {
                     if (mounted.current) setError((error as Error).message);
+                    throw error;
                   } finally {
                     configurationLock.current = false;
                     if (mounted.current) setConfiguring(false);

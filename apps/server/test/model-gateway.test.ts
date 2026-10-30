@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer, type ServerResponse } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ModelGateway } from "../src/runtime/model-gateway.js";
 import { executionConfig } from "../src/runtime/validation.js";
@@ -10,11 +10,13 @@ import { resolveConnection } from "../src/runtime/connections.js";
 import { decodeRequest, encodeResponse, chatGPTPayload, requestOptions } from "../src/runtime/model-wire.js";
 import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
 
-function respond(res:ServerResponse, model:string, value:string|{name:string;arguments:Record<string,unknown>}, complete=true){
+function respond(res:ServerResponse, model:string, value:string|{name:string;arguments:Record<string,unknown>}, complete=true, metadata=false){
   res.writeHead(200,{"content-type":"text/event-stream"});
   const id="resp_fixture", itemId=typeof value==="string"?"msg_fixture":"fc_fixture";
-  const send=(type:string,fields:unknown)=>res.write(`event: ${type}\ndata: ${JSON.stringify({type,...fields as object})}\n\n`);
-  send("response.created",{response:{id,model,status:"in_progress",output:[]}});
+  let sequence = 0;
+  const send=(type:string,fields:unknown)=>res.write(`event: ${type}\ndata: ${JSON.stringify({type,sequence_number:sequence++,...fields as object})}\n\n`);
+  send("response.created",{response:{id,object:"response",created_at:Math.floor(Date.now()/1000),model,status:"in_progress",output:[],error:null,incomplete_details:null}});
+  if(metadata)send("response.metadata",{metadata:{source:"subscription-fixture"}});
   let item:any;
   if(typeof value==="string"){
     item={id:itemId,type:"message",role:"assistant",status:"completed",content:[{type:"output_text",text:value,annotations:[]}]};
@@ -30,27 +32,55 @@ function respond(res:ServerResponse, model:string, value:string|{name:string;arg
     send("response.function_call_arguments.done",{output_index:0,item_id:itemId,arguments:item.arguments});
   }
   send("response.output_item.done",{output_index:0,item});
-  if(complete)send("response.completed",{response:{id,model,status:"completed",output:[item],usage:{input_tokens:20,output_tokens:5,total_tokens:25}}});
+  if(complete)send("response.completed",{response:{id,object:"response",created_at:Math.floor(Date.now()/1000),model,status:"completed",output:[item],error:null,incomplete_details:null,usage:{input_tokens:20,output_tokens:5,total_tokens:25,input_tokens_details:{cached_tokens:0},output_tokens_details:{reasoning_tokens:0}}}});
   res.end();
 }
 async function setup(action:(body:any,res:ServerResponse)=>void){
   const directory=mkdtempSync(path.join(process.cwd(),".test-model-route-"));
-  const requests:any[]=[];
+  const requests:any[]=[], errors: unknown[] = [];
   const upstream=createServer(async(req,res)=>{
+    try {
+    if (req.method === "GET") { res.writeHead(200, {"content-type":"application/json"}); res.end(JSON.stringify({object:"list",data:[{id:"gpt-test",object:"model",created:0,owned_by:"fixture"}]})); return; }
     const parts:Buffer[]=[];for await(const part of req)parts.push(part);
     const body=JSON.parse(Buffer.concat(parts).toString()); requests.push(body);
     assert.equal(req.headers.authorization,"Bearer fixture-key");action(body,res);
+    } catch (error) { errors.push(error); if (!res.headersSent) res.writeHead(500); res.end("Fixture failure"); }
   });
   await new Promise<void>(r=>upstream.listen(0,"127.0.0.1",r));
   process.env.TEAM_GATEWAY_TEST_KEY="fixture-key";
   const gateway=new ModelGateway(directory);
   const config=executionConfig.parse({harness:"claude-code",model:"gpt-test",protocol:"responses",baseUrl:`http://127.0.0.1:${(upstream.address() as any).port}/v1`,credentialEnv:"TEAM_GATEWAY_TEST_KEY"});
-  return {directory,requests,gateway,config,close:async()=>{await gateway.close();upstream.closeAllConnections();await new Promise<void>(r=>upstream.close(()=>r()));delete process.env.TEAM_GATEWAY_TEST_KEY;rmSync(directory,{recursive:true,force:true});}};
+  return {directory,requests,gateway,config,close:async()=>{await gateway.close();upstream.closeAllConnections();await new Promise<void>(r=>upstream.close(()=>r()));delete process.env.TEAM_GATEWAY_TEST_KEY;rmSync(directory,{recursive:true,force:true});assert.deepEqual(errors, [], "The fixture server must complete every request without handler errors");}};
 }
 test("Responses connection is selectable independently for all six Harnesses",()=>{
   for(const harness of ["codex","claude-code","pi","grok","deepseek-harness","opencode"]){
     assert.equal(resolveConnection({name:"models",endpoints:{responses:"https://example.com/v1"},credentialEnv:"MODEL_KEY",models:["gpt-test"]},harness,"gpt-test","read-only").config.protocol,"responses");
   }
+});
+
+test("Grok subscription route normalizes metadata events and round-trips native tool results",async()=>{
+  const f=await setup((body,res)=>respond(res,body.model,
+    body.input.some((v:any)=>v.type==="function_call_output") ? "native command received" : {name:"run_terminal_command",arguments:{command:"node verify.cjs"}},true,true));
+  const originalFetch=globalThis.fetch;
+  globalThis.fetch=(input,init)=>originalFetch(String(input)==="https://api.openai.com/v1/responses"?f.config.baseUrl+"/responses":input,init);
+  f.gateway.accounts.accessToken=async()=>"fixture-key";
+  try{
+    const lease=await f.gateway.lease({...f.config,harness:"grok",baseUrl:null,credentialEnv:null,chatgptAccountId:"11111111-1111-4111-8111-111111111111"});
+    assert.equal(lease.config.protocol,"chat-completions");
+    const messages:any[]=[{role:"user",content:"Run the command"}];
+    const call=()=>fetch(lease.config.baseUrl+"/chat/completions",{method:"POST",headers:{authorization:"Bearer "+lease.token,"content-type":"application/json"},body:JSON.stringify({model:"gpt-test",stream:true,messages,tools:[{type:"function",function:{name:"run_terminal_command",parameters:{type:"object",properties:{command:{type:"string"}},required:["command"]}}}]})});
+    const first=await call();assert.equal(first.status,200);const stream=await first.text();
+    assert.ok(!stream.includes("response.metadata"));
+    const chunks=stream.split("\n").filter(l=>l.startsWith("data: {")).map(l=>JSON.parse(l.slice(6)));
+    const deltas=chunks.flatMap(c=>c.choices?.[0]?.delta?.tool_calls??[]);
+    const tool={id:deltas.find(d=>d.id)?.id,type:"function",function:{name:deltas.find(d=>d.function?.name)?.function.name,arguments:deltas.map(d=>d.function?.arguments??"").join("")}};
+    assert.ok(tool.id);assert.equal(tool.function.name,"run_terminal_command");assert.equal(JSON.parse(tool.function.arguments).command,"node verify.cjs");
+    messages.push({role:"assistant",content:null,tool_calls:[tool]},{role:"tool",tool_call_id:tool.id,content:"NATIVE_RESULT_42"});
+    const second=await call();assert.equal(second.status,200);assert.match(await second.text(),/native command received/);
+    assert.ok(f.requests[0].input.some((v:any)=>v.type==="additional_tools"));
+    assert.ok(f.requests[1].input.some((v:any)=>v.type==="function_call_output"&&v.output==="NATIVE_RESULT_42"));
+    lease.release();assert.deepEqual(f.gateway.state(),{routes:0,requests:0});
+  }finally{globalThis.fetch=originalFetch;await f.close();}
 });
 
 test("ChatGPT requests use the public stateless protocol and supported tool declarations",()=>{
@@ -167,3 +197,114 @@ test("native Claude executes its own Bash tool through the model bridge and resu
     assert.deepEqual(f.gateway.state(),{routes:0,requests:0});assert.equal(native.resources().length,0);
   }finally{await native.close();if(old===undefined)delete process.env.TEAM_HARNESS_HOME;else process.env.TEAM_HARNESS_HOME=old;await f.close();}
 });
+
+for (const id of ["pi", "deepseek-harness", "grok", "opencode", "claude-code"] as const) {
+  test(`installed ${id} executes a native command and publishes its own result`, { skip: process.env.TEAM_NATIVE_EXECUTION_TEST !== "1", timeout: 70000 }, async () => {
+    const marker = "TEAMSWARM_NATIVE_RESULT_42";
+    let nativeTool = "", calls = 0, exitCode = 0;
+    const f = await setup((body, res) => {
+      if (++calls > 6) { res.writeHead(500); res.end("Fixture request limit"); return; }
+      const outputs = body.input.filter((v: any) => v.type === "function_call_output");
+      if (outputs.length) { respond(res, body.model, JSON.stringify(outputs).includes(marker) ? "NATIVE_COMMAND_CONFIRMED" : "NATIVE_TOOL_FAILED: " + JSON.stringify(outputs)); return; }
+      const names = body.tools?.map((t: any) => t.name) ?? [];
+      nativeTool = names.find((n: string) => /^(Bash|bash|powershell|pwsh|run_terminal_command|run_terminal_cmd)$/.test(n)) ?? "";
+      if (!nativeTool) { respond(res, body.model, "NO_NATIVE_COMMAND_TOOL: " + names.join(",")); return; }
+      const schema = body.tools.find((t: any) => t.name === nativeTool)?.parameters?.properties ?? {};
+      const values = { command: `echo ${marker}${exitCode ? "; exit 7" : ""}`, description: "Print a native execution marker", explanation: "Print a native execution marker", timeout: 10000, timeoutMs: 10000, is_background: false };
+      respond(res, body.model, { name: nativeTool, arguments: Object.fromEntries(Object.entries(values).filter(([key]) => key in schema)) });
+    });
+    const old = process.env.TEAM_HARNESS_HOME; process.env.TEAM_HARNESS_HOME = path.join(f.directory, "sessions");
+    const native = new NativeHarness(id), harness = f.gateway.wrap(native), events: any[] = [];
+    let session = "", turn = "";
+    const timeout = setTimeout(() => { if (session) void native.interrupt(session, turn).catch(() => native.close()); }, 45000);
+    try {
+      const request = { workspace: f.directory, isolatedWorkspace: true, config: { ...f.config, harness: id },
+        instructions: "Complete the assigned command using your own native command tool. No delegation.", input: "Print the marker with your native command tool.", tools: [],
+        onSession: (v: string) => { session = v; }, onTurn: (v: string) => { turn = v; }, onEvent: (e: any) => events.push(e), onTool: async () => { throw Error("Command reached Team tool bridge"); } };
+      const result = await harness.execute(request);
+      const evidence = events.filter(e => e.type === "execution.item").map(e => e.data);
+      const record = { id, nativeTool, result, evidence, events: events.filter(e => e.type === "native.event") };
+      writeFileSync(path.join(process.cwd(), ".local", `native-execution-${id}.json`), JSON.stringify(record, null, 2));
+      assert.equal(result.status, "completed", JSON.stringify(result));
+      assert.match(result.text, /NATIVE_COMMAND_CONFIRMED/);
+      assert.equal(evidence.length, 1, `No single normalized command result: ${JSON.stringify(events).slice(-4000)}`);
+      assert.match(evidence[0].aggregatedOutput, new RegExp(marker));
+      assert.equal(evidence[0].nativeOutcome, "succeeded", JSON.stringify(evidence));
+      assert.equal(evidence[0].harness, id);
+      exitCode = 7; events.length = 0;
+      const failure = await harness.execute(request);
+      const failed = events.filter(e => e.type === "execution.item").map(e => e.data);
+      writeFileSync(path.join(process.cwd(), ".local", `native-exit-${id}.json`), JSON.stringify({ id, failure, evidence: failed }, null, 2));
+      assert.equal(failed.length, 1, JSON.stringify(failure));
+      assert.equal(failed[0].nativeOutcome, "failed", JSON.stringify(failed));
+      assert.ok(failed[0].exitCode === 7 || id === "claude-code" && failed[0].exitCode === null, JSON.stringify(failed));
+      assert.deepEqual(f.gateway.state(), { routes: 0, requests: 0 }); assert.equal(native.resources().length, 0);
+    } finally { clearTimeout(timeout); await native.close(); if (old === undefined) delete process.env.TEAM_HARNESS_HOME; else process.env.TEAM_HARNESS_HOME = old; await f.close(); }
+  });
+}
+
+for (const id of ["claude-code", "opencode", "grok", "deepseek-harness"] as const) {
+  test(`installed ${id} native permission request receives a one-time decision`, { skip: process.env.TEAM_NATIVE_PERMISSION_TEST !== "1", timeout: 80000 }, async () => {
+    const f = await setup((body, res) => {
+      if (body.input.some((v: any) => v.type === "function_call_output")) { respond(res, body.model, "PERMISSION_TURN_DONE"); return; }
+      if (!body.tools?.length) { respond(res, body.model, "Native command session"); return; }
+      const tool = body.tools.find((v: any) => ["Bash", "bash", "pwsh", "powershell", "run_terminal_cmd", "run_terminal_command"].includes(v.name));
+      if (!tool) { writeFileSync(path.join(process.cwd(), ".local", `native-auxiliary-${id}.json`), JSON.stringify(body, null, 2)); respond(res, body.model, "Auxiliary fixture response"); return; }
+      const escalation = tool.parameters?.properties?.sandbox_permissions?.enum?.at(-1);
+      respond(res, body.model, { name: tool.name, arguments: { command: "node -e \"process.stdout.write('NATIVE_PERMISSION_42')\"", description: "Print the native permission marker",
+        ...(id === "deepseek-harness" ? { sandbox_permissions: escalation ?? "require_escalated", justification: "Print a marker to verify native one-time approval routing." } : {}) } });
+    });
+    const old = process.env.TEAM_HARNESS_HOME; process.env.TEAM_HARNESS_HOME = path.join(f.directory, "sessions");
+    const native = new NativeHarness(id), harness = f.gateway.wrap(native);
+    let session = "", turn = "";
+    const timeout = setTimeout(() => { if (session) void native.interrupt(session, turn).catch(() => native.close()); }, 60000);
+    try {
+      for (const decision of ["allow", "deny"] as const) {
+        const asks: any[] = [], events: any[] = [];
+        const config = { ...f.config, harness: id, permissions: id === "claude-code" || id === "grok" ? { harness: id, mode: "default" as const } : id === "deepseek-harness" ? { harness: id, sandbox: "workspace-write" as const, approval: "ask" as const } : { harness: id, permission: { bash: "ask" as const } } };
+        const result = await harness.execute({ workspace: f.directory, isolatedWorkspace: true, config, instructions: "Use the native command tool.", input: "Run the marker command.", tools: [],
+          onSession: v => { session = v; }, onTurn: v => { turn = v; }, onEvent: e => events.push(e), onTool: async () => { throw Error("Unexpected Team tool"); },
+          onPermission: async request => { asks.push(request); return decision; } });
+        writeFileSync(path.join(process.cwd(), ".local", `native-permission-${id}-${decision}.json`), JSON.stringify({ asks, result, events }, null, 2));
+        assert.equal(result.status, id === "grok" && decision === "deny" ? "interrupted" : "completed", JSON.stringify(result)); assert.equal(asks.length, 1, JSON.stringify(result));
+        assert.ok(asks[0].nativeId); assert.ok(JSON.stringify(asks[0]).includes("NATIVE_PERMISSION_42"));
+        const commands = events.filter(e => e.type === "execution.item").map(e => e.data);
+        if (decision === "allow") assert.ok(commands.some(e => e.nativeOutcome === "succeeded" && e.aggregatedOutput.includes("NATIVE_PERMISSION_42")));
+        else assert.ok(!commands.some(e => e.nativeOutcome === "succeeded"));
+      }
+      assert.equal(native.resources().length, 0);
+    } finally { clearTimeout(timeout); await native.close(); if (old === undefined) delete process.env.TEAM_HARNESS_HOME; else process.env.TEAM_HARNESS_HOME = old; await f.close(); }
+  });
+}
+
+for (const id of ["pi", "deepseek-harness", "grok", "opencode", "claude-code"] as const) {
+  test(`installed ${id} cancellation reclaims its running native command`, { skip: process.env.TEAM_NATIVE_CANCEL_TEST !== "1", timeout: 60000 }, async () => {
+    const f = await setup((body, res) => {
+      if (!body.tools?.length || body.input.some((v: any) => v.type === "function_call_output")) { respond(res, body.model, "Command observation"); return; }
+      const tool = body.tools.find((v: any) => ["Bash", "bash", "pwsh", "powershell", "run_terminal_cmd", "run_terminal_command"].includes(v.name));
+      if (!tool) { respond(res, body.model, "Auxiliary fixture response"); return; }
+      const properties = tool.parameters?.properties ?? {};
+      const values = { command: `node -e "require('node:fs').writeFileSync('cancel.pid',String(process.pid));setInterval(()=>{},1000)"`, description: "Wait for cancellation", explanation: "Wait for cancellation", timeout: 60000, timeoutMs: 60000, is_background: false, run_in_background: false };
+      respond(res, body.model, { name: tool.name, arguments: Object.fromEntries(Object.entries(values).filter(([key]) => key in properties)) });
+    });
+    const old = process.env.TEAM_HARNESS_HOME; process.env.TEAM_HARNESS_HOME = path.join(f.directory, "sessions");
+    const native = new NativeHarness(id), harness = f.gateway.wrap(native), events: any[] = [];
+    let session = "", turn = "", ended = false, pid = 0;
+    const request = harness.execute({ workspace: f.directory, isolatedWorkspace: true, config: { ...f.config, harness: id }, instructions: "Run the assigned command in the foreground.", input: "Run the command and wait for it.", tools: [],
+      onSession: value => { session = value; }, onTurn: value => { turn = value; }, onTool: async () => { throw Error("Unexpected Team tool"); }, onEvent: event => events.push(event) }).finally(() => { ended = true; });
+    try {
+      const file = path.join(f.directory, "cancel.pid"), deadline = Date.now() + 40000;
+      while (!existsSync(file) && !ended && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+      assert.ok(existsSync(file), "The native command must start before cancellation");
+      pid = Number(readFileSync(file, "utf8")); assert.ok(pid > 0); process.kill(pid, 0);
+      await native.interrupt(session, turn);
+      const result = await request;
+      writeFileSync(path.join(process.cwd(), ".local", `native-cancel-${id}.json`), JSON.stringify({ result, pid, events }, null, 2));
+      assert.equal(result.status, "interrupted", JSON.stringify(result));
+      for (let i = 0; i < 50; i++) { try { process.kill(pid, 0); } catch { break; } await new Promise(resolve => setTimeout(resolve, 50)); }
+      assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+      assert.ok(events.some(e => e.type === "execution.item" && ["cancelled", "failed"].includes(e.data.nativeOutcome)));
+      assert.equal(native.resources().length, 0); assert.deepEqual(f.gateway.state(), { routes: 0, requests: 0 });
+    } finally { await native.close(); await request.catch(() => {}); if (old === undefined) delete process.env.TEAM_HARNESS_HOME; else process.env.TEAM_HARNESS_HOME = old; await f.close(); }
+  });
+}

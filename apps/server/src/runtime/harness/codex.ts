@@ -1,4 +1,3 @@
-import { validateNativePermissions } from "./permissions.js";
 import { codexPermissionOptions } from "../permission-options.js";
 import { productVersion } from "../../version.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -17,6 +16,7 @@ import { deviceEntry } from "./device-tools.js";
 import { preflight, probeCodexExecution, type PreflightInput } from "./preflight.js";
 import { prepareExecutionEnvironment } from "./execution-environment.js";
 import { contextObservation } from "../context-budget.js";
+import { readOnlyPermissions, validateNativePermissions, policyFor } from "./permissions.js";
 
 type Obj = Record<string, any>;
 type Pending = {
@@ -31,6 +31,7 @@ type Execution = {
   phases?: Map<string, string>;
   turnId?: string;
   commandStarts?: Map<string, string>;
+  permissionAbort: AbortController;
 };
 
 const reviewPermissionProfile = "teamswarm-review";
@@ -360,8 +361,10 @@ export class CodexHarness implements Harness {
       pending.reject(new HarnessTransportError(error.message));
     }
     this.pending.clear();
-    for (const execution of this.executions.values())
+    for (const execution of this.executions.values()) {
+      execution.permissionAbort.abort();
       execution.resolve({ status: "unknown", text: "", error: error.message });
+    }
     this.executions.clear();
   }
   private receive(message: Obj): void {
@@ -496,6 +499,7 @@ export class CodexHarness implements Harness {
       const turn = params.turn ?? {};
       if (execution.turnId && turn.id !== execution.turnId) return;
       this.executions.delete(params.threadId);
+      execution.permissionAbort.abort();
       execution.resolve({
         status: ["completed", "interrupted"].includes(turn.status)
           ? turn.status
@@ -529,12 +533,13 @@ export class CodexHarness implements Harness {
         // Approval cannot override a review or shared-file ownership boundary.
         const bounded = !request || request.config.access === "read-only" ||
           (request.config.permissions?.harness === "codex" && request.config.permissions.sandbox === "read-only") || !!request.workspaceBoundary || !!request.verificationDirectory;
-        const accepted = !bounded && !!request.config.permissions &&
-          (await request.onPermission?.({ nativeId: String(message.id), tool: message.method, input: message.params ?? {} })) === "allow";
+        const accepted = !execution?.permissionAbort.signal.aborted && !bounded && request.config.permissions?.approvalPolicy !== "never" && !!request.config.permissions &&
+          (await request.onPermission?.({ nativeId: String(message.params?.itemId ?? message.id), tool: message.method, input: message.params ?? {}, reason: message.params?.reason }, execution?.permissionAbort.signal)) === "allow";
+        const liveAccepted = accepted && !execution?.permissionAbort.signal.aborted && this.executions.get(message.params?.threadId) === execution;
         result = message.method === "item/permissions/requestApproval"
-          ? { permissions: accepted ? (message.params?.permissions ?? {}) : {}, scope: "turn" }
-          : { decision: accepted ? "accept" : "decline" };
-        request?.onEvent({ type: accepted ? "approval.accepted" : "approval.denied", data: { method: message.method } });
+          ? { permissions: liveAccepted ? (message.params?.permissions ?? {}) : {}, scope: "turn" }
+          : { decision: liveAccepted ? "accept" : "decline" };
+        request?.onEvent({ type: liveAccepted ? "approval.accepted" : "approval.denied", data: { method: message.method } });
       } else if (message.method === "item/tool/requestUserInput") {
         result = { answers: {} };
         execution?.request.onEvent({
@@ -671,12 +676,12 @@ export class CodexHarness implements Harness {
   }
   private async executeTurn(request: HarnessRequest): Promise<HarnessResult> {
     this.validateConfig(request.config);
+    validateNativePermissions(request.config);
     if (!request.modelRoute) await this.refreshCredential(request.config.credentialEnv);
     await this.open();
     this.releaseObserver = request.onEvent;
     request.onEvent({ type: "resource.acquired", data: { id: this.resourceId, pid: this.child?.pid, scope: "harness" } });
-    const c = request.workspaceBoundary || (request.config.permissions?.harness === "codex" && request.config.permissions.sandbox === "read-only")
-      ? { ...request.config, access: "read-only" as const } : request.config;
+    const c = request.workspaceBoundary || (request.config.permissions?.harness === "codex" && request.config.permissions.sandbox === "read-only") ? readOnlyPermissions(request.config) : request.config;
     const config: Obj = {
       "features.multi_agent": false,
       "features.memories": false,
@@ -729,8 +734,8 @@ export class CodexHarness implements Harness {
       cwd: request.workspace,
       model,
       modelProvider: c.baseUrl ? "teamswarm" : c.provider,
-      approvalPolicy: c.permissions?.harness === "codex" ? c.permissions.approvalPolicy : "never",
-      ...(verificationDirectory ? { permissions: reviewPermissionProfile } : { sandbox: (c.permissions?.harness === "codex" && c.permissions.sandbox === "danger-full-access") && c.access === "workspace-write" ? "danger-full-access" : c.access }),
+      approvalPolicy: c.permissions?.harness === "codex" ? policyFor(c, "codex")!.approvalPolicy : "never",
+      ...(verificationDirectory ? { permissions: reviewPermissionProfile } : { sandbox: c.permissions?.harness === "codex" ? policyFor(c, "codex")!.sandbox ?? c.access : c.access }),
       config,
       developerInstructions: request.instructions + (verificationDirectory
         ? `\nIndependent review sandbox: project files are read-only. A prepared execution environment is ready. Run executable checks through this command prefix: ${environment!.commandPrefix.map(p => "'" + p.replaceAll("'", "''") + "'").join(" ")} (in PowerShell prepend &), followed by the executable and its arguments. For Node checks use ${JSON.stringify(process.execPath)} as the executable. This launcher sets TEMP, TMP and TMPDIR to the granted scratch directory, disables first-run telemetry, and preserves the native sandbox. ${environment!.linkFixtures ? "Real hard-link and directory-link fixtures are available in TEAMSWARM_LINK_FIXTURES (hardlink/peer.md, hardlink/alias.md, junction/linked, outside). They are local to this attempt. If a rerun needs fresh links after a check consumed them, call team_execution_environment and use its returned prefix." : ""} Network access is limited to loopback test services. Do not manually prepare environment variables, create fixture links, change source, or start a second environment.\n`
@@ -824,7 +829,7 @@ export class CodexHarness implements Harness {
     if (this.stopped) return { status: "interrupted", text: "", error: "Harness closed before the native turn was started." };
     request.onDispatch?.({ priorTurnIds });
     return new Promise<HarnessResult>((resolve, reject) => {
-      const execution: Execution = { request, resolve, text: new Map() };
+      const execution: Execution = { request, resolve, text: new Map(), permissionAbort: new AbortController() };
       this.executions.set(sessionId, execution);
       void this.rpc("turn/start", {
         threadId: sessionId,
@@ -843,6 +848,7 @@ export class CodexHarness implements Harness {
             resolve({ status: "unknown", text: "", error: error.message });
           } else {
             this.executions.delete(sessionId);
+            execution.permissionAbort.abort();
             resolve({
               status: "failed",
               text: "",
@@ -857,6 +863,7 @@ export class CodexHarness implements Harness {
     });
   }
   async interrupt(sessionId: string, turnId: string): Promise<void> {
+    this.executions.get(sessionId)?.permissionAbort.abort();
     await this.open();
     await this.rpc("turn/interrupt", { threadId: sessionId, turnId });
   }
@@ -874,6 +881,7 @@ export class CodexHarness implements Harness {
         error:
           "Native history does not establish a terminal state for this turn.",
       };
+    this.executions.get(sessionId)?.permissionAbort.abort();
     this.executions.delete(sessionId);
     return {
       status: turn.status,

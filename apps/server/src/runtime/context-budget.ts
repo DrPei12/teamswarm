@@ -78,6 +78,7 @@ export function planContext(
     estimatedSessionTokens?: number;
     overheadTokens?: number;
     nativeCompaction?: boolean;
+    requiredInputTokens?: number;
   } = {},
 ): ContextBudget {
   const observed = positive(options.observation?.contextWindowTokens);
@@ -128,9 +129,9 @@ export function planContext(
       0,
       Math.floor(
         Math.min(
-          fresh * 0.6,
+          Math.min(fresh, Math.max(fresh * 0.6, options.requiredInputTokens ?? 0)),
           nativeCompaction && remaining < fresh * 0.15
-            ? fresh * 0.6
+            ? fresh
             : remaining,
         ),
       ),

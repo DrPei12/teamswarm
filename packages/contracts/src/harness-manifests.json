@@ -1,0 +1,717 @@
+[
+  {
+    "schemaVersion": 1,
+    "id": "grok",
+    "name": "Grok",
+    "packageVersion": "1.0.0",
+    "driver": "acp",
+    "runtime": {
+      "package": "@xai-official/grok",
+      "version": "1.0.62",
+      "entries": [
+        "@xai-official/grok/bin/grok-bootstrap.js"
+      ],
+      "testedVersions": [
+        "1.0.62"
+      ],
+      "homepage": "https://github.com/xai-org/grok-build/releases"
+    },
+    "models": {
+      "protocols": [
+        "chat-completions",
+        "responses",
+        "anthropic-messages"
+      ],
+      "preferredProtocol": "chat-completions",
+      "chatgptProtocol": "chat-completions",
+      "nativeLogin": true,
+      "nativeEffort": null,
+      "thinkingFormats": {},
+      "outputBudget": false,
+      "contextWindow": false
+    },
+    "permissions": {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string",
+            "const": "grok"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "default",
+              "acceptEdits",
+              "plan",
+              "dontAsk",
+              "auto",
+              "bypassPermissions"
+            ]
+          }
+        },
+        "required": [
+          "harness",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "readOnly": {}
+    },
+    "session": {
+      "resume": true
+    },
+    "description": {
+      "execution": {
+        "tools": [
+          "read_file",
+          "grep",
+          "list_dir",
+          "write",
+          "search_replace",
+          "run_terminal_cmd"
+        ],
+        "runtime": "Grok ACP",
+        "strategy": "Grok owns the agent profile, native command execution and its ACP tool lifecycle."
+      },
+      "permissions": {
+        "options": {
+          "mode": [
+            "default",
+            "acceptEdits",
+            "plan",
+            "dontAsk"
+          ]
+        },
+        "behavior": "The ACP agent profile controls the effective native mode. Permission questions use ACP request_permission and its one-time response options."
+      },
+      "results": {
+        "source": "ACP tool_call and tool_call_update",
+        "fields": [
+          "toolCallId",
+          "rawInput",
+          "rawOutput",
+          "content",
+          "status"
+        ],
+        "cancellation": "ACP session/cancel and owned process reconciliation"
+      },
+      "isolation": {
+        "default": "Native permissions and tool selection; no TeamSwarm OS sandbox is added"
+      }
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "id": "codex",
+    "name": "Codex",
+    "packageVersion": "1.0.0",
+    "driver": "codex-app-server",
+    "runtime": {
+      "package": "@openai/codex",
+      "version": "0.163.0",
+      "entries": [
+        "@openai/codex/bin/codex.js"
+      ],
+      "testedVersions": [
+        "0.163.0"
+      ],
+      "homepage": "https://github.com/openai/codex/releases"
+    },
+    "models": {
+      "protocols": [
+        "responses"
+      ],
+      "preferredProtocol": "responses",
+      "chatgptProtocol": null,
+      "nativeLogin": true,
+      "nativeEffort": {
+        "values": "any"
+      },
+      "thinkingFormats": {},
+      "outputBudget": false,
+      "contextWindow": false
+    },
+    "permissions": {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string",
+            "const": "codex"
+          },
+          "approvalPolicy": {
+            "type": "string",
+            "enum": [
+              "untrusted",
+              "never",
+              "on-request"
+            ]
+          },
+          "sandbox": {
+            "type": "string",
+            "enum": [
+              "read-only",
+              "workspace-write",
+              "danger-full-access"
+            ]
+          }
+        },
+        "required": [
+          "harness",
+          "approvalPolicy"
+        ],
+        "additionalProperties": false
+      },
+      "readOnly": {
+        "set": {
+          "sandbox": "read-only"
+        }
+      }
+    },
+    "session": {
+      "resume": true
+    },
+    "description": {
+      "execution": {
+        "tools": [
+          "native shell",
+          "native file tools"
+        ],
+        "runtime": "Codex app-server",
+        "strategy": "Codex owns its tool loop, parallelism, command sessions and output policy."
+      },
+      "permissions": {
+        "options": {
+          "approvalPolicy": [
+            "never",
+            "on-request"
+          ],
+          "sandbox": [
+            "read-only",
+            "workspace-write"
+          ]
+        },
+        "defaults": "approvalPolicy=never; sandbox follows execution access",
+        "behavior": "approvalPolicy=never denies escalation without prompting; on-request sends native approval requests to the user. Workspace-write applies to the assigned working directory.",
+        "network": "Native sandbox configuration controls network access. The separate Codex review profile grants only loopback test services and its scratch directory."
+      },
+      "results": {
+        "source": "app-server commandExecution items",
+        "fields": [
+          "native item ID",
+          "command",
+          "aggregated output",
+          "exit code",
+          "status"
+        ],
+        "cancellation": "turn/interrupt followed by owned process reconciliation"
+      },
+      "isolation": {
+        "win32": "Codex native Windows sandbox; validate its reported boundary at session start",
+        "linux": "Codex native Linux sandbox",
+        "darwin": "Codex native macOS sandbox"
+      }
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "id": "claude-code",
+    "name": "Claude Code",
+    "packageVersion": "1.0.0",
+    "driver": "stream-json",
+    "runtime": {
+      "package": "@anthropic-ai/claude-code",
+      "version": "2.1.274",
+      "entries": [
+        "@anthropic-ai/claude-code/bin/claude.exe",
+        "@anthropic-ai/claude-code/cli.js"
+      ],
+      "testedVersions": [
+        "2.1.274"
+      ],
+      "homepage": "https://github.com/anthropics/claude-code/releases"
+    },
+    "models": {
+      "protocols": [
+        "anthropic-messages"
+      ],
+      "preferredProtocol": "anthropic-messages",
+      "chatgptProtocol": null,
+      "nativeLogin": true,
+      "nativeEffort": {
+        "values": "any",
+        "nativeLoginOnly": true
+      },
+      "thinkingFormats": {},
+      "outputBudget": false,
+      "contextWindow": false
+    },
+    "permissions": {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string",
+            "const": "claude-code"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "default",
+              "acceptEdits",
+              "plan",
+              "dontAsk",
+              "auto",
+              "bypassPermissions"
+            ]
+          },
+          "allow": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            }
+          },
+          "deny": {
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            }
+          }
+        },
+        "required": [
+          "harness",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "readOnly": {}
+    },
+    "session": {
+      "resume": true
+    },
+    "description": {
+      "execution": {
+        "tools": [
+          "Read",
+          "Glob",
+          "Grep",
+          "Write",
+          "Edit",
+          "Bash"
+        ],
+        "runtime": "Claude Code native CLI",
+        "strategy": "Claude Code owns Bash execution, tool scheduling, result truncation and session history."
+      },
+      "permissions": {
+        "options": {
+          "mode": [
+            "default",
+            "acceptEdits",
+            "plan",
+            "dontAsk"
+          ],
+          "allow": "Native Claude Code permission rules",
+          "deny": "Native Claude Code permission rules"
+        },
+        "behavior": "default asks for actions requiring approval; acceptEdits approves native edits; plan keeps the native planning restrictions; dontAsk rejects calls that would prompt. Explicit allow/deny rules retain Claude Code semantics."
+      },
+      "results": {
+        "source": "native tool_use/tool_result messages",
+        "fields": [
+          "tool use ID",
+          "tool input",
+          "native output",
+          "native error status",
+          "exit code when reported"
+        ],
+        "cancellation": "native interruption and owned descendant cleanup"
+      },
+      "isolation": {
+        "win32": "Native tool permissions; Claude Code Bash sandbox is unavailable on native Windows",
+        "linux": "Claude Code sandbox is optional and depends on native configuration",
+        "darwin": "Claude Code sandbox is optional and depends on native configuration"
+      }
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "id": "pi",
+    "name": "Pi",
+    "packageVersion": "1.0.0",
+    "driver": "sdk",
+    "runtime": {
+      "package": "@earendil-works/pi-coding-agent",
+      "version": "1.3.0",
+      "entries": [
+        "@earendil-works/pi-coding-agent/dist/index.js"
+      ],
+      "testedVersions": [
+        "1.3.0"
+      ],
+      "homepage": "https://github.com/earendil-works/pi-mono/releases"
+    },
+    "models": {
+      "protocols": [
+        "chat-completions",
+        "responses",
+        "anthropic-messages"
+      ],
+      "preferredProtocol": "chat-completions",
+      "chatgptProtocol": null,
+      "nativeLogin": false,
+      "nativeEffort": {
+        "values": [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "protocols": [
+          "chat-completions"
+        ]
+      },
+      "thinkingFormats": {
+        "qwen": [
+          "chat-completions"
+        ]
+      },
+      "outputBudget": true,
+      "contextWindow": true
+    },
+    "permissions": {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string",
+            "const": "pi"
+          },
+          "tools": {
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "read",
+                "grep",
+                "find",
+                "ls",
+                "write",
+                "edit",
+                "bash",
+                "powershell"
+              ]
+            }
+          }
+        },
+        "required": [
+          "harness",
+          "tools"
+        ],
+        "additionalProperties": false
+      },
+      "readOnly": {
+        "exclude": {
+          "tools": [
+            "write",
+            "edit"
+          ]
+        }
+      }
+    },
+    "session": {
+      "resume": true
+    },
+    "description": {
+      "execution": {
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "write",
+          "edit",
+          "bash",
+          "powershell"
+        ],
+        "runtime": "Pi SDK",
+        "strategy": "Pi keeps its own short tool loop, compaction, shell implementation and output policy. Simple work does not acquire an extra executor or mandatory command probe."
+      },
+      "permissions": {
+        "options": {
+          "tools": [
+            "read",
+            "grep",
+            "find",
+            "ls",
+            "write",
+            "edit",
+            "bash",
+            "powershell"
+          ]
+        },
+        "behavior": "Pi has a native tool registry rather than Claude-style permission modes. Select its actual tools; tools omitted from the registry are unavailable."
+      },
+      "results": {
+        "source": "SDK tool_execution_start/tool_execution_end",
+        "fields": [
+          "toolCallId",
+          "toolName",
+          "args",
+          "native result",
+          "exit_code when reported"
+        ],
+        "cancellation": "SDK abort and owned process cleanup"
+      },
+      "isolation": {
+        "default": "Tool selection; Pi's native file and shell tools run with the local account's OS access"
+      }
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "id": "deepseek-harness",
+    "name": "DeepSeek Harness",
+    "packageVersion": "1.0.0",
+    "driver": "sdk",
+    "runtime": {
+      "package": "@deepseek-ai/dsh",
+      "version": "0.2.0-rc.2",
+      "entries": [
+        "@deepseek-ai/dsh/lib/bin.js"
+      ],
+      "testedVersions": [
+        "0.2.0-rc.2"
+      ],
+      "homepage": "https://github.com/deepseek-ai/DeepSeek-Harness"
+    },
+    "models": {
+      "protocols": [
+        "anthropic-messages"
+      ],
+      "preferredProtocol": "anthropic-messages",
+      "chatgptProtocol": null,
+      "nativeLogin": false,
+      "nativeEffort": null,
+      "thinkingFormats": {},
+      "outputBudget": false,
+      "contextWindow": false
+    },
+    "permissions": {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string",
+            "const": "deepseek-harness"
+          },
+          "sandbox": {
+            "type": "string",
+            "enum": [
+              "read-only",
+              "workspace-write"
+            ]
+          },
+          "approval": {
+            "type": "string",
+            "enum": [
+              "ask",
+              "never"
+            ]
+          }
+        },
+        "required": [
+          "harness",
+          "sandbox",
+          "approval"
+        ],
+        "additionalProperties": false
+      },
+      "readOnly": {
+        "set": {
+          "sandbox": "read-only"
+        }
+      }
+    },
+    "session": {
+      "resume": false
+    },
+    "description": {
+      "execution": {
+        "tools": [
+          "native file tools",
+          "bash",
+          "pwsh",
+          "native jobs"
+        ],
+        "runtime": "DeepSeek Harness SDK profile",
+        "strategy": "DeepSeek Harness owns its plugin composition, command jobs and session events."
+      },
+      "permissions": {
+        "options": {
+          "sandbox": [
+            "read-only",
+            "workspace-write"
+          ],
+          "approval": [
+            "ask",
+            "never"
+          ]
+        },
+        "behavior": "Native sandbox-policy selects the directory boundary. The never policy rejects escalation requests without prompting; ask uses the composed one-time answerer."
+      },
+      "results": {
+        "source": "native session tool events",
+        "fields": [
+          "call ID",
+          "tool input",
+          "native result",
+          "exitCode when reported"
+        ],
+        "cancellation": "SDK shutdown and owned process reconciliation",
+        "resume": "The installed SDK profile requires a fresh session for a new execution"
+      },
+      "isolation": {
+        "win32": "The installed pwsh backend reports partial enforcement. Native sandbox-policy handles requested modes and one-time escalation; use a verified stronger backend for OS confinement.",
+        "default": "Native dsh sandbox-policy and platform shell backend; inspect the installed backend before requiring OS confinement"
+      }
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "id": "opencode",
+    "name": "OpenCode",
+    "packageVersion": "1.0.0",
+    "driver": "acp",
+    "runtime": {
+      "package": "opencode-ai",
+      "version": "1.18.35",
+      "entries": [
+        "opencode-ai/bin/opencode.exe",
+        "opencode-ai/bin/opencode"
+      ],
+      "testedVersions": [
+        "1.18.35"
+      ],
+      "homepage": "https://github.com/anomalyco/opencode/releases"
+    },
+    "models": {
+      "protocols": [
+        "chat-completions",
+        "responses",
+        "anthropic-messages"
+      ],
+      "preferredProtocol": "chat-completions",
+      "chatgptProtocol": null,
+      "nativeLogin": false,
+      "nativeEffort": null,
+      "thinkingFormats": {},
+      "outputBudget": true,
+      "contextWindow": true
+    },
+    "permissions": {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string",
+            "const": "opencode"
+          },
+          "permission": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "ask",
+                    "deny"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "enum": [
+                      "allow",
+                      "ask",
+                      "deny"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "harness",
+          "permission"
+        ],
+        "additionalProperties": false
+      },
+      "readOnly": {}
+    },
+    "session": {
+      "resume": true
+    },
+    "description": {
+      "execution": {
+        "tools": [
+          "read",
+          "glob",
+          "grep",
+          "edit",
+          "bash"
+        ],
+        "runtime": "OpenCode native session",
+        "strategy": "OpenCode owns tool scheduling, Bash execution and native session continuation."
+      },
+      "permissions": {
+        "options": {
+          "permission": "Native OpenCode tool and pattern rules: allow, ask or deny"
+        },
+        "behavior": "Rules retain OpenCode matching and precedence. Native ask requests require a live permission reply channel."
+      },
+      "results": {
+        "source": "native ACP tool updates",
+        "fields": [
+          "toolCallId",
+          "rawInput",
+          "rawOutput",
+          "content",
+          "status"
+        ],
+        "cancellation": "native session abort and owned process cleanup"
+      },
+      "isolation": {
+        "default": "Native permission rules; no TeamSwarm OS sandbox is added"
+      }
+    }
+  }
+]

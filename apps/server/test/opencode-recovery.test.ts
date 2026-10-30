@@ -30,7 +30,7 @@ test("OpenCode length is a durable failure; tool-calls alone retain uncertain ow
     ]) {
       writeFileSync(
         entry,
-        `console.log(JSON.stringify({type:'step_finish',sessionID:'ses_fixture',part:{reason:${JSON.stringify(reason)},tokens:{input:1,output:2}}}));`,
+        `import{createInterface}from'node:readline';const emit=v=>console.log(JSON.stringify(v));createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.method==='initialize')emit({jsonrpc:'2.0',id:m.id,result:{protocolVersion:1,agentCapabilities:{}}});else if(m.method==='session/new')emit({jsonrpc:'2.0',id:m.id,result:{sessionId:'ses_fixture'}});else if(m.method==='session/prompt'){const reason=${JSON.stringify(reason)};if(reason==='tool-calls'){emit({jsonrpc:'2.0',method:'session/update',params:{sessionId:'ses_fixture',update:{sessionUpdate:'tool_call',toolCallId:'call',title:'pending',kind:'execute',status:'in_progress'}}});setTimeout(()=>process.exit(0),20);}else emit({jsonrpc:'2.0',id:m.id,result:{stopReason:reason==='length'?'max_tokens':'end_turn'}});}});`,
       );
       let session = "",
         turn = "";

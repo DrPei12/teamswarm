@@ -7,6 +7,7 @@ import { ProjectHistory } from "./project-history.js";
 import { executionConfig, key } from "./validation.js";
 import { executionObservation } from "./resource-planning.js";
 import { CapabilityStore } from "./capabilities.js";
+import { harnessDescription } from "./harness/description.js";
 import type {
   Attempt,
   ExecutionConfig,
@@ -173,11 +174,20 @@ export class TeamCatalog {
     return {
       id,
       capabilities: harness.capabilities,
+      description: harnessDescription(harness, row ? JSON.parse(String(row.data)) : null),
       observation: row ? JSON.parse(String(row.data)) : null,
       availability: row ? "last_observation" : "not_checked",
       guidance:
         "Use observed capabilities and task requirements. Installation does not prove provider access, quota or task quality.",
     };
+  }
+  harnessIndex(teamId: string) {
+    const enabled = new Set(this.capabilities.read(teamId).enabledHarnesses);
+    return [...this.harnesses.keys()].filter(id => enabled.has(id)).map(id => {
+      const { description } = this.harness(id);
+      return { id, name: description.name, summary: description.summary, ref: description.ref, revision: description.revision,
+        sections: Object.keys(description.sections).map(section => `${description.ref}/${section}`) };
+    });
   }
   scoped(teamId: string, branchId: string) {
     this.history.branch(teamId, branchId);
@@ -227,7 +237,12 @@ export class TeamCatalog {
     const scope = this.scoped(teamId, branchId);
     let items: unknown[];
     if (input.kind === "harnesses")
-      items = [...this.harnesses.keys()].map((id) => ({...this.harness(id), enabled: this.capabilities.read(teamId).enabledHarnesses.includes(id)}));
+      items = [...this.harnesses.keys()].map((id) => {
+        const item = this.harness(id), d = item.description;
+        return { id, name: d.name, summary: d.summary, ref: d.ref, revision: d.revision,
+          sections: Object.keys(d.sections).map(section => `${d.ref}/${section}`), capabilities: item.capabilities,
+          enabled: this.capabilities.read(teamId).enabledHarnesses.includes(id) };
+      });
     else if (input.kind === "models") items = this.models(teamId);
     else if (input.kind === "runs")
       items = scope.runs.map((r) => ({

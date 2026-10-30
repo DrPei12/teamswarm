@@ -914,6 +914,11 @@ test("review owns a read lease and stale input versions never dispatch to a down
       [],
       [],
     );
+    // This case exercises the explicit shared-workspace read lease. Private
+    // review copies do not block another member's independent working copy.
+    for (const item of [target, review, pendingWriter]) {
+      item.workspaceMode = "shared"; store.save("works", item);
+    }
     await until(() => !!finishReview);
     await pause(600);
     assert.equal(

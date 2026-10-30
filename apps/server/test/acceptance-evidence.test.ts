@@ -194,7 +194,7 @@ test("review instructions and artifact revisions invalidate old execution eviden
       await assert.rejects(t.accept(review.id, source.id, t.results([late])), { code: "review_check_outdated" });
     }
     const fresh = t.command(review);
-    writeFileSync(path.join(t.workspace, source.file), "Changed after check");
+    writeFileSync(path.join(t.service.runtime.store.workspace(t.state(source.id)), source.file), "Changed after check");
     await assert.rejects(t.accept(review.id, source.id, t.results([fresh])), { code: "artifact_changed" });
     const target = t.state(source.id);
     target.artifactIds = t.service.runtime.store.capture(target, "New submission", [source.file]).map(item => item.id);

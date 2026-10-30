@@ -1,3 +1,5 @@
+import { harnessManifest, registerHarnessManifest, type HarnessManifest } from "@team/contracts/harness-catalog";
+import { validateManifest } from "./manifest.js";
 import { spawn } from "node:child_process";
 import {
   mkdirSync,
@@ -26,17 +28,6 @@ const repository = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../../..",
 );
-const catalog = JSON.parse(
-  readFileSync(path.join(repository, "config/harnesses.json"), "utf8"),
-) as Record<string, { package: string; version: string }>;
-const websites: Record<string, string> = {
-  grok: "https://github.com/xai-org/grok-build/releases",
-  codex: "https://github.com/openai/codex/releases",
-  "claude-code": "https://github.com/anthropics/claude-code/releases",
-  pi: "https://github.com/earendil-works/pi-mono/releases",
-  opencode: "https://github.com/anomalyco/opencode/releases",
-  "deepseek-harness": "https://github.com/deepseek-ai/DeepSeek-Harness",
-};
 export function versionFrom(text: string) {
   return text.match(/\b\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?\b/)?.[0] ?? null;
 }
@@ -135,6 +126,7 @@ type Job = {
   error?: string;
   uncertain?: boolean;
   completedAt?: number;
+  manifest?: HarnessManifest;
 };
 function readJob(file: string): Job | null {
   try {
@@ -165,9 +157,9 @@ export class HarnessManagement {
     private request = fetch,
   ) {}
   private definition(id: string) {
-    if (!Object.hasOwn(catalog, id))
+    if (!harnessManifest(id)?.runtime)
       throw badRequest("unknown_harness", "Unknown harness.");
-    return catalog[id];
+    return harnessManifest(id)!.runtime!;
   }
   private entry(id: string) {
     try {
@@ -243,7 +235,7 @@ export class HarnessManagement {
           : null,
       updateError,
       checkedAt: latest ? new Date(latest.checkedAt).toISOString() : null,
-      releaseUrl: websites[id],
+      releaseUrl: definition.homepage,
       package: definition.package,
       installVersion: latest?.version ?? definition.version,
       canInstall:
@@ -318,6 +310,7 @@ export class HarnessManagement {
     const job: Job = {
       id: randomUUID(),
       harness: id,
+      manifest: harnessManifest(id),
       state: "installing",
       version: this.latest.get(id)?.version ?? definition.version,
       prefix,
@@ -377,11 +370,12 @@ if (
   const lock = path.join(directory, "device-install.lock"),
     file = path.join(directory, id + ".json");
   const job = readJob(lock);
+  if (job?.manifest && !harnessManifest(id)) registerHarnessManifest(validateManifest(job.manifest));
   if (
     !job ||
     job.id !== requestId ||
     job.harness !== id ||
-    !Object.hasOwn(catalog, id)
+    !harnessManifest(id)?.runtime
   )
     throw new Error("Invalid installation request.");
   job.pid = process.pid;
@@ -405,7 +399,7 @@ if (
         "--no-audit",
         "--no-fund",
         "--registry=https://registry.npmjs.org",
-        catalog[id].package + "@" + job.version,
+        harnessManifest(id)!.runtime!.package + "@" + job.version,
       ],
       300000,
     );

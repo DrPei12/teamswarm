@@ -34,7 +34,7 @@ copy(path.join(root, "teamswarm/licenses"), path.join(target, "licenses/frontend
 copy(path.join(root, "THIRD_PARTY_NOTICES.md"), path.join(target, "licenses/frontend.md"));
 copy(path.join(root, "teamswarm/public/fonts/LICENSE.txt"), path.join(target, "licenses/Inter-LICENSE.txt"));
 const lock = JSON.parse(readFileSync(path.join(root, "package-lock.json"), "utf8"));
-const dependencies = Object.fromEntries(["express", "jsonc-parser", "smol-toml", "yaml", "zod", "@earendil-works/pi-ai", "jose"].map(name => [name,
+const dependencies = Object.fromEntries(["express", "jsonc-parser", "smol-toml", "yaml", "zod", "@earendil-works/pi-ai", "jose", "ajv"].map(name => [name,
   lock.packages["node_modules/" + name]?.version || lock.packages["apps/server/node_modules/" + name]?.version]));
 if (Object.values(dependencies).some(value => !value)) throw new Error("A service dependency is missing from the lockfile.");
 writeFileSync(path.join(target, "package.json"), JSON.stringify({ name: "teamswarm-service", version: identity.version,
@@ -45,6 +45,8 @@ if (!npm) throw new Error("Use npm run desktop:prepare.");
 const result = spawnSync(process.execPath, [npm, "ci", "--omit=dev", "--ignore-scripts", "--no-bin-links", "--no-audit", "--no-fund"],
   { cwd: target, windowsHide: true, stdio: "inherit" });
 if (result.error || result.status !== 0) throw new Error("Service dependency installation failed.");
+copy(path.join(root, "packages/contracts"), path.join(target, "node_modules/@team/contracts"));
+copy(path.join(root, "harness-packages"), path.join(target, "harness-packages"));
 const npmRoot = path.join(root, "node_modules/npm");
 if (JSON.parse(readFileSync(path.join(npmRoot, "package.json"), "utf8")).version !== runtime.npmVersion)
   throw new Error("Packaged npm differs from the pinned runtime.");
