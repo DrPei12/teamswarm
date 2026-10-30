@@ -815,7 +815,9 @@ function ConversationThread({
               {canSend && !work && (
                 <IconButton
                   className="member-composer-help"
-                  label={t("Follow up here. Assign project changes through Host.")}
+                  label={t(
+                    "Follow up here. Assign project changes through Host.",
+                  )}
                   aria-label={t("About member conversations")}
                 >
                   <CircleHelp size={14} />
@@ -845,12 +847,7 @@ function ConversationThread({
             <button
               type="submit"
               className="member-send"
-              disabled={
-                !canSend ||
-                !draft.trim() ||
-                sending ||
-                configuring
-              }
+              disabled={!canSend || !draft.trim() || sending || configuring}
               aria-label={t("Send message")}
             >
               {sending ? (

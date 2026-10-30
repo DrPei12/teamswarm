@@ -71,8 +71,9 @@ export function RuntimeControls({
   const selected = executionConfig
     ? selectedModelChoice(catalog.models, executionConfig)
     : undefined;
-  const efforts =
-    executionConfig?.baseUrl || executionConfig?.credentialEnv
+  const efforts = executionConfig?.chatgptAccountId
+    ? (selected?.reasoningEfforts ?? [])
+    : executionConfig?.baseUrl || executionConfig?.credentialEnv
       ? []
       : supportedEfforts(catalog.inspection, config.model);
   const [saveError, setSaveError] = useState("");

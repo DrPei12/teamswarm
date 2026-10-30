@@ -217,7 +217,6 @@ export async function switchHarness(
     return {
       ...config,
       harness,
-      effort: null,
       thinkingFormat: null,
       maxOutputTokens: null,
       contextWindowTokens: null,

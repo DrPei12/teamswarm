@@ -200,3 +200,20 @@ test("independent subscription choices use their account catalog across Harnesse
     assert.equal(choices[1].name, "saved-unlisted");
   }
 });
+
+test("shared account effort follows the selected model and survives a Harness switch", async () => {
+  const account = { ...connections[3], id: "chatgpt", subscriptionHarness: null,
+    chatgptAccountId: "account-one", models: ["gpt-fixture"] };
+  const reasoningEfforts = [{ reasoningEffort: "low" }, { reasoningEffort: "high" }];
+  const directory = { "chatgpt:account-one": { models: [
+    { model: "gpt-fixture", name: "Account model", reasoningEfforts },
+  ] }, opencode: { capabilities: { reasoningEffort: false }, models: [] } };
+  const selected = executionConfig.parse({ harness: "codex", model: "gpt-fixture", effort: "high", chatgptAccountId: "11111111-1111-4111-8111-111111111111", protocol: "responses" });
+  selected.chatgptAccountId = "account-one";
+  for (const harness of ["codex", "claude-code", "grok", "pi", "opencode", "deepseek-harness"]) {
+    const changed = await switchHarness(selected, harness, [account], resolve);
+    const choices = modelChoices({ ...capabilities, connections: [account] }, directory, harness);
+    assert.equal(changed.effort, "high");
+    assert.deepEqual(selectedModelChoice(choices, changed)?.reasoningEfforts, reasoningEfforts);
+  }
+});

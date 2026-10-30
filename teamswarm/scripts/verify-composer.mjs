@@ -9,6 +9,7 @@ import { createApp } from "../../apps/server/dist/app.js";
 import {
   codexPermissionOptions,
   claudePermissionOptions,
+  openCodePermissionOptions,
 } from "../../apps/server/dist/runtime/permission-options.js";
 
 await mkdir(path.resolve(".local"), { recursive: true });
@@ -32,7 +33,9 @@ const harnesses = [
       ? codexPermissionOptions
       : id === "claude-code"
         ? claudePermissionOptions
-        : { defaultId: "", options: [] };
+        : id === "opencode"
+          ? openCodePermissionOptions
+          : { defaultId: "", options: [] };
   },
   async inspect() {
     return {
@@ -234,11 +237,7 @@ try {
   assert.equal(settings.config.protocol, "anthropic-messages");
   assert.equal(settings.config.baseUrl, "https://secondary.example/anthropic");
   await page.getByRole("button", { name: /^Execution permissions:/ }).click();
-  for (const name of [
-    "Request approval",
-    "Automatic review",
-    "Full access",
-  ])
+  for (const name of ["Request approval", "Automatic review", "Full access"])
     assert.equal(
       await page.getByRole("menuitemradio", { name, exact: true }).count(),
       1,

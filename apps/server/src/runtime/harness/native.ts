@@ -1,4 +1,4 @@
-import { claudePermissionOptions, withDefaultPermissions } from "../permission-options.js";
+import { claudePermissionOptions, openCodePermissionOptions, openCodePermissions, withDefaultPermissions } from "../permission-options.js";
 import { conversationInput } from "./conversation-input.js";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnOwned, confirmOwnedExit } from "./owned-process.js";
@@ -52,7 +52,7 @@ type Active = {
 
 /** Native loops stay in their own executable/SDK. No model-loop emulation here. */
 export class NativeHarness implements Harness {
-  permissionOptions() { return this.id === "claude-code" ? claudePermissionOptions : { defaultId: "", options: [] }; }
+  permissionOptions() { return this.id === "claude-code" ? claudePermissionOptions : this.id === "opencode" ? openCodePermissionOptions : { defaultId: "", options: [] }; }
   readonly capabilities;
   get sessionScope(): string {
     return sessionStoreScope(nativeHome(this.id)) + (this.id === "claude-code" || this.id === "grok" ? ":" + subscriptionScope(this.id) : "") + (this.id === "grok" ? ":acp-profile-v1" : "");
@@ -109,7 +109,7 @@ export class NativeHarness implements Harness {
   }
   validateConfig(config: ExecutionConfig) {
     validateNativePermissions(config);
-    if (config.permissions && this.id !== "claude-code")
+    if (config.permissions && !["claude-code", "opencode"].includes(this.id))
       throw new Error("This Harness does not support configurable approval modes yet.");
     const entry = nativeEntry(this.id);
     if (config.contextWindowTokens != null && !["pi", "opencode"].includes(this.id))
@@ -341,21 +341,7 @@ export class NativeHarness implements Harness {
               },
             },
           },
-          permission: {
-            "*": "deny",
-            read: "allow",
-            glob: "allow",
-            grep: "allow",
-            list: "allow",
-            edit: c.access === "read-only" ? "deny" : "allow",
-            bash: nativeCommands ? "allow" : "deny",
-            ...(c.permissions?.harness === "opencode" ? policyFor(c, "opencode")!.permission : {}),
-            ...(c.access === "read-only" ? { edit: "deny" } : {}),
-            ...(!nativeCommands ? { bash: "deny" } : {}),
-            task: "deny",
-            "teamswarm_*": "allow",
-            external_directory: "deny",
-          },
+          permission: openCodePermissions(c, nativeCommands),
           mcp: {
             teamswarm: { type: "remote", url: bridge.url, enabled: true },
           },
