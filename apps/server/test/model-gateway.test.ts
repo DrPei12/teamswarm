@@ -90,6 +90,7 @@ test("ChatGPT requests use the public stateless protocol and supported tool decl
   assert.equal(payload.store,false);assert.equal(payload.stream,true);assert.equal(payload.previous_response_id,undefined);
   for(const key of ["max_output_tokens","metadata","temperature","top_p","prompt_cache_retention"])assert.equal(payload[key],undefined);
   assert.equal(payload.input[0].type,"additional_tools");assert.equal(payload.input[0].tools[0].name,"Read");
+  assert.equal(payload.input[0].tools[0].strict,false);
   assert.equal(payload.input[1].role,"developer");assert.equal(payload.tools,undefined);
   assert.deepEqual(payload.tool_choice,{type:"function",name:"Read"});assert.ok(payload.include.includes("reasoning.encrypted_content"));
 });
@@ -104,6 +105,7 @@ test("Claude keeps its native tools and Team schemas through the shared ChatGPT 
   const f=await setup((body,res)=>{
     const declarations=body.input.find((v:any)=>v.type==="additional_tools").tools;
     assert.deepEqual(declarations.map((t:any)=>t.name),nativeTools.map(t=>t.name));
+    assert(declarations.every((t:any)=>t.strict===false),"Native optional fields must not be made required by Responses defaults");
     const schema=declarations.find((t:any)=>t.name==="mcp__teamswarm__team_host_note").parameters.properties.topic;
     assert.equal(schema.type,"string");assert.equal(schema.maxLength,120);
     assert.equal(schema.pattern,undefined);assert.match(schema.description,/Letters and numbers/);
@@ -129,6 +131,17 @@ test("Claude keeps its native tools and Team schemas through the shared ChatGPT 
     assert.equal(result.call_id,"call_fixture");assert.equal(result.output,"NATIVE_READ_42");
     lease.release();assert.deepEqual(f.gateway.state(),{routes:0,requests:0});
   }finally{globalThis.fetch=originalFetch;await f.close();}
+});
+
+test("Responses preserves native optional fields and explicit strict declarations",()=>{
+  const schema={type:"object",properties:{file_path:{type:"string"},pages:{type:"string"}},required:["file_path"]};
+  const payload:any={tools:[{type:"function",name:"Read",parameters:schema},{type:"function",name:"Strict",parameters:schema}]};
+  requestOptions("responses",{tools:[{name:"Read",input_schema:schema},{type:"function",function:{name:"Strict",parameters:schema,strict:true}}]},payload);
+  const converted=chatGPTPayload(payload).input[0].tools;
+  assert.equal(converted[0].strict,false);assert.equal(converted[1].strict,true);
+  assert.deepEqual(converted[0].parameters.required,["file_path"]);
+  assert.deepEqual(converted[0].parameters.properties.pages,{type:"string"});
+  assert.deepEqual(schema.required,["file_path"]);
 });
 
 test("structured response requests retain schemas across protocols",()=>{
