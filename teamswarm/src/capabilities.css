@@ -496,6 +496,7 @@
 .cap-connection-type,
 .cap-account-options {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 .cap-account-panel {

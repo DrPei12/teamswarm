@@ -872,7 +872,7 @@ function ConnectionEditor({
                     setError("");
                   }}
                 >
-                  {a.name}
+                  {t(a.name)}
                   {(draft.subscriptionHarness ?? "chatgpt") === a.id && (
                     <Check size={14} />
                   )}
