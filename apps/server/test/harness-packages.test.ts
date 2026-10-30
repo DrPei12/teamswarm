@@ -15,7 +15,7 @@ import { codexPermissionOptions, claudePermissionOptions, withDefaultPermissions
 
 test('permission menus and native defaults use the agreed modes without an extra deny choice', () => {
   assert.deepEqual(codexPermissionOptions.options.map(o => o.id), ['manual', 'auto', 'full-access']);
-  assert.deepEqual(claudePermissionOptions.options.map(o => o.id), ['manual', 'auto', 'full-access', 'accept-edits']);
+  assert.deepEqual(claudePermissionOptions.options.map(o => o.id), ['manual', 'auto', 'full-access']);
   for (const [harness, catalog] of [['codex', codexPermissionOptions], ['claude-code', claudePermissionOptions]] as const) {
     const config = executionConfig.parse({ harness, access: 'read-only' });
     const expected = catalog.options.find(o => o.id === catalog.defaultId)!.permissions;

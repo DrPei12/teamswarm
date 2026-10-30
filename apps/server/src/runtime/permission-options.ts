@@ -14,7 +14,6 @@ export const claudePermissionOptions: PermissionOptions = {
     { id: "manual", label: "Request approval", permissions: { harness: "claude-code", mode: "default" } },
     { id: "auto", label: "Automatic review", permissions: { harness: "claude-code", mode: "auto" } },
     { id: "full-access", label: "Full access", requiresWrite: true, permissions: { harness: "claude-code", mode: "bypassPermissions" } },
-    { id: "accept-edits", label: "Accept edits", group: "native", requiresWrite: true, permissions: { harness: "claude-code", mode: "acceptEdits" } },
   ],
 };
 

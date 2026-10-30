@@ -1,4 +1,5 @@
 import { claudePermissionOptions, withDefaultPermissions } from "../permission-options.js";
+import { conversationInput } from "./conversation-input.js";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnOwned, confirmOwnedExit } from "./owned-process.js";
 import { randomUUID } from "node:crypto";
@@ -220,7 +221,7 @@ export class NativeHarness implements Harness {
       workspace: request.workspace,
       config: c,
       instructions: request.instructions,
-      input: request.input,
+      input: conversationInput(request.input),
       tools: request.tools,
       bridge: bridge.url,
       resume: Boolean(request.sessionId),
@@ -299,7 +300,7 @@ export class NativeHarness implements Harness {
         stdin =
           JSON.stringify({
             type: "user",
-            message: { role: "user", content: request.input },
+            message: { role: "user", content: conversationInput(request.input) },
           }) + "\n";
       } else if (this.id === "opencode") {
         env.XDG_CONFIG_HOME = path.join(home, "config");
@@ -543,7 +544,8 @@ export class NativeHarness implements Harness {
           const e = event.event;
           if (e?.sessionUpdate === "agent_message_chunk" && e.content?.type === "text") emit("transcript.delta", { id: `${turnId}:opencode`, kind: "message", delta: e.content.text });
         },
-        result => { terminal = result; const active = this.active.get(id); if (active) active.termination ??= terminateNative(child); });
+        result => { terminal = result; const active = this.active.get(id); if (active) active.termination ??= terminateNative(child); },
+        { prompt: conversationInput(request.input) });
       lines.on("line", (line) => {
         let event: any;
         try {
@@ -644,7 +646,7 @@ export class NativeHarness implements Harness {
                     method: "session/prompt",
                     params: {
                       sessionId: id,
-                      contentBlocks: [{ type: "text", text: request.input }],
+                      contentBlocks: [{ type: "text", text: conversationInput(request.input) }],
                     },
                   }) + "\n",
                 );

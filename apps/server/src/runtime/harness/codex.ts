@@ -1,4 +1,5 @@
 import { codexPermissionOptions, withDefaultPermissions } from "../permission-options.js";
+import { conversationInput } from "./conversation-input.js";
 import { productVersion } from "../../version.js";
 import { createHash, randomUUID } from "node:crypto";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -834,7 +835,7 @@ export class CodexHarness implements Harness {
       this.executions.set(sessionId, execution);
       void this.rpc("turn/start", {
         threadId: sessionId,
-        input: [{ type: "text", text: request.input }],
+        input: [{ type: "text", text: conversationInput(request.input) }],
         ...(c.effort ? { effort: c.effort } : {}),
       }).then(
         (result) => {
