@@ -1,4 +1,4 @@
-import { codexPermissionOptions } from "../permission-options.js";
+import { codexPermissionOptions, withDefaultPermissions } from "../permission-options.js";
 import { productVersion } from "../../version.js";
 import { createHash, randomUUID } from "node:crypto";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -669,6 +669,7 @@ export class CodexHarness implements Harness {
     return { ...report, environment };
   }
   async execute(request: HarnessRequest): Promise<HarnessResult> {
+    request.config = withDefaultPermissions(request.config);
     if (this.child && !this.users) this.warmMs = Math.max(5000, Math.min(60000, this.warmMs * 0.7 + (Date.now() - this.lastActivity) * 1.5 * 0.3));
     this.users++;
     try { return await this.executeTurn(request); }

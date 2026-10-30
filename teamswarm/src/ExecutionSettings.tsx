@@ -918,7 +918,9 @@ export function ExecutionActivity({
         : active.some((w) => w.status === "stopping")
           ? "Stopping…"
           : active.length
-            ? "Working"
+            ? active.every((work) => work.status === "queued")
+              ? "Queued for execution"
+              : "Working"
             : issue
               ? "Needs attention"
               : "";

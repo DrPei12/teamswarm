@@ -239,7 +239,6 @@ try {
     "Automatic review",
     "Full access",
     "Accept edits",
-    "Deny extra permissions",
   ])
     assert.equal(
       await page.getByRole("menuitemradio", { name, exact: true }).count(),

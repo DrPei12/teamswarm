@@ -1,24 +1,30 @@
 import type { ExecutionConfig, Harness, Member, NativePermissions, PermissionOptions } from "./types.js";
 
 export const codexPermissionOptions: PermissionOptions = {
-  defaultId: "deny-escalation",
+  defaultId: "manual",
   options: [
     { id: "manual", label: "Request approval", permissions: { harness: "codex", approvalPolicy: "untrusted" } },
     { id: "auto", label: "Automatic review", permissions: { harness: "codex", approvalPolicy: "on-request" } },
     { id: "full-access", label: "Full access", requiresWrite: true, permissions: { harness: "codex", approvalPolicy: "never", sandbox: "danger-full-access" } },
-    { id: "deny-escalation", label: "Deny extra permissions", group: "native", permissions: { harness: "codex", approvalPolicy: "never" } },
   ],
 };
 export const claudePermissionOptions: PermissionOptions = {
-  defaultId: "deny-escalation",
+  defaultId: "manual",
   options: [
     { id: "manual", label: "Request approval", permissions: { harness: "claude-code", mode: "default" } },
     { id: "auto", label: "Automatic review", permissions: { harness: "claude-code", mode: "auto" } },
     { id: "full-access", label: "Full access", requiresWrite: true, permissions: { harness: "claude-code", mode: "bypassPermissions" } },
     { id: "accept-edits", label: "Accept edits", group: "native", requiresWrite: true, permissions: { harness: "claude-code", mode: "acceptEdits" } },
-    { id: "deny-escalation", label: "Deny extra permissions", group: "native", permissions: { harness: "claude-code", mode: "dontAsk" } },
   ],
 };
+
+export function withDefaultPermissions(config: ExecutionConfig): ExecutionConfig {
+  if (config.permissions) return config;
+  const catalog = config.harness === "codex" ? codexPermissionOptions
+    : config.harness === "claude-code" ? claudePermissionOptions : undefined;
+  const choice = catalog?.options.find(option => option.id === catalog.defaultId);
+  return choice ? { ...config, permissions: { ...choice.permissions } } : config;
+}
 
 /** Only the installed adapter advertises controls that its execution path implements. */
 export function permissionCatalog(harnesses: Map<string, Harness>): Record<string, PermissionOptions> {

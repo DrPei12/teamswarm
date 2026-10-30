@@ -1,4 +1,4 @@
-import { claudePermissionOptions } from "../permission-options.js";
+import { claudePermissionOptions, withDefaultPermissions } from "../permission-options.js";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnOwned, confirmOwnedExit } from "./owned-process.js";
 import { randomUUID } from "node:crypto";
@@ -168,6 +168,7 @@ export class NativeHarness implements Harness {
     return preflight(request, nativeEntry(this.id), false);
   }
   async execute(request: HarnessRequest): Promise<HarnessResult> {
+    request.config = withDefaultPermissions(request.config);
     const c = request.workspaceBoundary ? { ...request.config, access: "read-only" as const } : request.config;
     this.validateConfig(c);
     validateNativePermissions(c);
@@ -279,7 +280,6 @@ export class NativeHarness implements Harness {
           ...(subscription && c.effort ? ["--effort", c.effort] : []),
           "--permission-mode",
           c.permissions?.harness === "claude-code" ? policyFor(c, "claude-code")!.mode : "dontAsk",
-          ...(c.permissions ? ["--permission-prompt-tool", "stdio"] : []),
           "--tools",
           nativeTools,
           "--allowedTools",

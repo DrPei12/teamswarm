@@ -11,6 +11,21 @@ import { harnessDescription } from '../src/runtime/harness/description.js';
 import { resolveConnection } from '../src/runtime/connections.js';
 import { JsonRpcPeer } from '../src/runtime/harness/json-rpc-peer.js';
 import { UhpClient, UhpStreamError, UHP_VERSION } from '../src/runtime/harness/uhp-client.js';
+import { codexPermissionOptions, claudePermissionOptions, withDefaultPermissions } from '../src/runtime/permission-options.js';
+
+test('permission menus and native defaults use the agreed modes without an extra deny choice', () => {
+  assert.deepEqual(codexPermissionOptions.options.map(o => o.id), ['manual', 'auto', 'full-access']);
+  assert.deepEqual(claudePermissionOptions.options.map(o => o.id), ['manual', 'auto', 'full-access', 'accept-edits']);
+  for (const [harness, catalog] of [['codex', codexPermissionOptions], ['claude-code', claudePermissionOptions]] as const) {
+    const config = executionConfig.parse({ harness, access: 'read-only' });
+    const expected = catalog.options.find(o => o.id === catalog.defaultId)!.permissions;
+    assert.deepEqual(withDefaultPermissions(config).permissions, expected);
+    assert.equal(config.permissions, undefined);
+    const explicit = executionConfig.parse({ harness, permissions: harness === 'codex' ? { harness, approvalPolicy: 'never' } : { harness, mode: 'dontAsk' } });
+    assert.equal(withDefaultPermissions(explicit), explicit);
+  }
+  assert.equal(withDefaultPermissions(executionConfig.parse({ harness: 'grok' })).permissions, undefined);
+});
 
 test('each built-in package validates and retains its native permission vocabulary', () => {
   assert.equal(harnessManifests().length, 6);

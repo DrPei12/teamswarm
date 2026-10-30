@@ -252,6 +252,33 @@ test("resource directory uses CAS, separates model combinations and selects an e
   }
 });
 
+test("a fresh Host includes the latest exchange before optional project context", async () => {
+  const app = await setup();
+  try {
+    app.harness.capabilities.resume = false;
+    app.harness.action = async () => ({ status: "completed", text: "LAST_FILE_CONTENT_93a2" });
+    await app.send("Read the proof file.");
+    const assemble = app.service.runtime.hostContext.assemble.bind(app.service.runtime.hostContext);
+    app.service.runtime.hostContext.assemble = (...args) => {
+      // Match a native Harness with substantial system/tool overhead.
+      args[7] = 16500;
+      return assemble(...args);
+    };
+    app.harness.action = async (request) => {
+      assert.equal(request.sessionId, undefined);
+      const input = JSON.parse(request.input);
+      assert.equal(input.history.at(-1).content, "LAST_FILE_CONTENT_93a2");
+      assert.equal(input.history.at(-1).role, "assistant");
+      assert(input.history.some((m: any) => m.content === "Read the proof file."));
+      return { status: "completed", text: "Continued" };
+    };
+    const work = await app.send("Repeat the full content in your immediately preceding reply.");
+    assert.equal(work.status, "submitted", work.error ?? undefined);
+    const frame = app.service.runtime.hostContext.frame(app.team.id, work.attemptId!);
+    assert(frame.inputTokensEstimate <= frame.budget.inputTokens);
+  } finally { await app.close(); }
+});
+
 test("bounded long history, exact frame identity, searchable originals and recovery notes survive a fresh Host", async () => {
   const app = await setup();
   try {

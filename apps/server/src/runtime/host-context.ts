@@ -293,6 +293,7 @@ export class HostContext {
       work.memberId,
     );
     const host = member.kind === "host";
+    const boundary = work.kind === "host-followup" || work.kind === "collaboration" ? undefined : run.sourceMessageId;
     const scope = this.catalog.scoped(work.teamId, project.branchId);
     const all = this.materials.all(run, project);
     const prior = this.previousFrame(work.teamId, previous);
@@ -420,13 +421,25 @@ export class HostContext {
           items: [],
         },
       },
-      history: [],
+      history: host && !previous
+        ? this.materials.messages(run, { boundary, limit: 3 }).items
+            .filter(message => message.id !== run.sourceMessageId)
+            .map(message => message.content.length <= 1600 ? message : {
+              ...message, content: excerpt(message.content, work.instructions, 1600),
+              partial: true, characters: message.content.length,
+            })
+        : [],
       historyAccess: {
         conversationId: run.conversationId,
         totalMessages: 0,
         omittedMessages: 0,
       },
-      ...(work.interaction ? { conversationHistory: [] } : {}),
+      ...(work.interaction ? { conversationHistory: !previous
+        ? ((conversationHistory ?? []) as any[]).slice(-2).map(message => message.content.length <= 1600 ? message : {
+            ...message, content: excerpt(message.content, work.instructions, 1600),
+            partial: true, characters: message.content.length,
+          })
+        : [] } : {}),
       retainedInsights: [],
       retainedInsightCount: collaborationInput.retainedInsightCount ?? 0,
       currentOutputs: [],
@@ -619,6 +632,7 @@ export class HostContext {
         .map((m, order) => ({ m, order, score: relevance(m.content, terms) }))
         .sort((a, b) => b.score - a.score || b.order - a.order);
       for (const { m } of messages) {
+        if (input.conversationHistory.some((message: any) => message.id === m.id)) continue;
         if (seen[`correspondence:${m.id}`] === hash(m.content)) continue;
         if (add(input.conversationHistory, m, ceiling(0.9)))
           seen[`correspondence:${m.id}`] = hash(m.content);
@@ -626,10 +640,6 @@ export class HostContext {
       }
       input.conversationHistory.sort((a: any, b: any) => a.createdAt.localeCompare(b.createdAt));
     }
-    const boundary =
-      work.kind === "host-followup" || work.kind === "collaboration"
-        ? undefined
-        : run.sourceMessageId;
     const remaining = Math.max(0, budget.inputTokens - used - 100);
     const candidateCount = Math.max(1, Math.ceil(remaining / 40));
     const related = this.materials.messages(run, {
@@ -642,7 +652,7 @@ export class HostContext {
       limit: candidateCount,
     });
     input.historyAccess.totalMessages = recent.total;
-    const messageIds = new Set<string>();
+    const messageIds = new Set<string>(input.history.map((message: any) => message.id));
     for (const message of [...related.items, ...recent.items]) {
       if (messageIds.has(message.id)) continue;
       messageIds.add(message.id);
@@ -657,6 +667,9 @@ export class HostContext {
       else addExcerpt(input.history, message);
     }
     input.historyAccess.omittedMessages = recent.total - input.history.length;
+    const messageSequence = this.store.db.prepare("SELECT rowid AS n FROM messages WHERE id=?");
+    const historyOrder = new Map<string, number>(input.history.map((message: any) => [message.id, Number(messageSequence.get(message.id)?.n ?? 0)]));
+    input.history.sort((a: any, b: any) => historyOrder.get(a.id)! - historyOrder.get(b.id)!);
     seen[`message:${run.sourceMessageId}`] = hash(
       String((input.requirement as any).content),
     );

@@ -23,7 +23,6 @@ export const zhCN: Record<string, string> = {
   "No contributors": "暂无参与成员",
   "Execution permissions": "执行权限",
   "Default execution permissions": "团队默认权限",
-  "Deny extra permissions": "拒绝额外授权",
   "Custom permissions": "自定义权限",
   "Permission switching is unavailable for this Harness.":
     "此 Harness 暂不支持权限切换",
@@ -539,6 +538,7 @@ export const zhCN: Record<string, string> = {
   "Sources and history": "来源与历史",
   "Go to source message": "查看来源消息",
   Queued: "等待接收",
+  "Queued for execution": "排队中",
   Receiving: "处理中",
   Received: "已处理",
   Read: "已读",
