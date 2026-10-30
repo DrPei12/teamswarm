@@ -30,6 +30,12 @@ export function packageInventory(product, frontendRoot) {
       if (stat.isSymbolicLink()) continue;
       if (stat.isDirectory()) scan(file, base, scope);
       else if (name === "package.json") {
+        const parent = path.dirname(root);
+        const installedPackage = path.basename(parent) === "node_modules" ||
+          (path.basename(parent).startsWith("@") && path.basename(path.dirname(parent)) === "node_modules");
+        // Examples and benchmarks inherit their owning package's license;
+        // their development manifests are not additional installed packages.
+        if (!installedPackage) continue;
         const item = JSON.parse(readFileSync(file, "utf8"));
         if (!item.name || !item.version) continue;
         const directory = path.dirname(file);
