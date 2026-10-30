@@ -1,7 +1,34 @@
 import type { AttemptExecutionSnapshot, ResourceSelection } from "./allocation.js";
 
 export type Access = "read-only" | "workspace-write";
+export type BuiltinNativePermissions =
+  | { harness: "codex"; approvalPolicy: "untrusted" | "never" | "on-request"; sandbox?: Access | "danger-full-access" }
+  | { harness: "claude-code"; mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions"; allow?: string[]; deny?: string[] }
+  | { harness: "grok"; mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions"; allow?: string[]; deny?: string[] }
+  | { harness: "pi"; tools: ("read" | "grep" | "find" | "ls" | "write" | "edit" | "bash" | "powershell")[] }
+  | { harness: "deepseek-harness"; sandbox: Access; approval: "ask" | "never" }
+  | { harness: "opencode"; permission: Record<string, "allow" | "ask" | "deny" | Record<string, "allow" | "ask" | "deny">> };
+export interface NativePermissionRequest {
+  nativeId: string;
+  tool: string;
+  input: unknown;
+  reason?: string;
+}
+export interface PermissionOptions {
+  defaultId: string;
+  options: { id: string; label: string; group?: "native"; requiresWrite?: boolean; permissions: NativePermissions }[];
+}
+export interface ExecutionApproval {
+  id: string; teamId: string; memberId: string; workId: string; attemptId: string;
+  tool: string; details: string; createdAt: string;
+  status: "pending" | "accepted" | "declined" | "cancelled";
+}
+export type NativePermissions = { harness: string; [option: string]: unknown };
 export interface ExecutionConfig {
+  /** Harness-native semantics; model selection does not replace this policy. */
+  permissions?: NativePermissions;
+  /** ChatGPT model authorization; independent of the native Harness login. */
+  chatgptAccountId?: string | null;
   harness: string;
   model: string | null;
   provider: string | null;
@@ -21,22 +48,31 @@ export interface RuntimeSettings {
   teamId: string;
   workspace: string;
   config: ExecutionConfig;
-  maxConcurrent: number;
+  /** Legacy saved value, ignored. Admission follows current device resources. */
+  maxConcurrent?: number;
   maxWorksPerRun: number;
   maxTurnsPerWork?: number;
   timeoutSeconds: number;
+  /** Legacy persisted setting; context selection now uses model-aware token budgets. */
   hostContextMaxBytes?: number;
+  /** Legacy persisted setting; session reuse now follows context pressure. */
   hostSessionMaxTurns?: number;
   allowIsolatedWorkspaces?: boolean;
   policyVersion: string;
   version: number;
 }
 export interface Member {
+  permissionOverride?: NativePermissions;
+  permissionVersion?: number;
+  /** Allocated when the member is created; native work lives below this directory. */
+  workspaceRoot?: string;
   id: string;
   teamId: string;
   name: string;
   responsibility: string;
   kind: "host" | "member";
+  /** Removed from the active roster; history and attribution stay readable. */
+  removedAt?: string;
   config: ExecutionConfig;
   createdAt: string;
   branchId?: string;
@@ -94,6 +130,12 @@ export interface AcceptanceEvidence {
   evidenceType: "review_judgment" | "native_check" | "unresolved";
 }
 export interface Work {
+  permissions?: NativePermissions;
+  /** Publication source; native execution uses the member-owned working copy. */
+  sourceWorkspace?: string;
+  sourceSnapshotId?: string;
+  sourceFileHeads?: Record<string, string>;
+  publication?: { state: "pending" | "published" | "conflict"; artifactIds: string[]; appliedPaths: string[]; error?: string };
   id: string;
   teamId: string;
   runId: string;
@@ -104,6 +146,8 @@ export interface Work {
   acceptanceCriteria: string[];
   acceptanceEvidence?: AcceptanceEvidence[];
   inputs: string[];
+  /** Branch-local material references selected by the assigning Host. */
+  contextRefs?: string[];
   dependsOn: string[];
   reviewOf: string | null;
   artifactIds: string[];
@@ -130,6 +174,7 @@ export interface Work {
   kind?: "task" | "collaboration" | "host-followup";
   workspace?: string;
   workspaceMode?: "shared" | "isolated";
+  publicationMode?: "automatic" | "integration";
   baseSnapshotId?: string;
   integratesWorkIds?: string[];
   collaborationExchangeId?: string;
@@ -357,6 +402,11 @@ export interface ToolSpec {
   inputSchema: Record<string, unknown>;
 }
 export interface HarnessRequest {
+  onPermission?: (request: NativePermissionRequest, signal?: AbortSignal) => Promise<"allow" | "deny">;
+  /** Native tools may work in this private copy; publication still checks ownership. */
+  isolatedWorkspace?: boolean;
+  /** Execution-only route. Never persist tokens or use this URL as session identity. */
+  modelRoute?: { token: string; sourceConfig: ExecutionConfig };
   executionRequirements?: ExecutionRequirements;
   executionEnvironment?: PreparedExecutionEnvironment;
   workspace: string;
@@ -375,7 +425,10 @@ export interface HarnessRequest {
   onTurn: (id: string) => void;
   /** Adapters advertising dispatchTracking call this before any native execution can start. */
   onDispatch?: (native?: Record<string, unknown>) => void;
+  /** Recompose input when a native adapter must replace a resumed session before dispatch. */
+  onContextRebuild?: () => string;
   onEvent: (event: HarnessEvent) => void;
+  onPermission?: (request: NativePermissionRequest, signal?: AbortSignal) => Promise<"allow" | "deny">;
   onTool: (name: string, args: unknown, callId: string) => Promise<unknown>;
 }
 export interface HarnessResult {
@@ -386,11 +439,14 @@ export interface HarnessResult {
 
 export interface Harness {
   id: string;
+  permissionOptions?(): PermissionOptions;
   readonly sessionScope?: string;
   capabilities: Record<string, boolean | string>;
   inspect(): Promise<Record<string, unknown>>;
   validateConfig?(config: ExecutionConfig): void;
   preflight?(request: {
+    isolatedWorkspace?: boolean;
+    modelCredentialPresent?: boolean;
     workspace: string;
     config: ExecutionConfig;
     writePaths?: string[];
@@ -402,6 +458,9 @@ export interface Harness {
   interrupt(sessionId: string, turnId: string): Promise<void>;
   reconcile?(sessionId: string, turnId: string, context?: { workId: string; attemptId: string; startedAt: string }): Promise<HarnessResult>;
   reconcileStart?(sessionId: string, native: Record<string, unknown>): Promise<HarnessResult & { turnId?: string }>;
+  /** Only process groups owned by this adapter instance. */
+  resources?(): { id: string; pid: number; sessions: number }[];
+  maintain?(input: { now: number; pressure: boolean }): Promise<void>;
   close(): Promise<void>;
 }
 export interface PreparedExecutionEnvironment {
@@ -462,6 +521,8 @@ export interface ProjectNode {
     adoption?: { sourceBranchId: string; sourceNodeId: string; baseNodeId: string; insightIds: string[]; authorizationQuote: string; ideas: { id: string; title: string; content: string; sourceMessageIds: string[] }[]; changedKeys: string[] };
   };
   createdAt: string;
+  /** User-removed checkpoint; original history remains addressable. */
+  deletedAt?: string;
 }
 export interface ProjectContext {
   branchId: string;

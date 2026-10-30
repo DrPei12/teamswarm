@@ -1,5 +1,7 @@
 import { Disclosure } from "./Disclosure";
 import { CanvasViewport } from "./CanvasViewport";
+import { ContextMenu } from "radix-ui";
+import { visibleHistory, visibleHistoryNodeId } from "./historyPresentation";
 import {
   useMemo,
   useEffect,
@@ -35,6 +37,7 @@ import {
   Lightbulb,
   Users,
   ChevronDown,
+  Trash2,
 } from "lucide-react";
 import type {
   ProjectNode,
@@ -44,7 +47,7 @@ import type {
 } from "@team/contracts/runtime";
 import type { InsightSource } from "@team/contracts/product";
 import type { Workspace, Team } from "./store";
-import { DetailPanel, IconButton, useMediaQuery } from "./ui";
+import { DetailPanel, IconButton, Modal, useMediaQuery } from "./ui";
 import { useI18n } from "./i18n";
 import { api, product } from "./service";
 import { MessageContent } from "./MessageContent";
@@ -131,6 +134,8 @@ type HistoryNode = Node<
     description: string;
     contributors: number;
     open: (tab?: "overview" | "members") => void;
+    fork: () => void;
+    remove: () => void;
     carry: (id: string) => void;
     drop: (id: string) => void;
     drag: (
@@ -158,106 +163,162 @@ function HistoryCard({ data, selected }: NodeProps<HistoryNode>) {
             ? Check
             : Flag;
   return (
-    <div
-      className={`graph-card point ${selected ? "selected" : ""} ${data.active ? "current" : ""} ${over || data.draggingOver ? "drop-target" : ""}`}
-      data-kind={data.node.kind}
-      data-history-node={
-        data.node.workspaceSnapshotId ? data.node.id : undefined
-      }
-      onDragOver={(e) => {
-        if (
-          e.dataTransfer.types.includes("application/x-teamswarm-definition") &&
-          data.node.workspaceSnapshotId
-        ) {
-          e.preventDefault();
-          setOver(true);
-        }
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setOver(false);
-        data.drop(e.dataTransfer.getData("application/x-teamswarm-definition"));
-      }}
-    >
-      <Handle type="target" position={Position.Left} />
-      <button className="graph-card-main" onClick={() => data.open("overview")}>
-        <span className="graph-symbol">
-          <Icon size={23} />
-        </span>
-        <span className="graph-copy">
-          <strong>{data.title}</strong>
-          <span>
-            {data.branch} ·{" "}
-            {t(
-              {
-                root: "Start",
-                definition: "Definition",
-                checkpoint: "Checkpoint",
-                fork: "Branch",
-                selection: "Selection",
-                delivery: "Delivery",
-                "work-result": "Work result",
-                acceptance: "Independent acceptance",
-                insight: "Retained idea",
-                merge: "Adopted into mainline",
-              }[data.node.kind],
-            )}
-          </span>
-        </span>
-      </button>
-      <p className="history-card-summary">{data.description}</p>
-      <div className="history-card-actions nodrag nopan">
-        <button onClick={() => data.open("overview")}>{t("Overview")}</button>
-        <button onClick={() => data.open("members")}>
-          <Users size={13} />
-          {t("Contributors")} · {data.contributors}
-        </button>
-      </div>
-      <div className="point-meta">
-        <time>{data.formatTime(data.node.createdAt)}</time>
-        {data.active && (
-          <span className="current-position">
-            <span />
-            {t("Current position")}
-          </span>
-        )}
-        {data.node.artifactIds.length > 0 && (
-          <span>
-            <FileText size={14} />
-            {data.node.artifactIds.length}
-          </span>
-        )}
-      </div>
-      {data.documents.length > 0 && (
-        <div className="node-definitions">
-          {data.documents.slice(0, 2).map((d) => (
-            <button
-              key={d.id}
-              className="definition-chip nodrag nopan"
-              onPointerDown={(e) => data.drag(d.id, d.title, e)}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!data.consumeDragClick()) data.carry(d.id);
-              }}
-              aria-label={t("Carry {title}", { title: d.title })}
-            >
-              <GripVertical size={14} />
-              <span>{d.title}</span>
-            </button>
-          ))}
-          {data.documents.length > 2 && (
-            <button
-              className="more-definitions nodrag"
-              onClick={() => data.open()}
-            >
-              +{data.documents.length - 2}
-            </button>
+    <ContextMenu.Root modal={false}>
+      <ContextMenu.Trigger asChild>
+        <div
+          className={`graph-card point ${selected ? "selected" : ""} ${data.active ? "current" : ""} ${over || data.draggingOver ? "drop-target" : ""}`}
+          data-kind={data.node.kind}
+          tabIndex={0}
+          aria-label={data.title}
+          data-history-node={
+            data.node.workspaceSnapshotId ? data.node.id : undefined
+          }
+          onDragOver={(e) => {
+            if (
+              e.dataTransfer.types.includes(
+                "application/x-teamswarm-definition",
+              ) &&
+              data.node.workspaceSnapshotId
+            ) {
+              e.preventDefault();
+              setOver(true);
+            }
+          }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setOver(false);
+            data.drop(
+              e.dataTransfer.getData("application/x-teamswarm-definition"),
+            );
+          }}
+        >
+          <Handle type="target" position={Position.Left} />
+          <button
+            className="graph-card-main"
+            onClick={() => data.open("overview")}
+          >
+            <span className="graph-symbol">
+              <Icon size={23} />
+            </span>
+            <span className="graph-copy">
+              <strong>{data.title}</strong>
+              <span>
+                {data.branch} ·{" "}
+                {t(
+                  {
+                    root: "Start",
+                    definition: "Definition",
+                    checkpoint: "Checkpoint",
+                    fork: "Branch",
+                    selection: "Selection",
+                    delivery: "Delivery",
+                    "work-result": "Work result",
+                    acceptance: "Independent acceptance",
+                    insight: "Retained idea",
+                    merge: "Adopted into mainline",
+                  }[data.node.kind],
+                )}
+              </span>
+            </span>
+          </button>
+          {data.description && (
+            <p className="history-card-summary">{data.description}</p>
           )}
+          <div className="history-card-actions nodrag nopan">
+            <button onClick={() => data.open("members")}>
+              <Users size={13} />
+              {t("Contributors")} · {data.contributors}
+            </button>
+          </div>
+          <div className="point-meta">
+            <time>{data.formatTime(data.node.createdAt)}</time>
+            {data.active && (
+              <span className="current-position">
+                <span />
+                {t("Current position")}
+              </span>
+            )}
+            {data.node.artifactIds.length > 0 && (
+              <span>
+                <FileText size={14} />
+                {data.node.artifactIds.length}
+              </span>
+            )}
+          </div>
+          {data.documents.length > 0 && (
+            <div className="node-definitions">
+              {data.documents.slice(0, 2).map((d) => (
+                <button
+                  key={d.id}
+                  className="definition-chip nodrag nopan"
+                  onPointerDown={(e) => data.drag(d.id, d.title, e)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!data.consumeDragClick()) data.carry(d.id);
+                  }}
+                  aria-label={t("Carry {title}", { title: d.title })}
+                >
+                  <GripVertical size={14} />
+                  <span>{d.title}</span>
+                </button>
+              ))}
+              {data.documents.length > 2 && (
+                <button
+                  className="more-definitions nodrag"
+                  onClick={() => data.open()}
+                >
+                  +{data.documents.length - 2}
+                </button>
+              )}
+            </div>
+          )}
+          <Handle type="source" position={Position.Right} />
         </div>
-      )}
-      <Handle type="source" position={Position.Right} />
-    </div>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content
+          className="menu history-context-menu"
+          collisionPadding={12}
+        >
+          <ContextMenu.Item
+            className="menu-item"
+            onSelect={() => data.open("overview")}
+          >
+            <FileText size={15} />
+            <span className="item-label">{t("Overview")}</span>
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            className="menu-item"
+            onSelect={() => data.open("members")}
+          >
+            <Users size={15} />
+            <span className="item-label">{t("Contributors")}</span>
+          </ContextMenu.Item>
+          {data.node.workspaceSnapshotId && (
+            <ContextMenu.Item className="menu-item" onSelect={data.fork}>
+              <GitBranch size={15} />
+              <span className="item-label">{t("Branch from here")}</span>
+            </ContextMenu.Item>
+          )}
+          {data.node.kind === "checkpoint" &&
+            data.node.source.actor === "user" &&
+            !data.node.artifactIds.length &&
+            !data.node.source.workId && (
+              <>
+                <ContextMenu.Separator className="separator" />
+                <ContextMenu.Item
+                  className="menu-item danger"
+                  onSelect={data.remove}
+                >
+                  <Trash2 size={15} />
+                  <span className="item-label">{t("Delete checkpoint")}</span>
+                </ContextMenu.Item>
+              </>
+            )}
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }
 const nodeTypes = { history: HistoryCard };
@@ -344,7 +405,12 @@ function HistoryContent({
   const request = useRef<{ signature: string; id: string } | undefined>(
     undefined,
   );
-  const all = workspace.projectNodes?.filter((n) => n.teamId === team.id) ?? [];
+  const [deleting, setDeleting] = useState<ProjectNode | null>(null);
+  // Retain the target while the dialog finishes its exit animation.
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const records =
+    workspace.projectNodes?.filter((n) => n.teamId === team.id) ?? [];
+  const all = visibleHistory(records);
   const branches =
     workspace.projectBranches?.filter((b) => b.teamId === team.id) ?? [];
   const documents =
@@ -387,24 +453,8 @@ function HistoryContent({
   const describe = (node: ProjectNode) => {
     const work = works.find((w) => w.id === node.source.workId);
     const actor = work ? (memberFor(work)?.name ?? "Host") : "Host";
-    if (node.kind === "merge")
-      return (
-        node.source.reason ||
-        t("Adopted ideas are now part of the mainline documents.")
-      );
-    if (node.kind === "insight")
-      return t("An idea from the conversation, kept with its original source.");
-    if (node.kind === "root") return t("The team started here.");
-    if (node.kind === "definition")
-      return node.source.reason || t("The shared plan was updated.");
-    if (node.kind === "fork")
-      return t("Explore this direction with the context from this point.");
-    if (node.kind === "selection")
-      return t("Selected definitions were brought into this direction.");
-    if (node.kind === "acceptance")
-      return t("This work passed independent review.");
-    if (node.kind === "delivery")
-      return t("Host brought the results together for delivery.");
+    if (node.kind === "merge" || node.kind === "definition")
+      return node.source.reason || "";
     if (node.kind === "work-result")
       return t("{name}: {status}", {
         name: actor,
@@ -412,13 +462,17 @@ function HistoryContent({
           historyWorkStatus(node.source.reason || work?.status || "submitted"),
         ),
       });
-    return t("Files and context preserved for exploring another direction.");
+    return "";
   };
   const titleFor = (node: ProjectNode) =>
     node.title.startsWith("Review: ")
       ? `${t("Review")} · ${node.title.slice(8)}`
       : node.title;
   const branch = branches.find((b) => b.id === activeBranch);
+  const activeHistoryNode = visibleHistoryNodeId(
+    records,
+    branch?.headNodeId ?? null,
+  );
   const current = all.find((n) => n.id === selected),
     fork = all.find((n) => n.id === forkId),
     carryDoc = documents.find((d) => d.id === carry);
@@ -460,7 +514,9 @@ function HistoryContent({
       if (node.source.adoption)
         edges.push({
           id: `merge:${node.id}`,
-          source: node.source.adoption.sourceNodeId,
+          source:
+            visibleHistoryNodeId(records, node.source.adoption.sourceNodeId) ??
+            node.source.adoption.sourceNodeId,
           target: node.id,
           type: "default",
           label: t("Adopted"),
@@ -492,7 +548,13 @@ function HistoryContent({
           consumeDragClick,
           branch: branches.find((b) => b.id === node.branchId)?.name ?? "",
           documents: changed,
-          active: branch?.headNodeId === node.id,
+          active: activeHistoryNode === node.id,
+          fork: () => beginFork(node),
+          remove: () => {
+            setError("");
+            setDeleting(node);
+            setDeleteOpen(true);
+          },
           open: (tab = "overview") => {
             setDetailTab(tab);
             setSelected(node.id);
@@ -622,6 +684,24 @@ function HistoryContent({
           title: t("Checkpoint"),
         },
       );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const deleteCheckpoint = async () => {
+    if (!deleting || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await product.command(
+        `/teams/${team.id}/history/${deleting.id}`,
+        undefined,
+        "DELETE",
+      );
+      if (selected === deleting.id || forkId === deleting.id) close();
+      setDeleteOpen(false);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -956,7 +1036,10 @@ function HistoryContent({
                       {docsAt(fork).length ? (
                         docsAt(fork).map((d) => (
                           <details className="history-document" key={d.id}>
-                            <summary>{d.title}</summary>
+                            <summary>
+                              <ChevronDown size={14} aria-hidden />
+                              {d.title}
+                            </summary>
                             <MessageContent text={d.content} />
                           </details>
                         ))
@@ -1019,7 +1102,10 @@ function HistoryContent({
                                 </span>
                               </label>
                               <details>
-                                <summary>{t("Details")}</summary>
+                                <summary>
+                                  <ChevronDown size={14} aria-hidden />
+                                  {t("Details")}
+                                </summary>
                                 <MessageContent text={d.content} />
                               </details>
                               {selectedDocs.includes(d.id) &&
@@ -1078,11 +1164,7 @@ function HistoryContent({
                       {detailTab === "members" ? (
                         <div className="history-contributors">
                           {!contributorsAt(displayed).length && (
-                            <p className="muted">
-                              {t(
-                                "This is a discussion or context checkpoint; no member result was attached.",
-                              )}
-                            </p>
+                            <p className="muted">{t("No contributors")}</p>
                           )}
                           {contributorsAt(displayed).map((work) => {
                             const member = memberFor(work);
@@ -1120,16 +1202,12 @@ function HistoryContent({
                                   </span>
                                 </div>
                                 <p>
-                                  {displayed.kind === "insight"
-                                    ? t(
-                                        "Preserved this idea from the discussion",
-                                      )
-                                    : work.title === "Host follow-up"
-                                      ? t("Reviewing team results")
-                                      : work.title.replace(
-                                          /^Review: /,
-                                          `${t("Review")} · `,
-                                        )}
+                                  {work.title === "Host follow-up"
+                                    ? t("Reviewing team results")
+                                    : work.title.replace(
+                                        /^Review: /,
+                                        `${t("Review")} · `,
+                                      )}
                                 </p>
                                 <small>
                                   {(
@@ -1248,7 +1326,10 @@ function HistoryContent({
                           )}
                           {sourceMessage && !displayed.source.insightId && (
                             <details className="history-discussion">
-                              <summary>{t("Original discussion")}</summary>
+                              <summary>
+                                <ChevronDown size={14} aria-hidden />
+                                {t("Original discussion")}
+                              </summary>
                               <MessageContent text={sourceMessage.text} />
                             </details>
                           )}
@@ -1285,7 +1366,10 @@ function HistoryContent({
                             )
                             .map((d) => (
                               <details className="history-document" key={d.id}>
-                                <summary>{d.title}</summary>
+                                <summary>
+                                  <ChevronDown size={14} aria-hidden />
+                                  {d.title}
+                                </summary>
                                 <MessageContent text={d.content} />
                                 <button
                                   className="text-button"
@@ -1335,6 +1419,46 @@ function HistoryContent({
           </div>
         </DetailPanel>
       )}
+      <Modal
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          if (!open && !busy) {
+            setDeleteOpen(false);
+            setError("");
+          }
+        }}
+        title={t("Delete checkpoint")}
+        className="checkpoint-delete-modal"
+      >
+        <div className="form-body">
+          <p>{t("Delete “{title}”?", { title: deleting?.title ?? "" })}</p>
+          {error && (
+            <p role="alert" className="form-error">
+              {t(error)}
+            </p>
+          )}
+        </div>
+        <div className="form-footer">
+          <button
+            className="secondary-button"
+            disabled={busy}
+            onClick={() => {
+              setDeleteOpen(false);
+              setError("");
+            }}
+          >
+            {t("Cancel")}
+          </button>
+          <button
+            className="primary-button danger-button"
+            disabled={busy}
+            onClick={() => void deleteCheckpoint()}
+          >
+            {busy && <LoaderCircle size={15} className="spinner" />}
+            {t("Delete")}
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }

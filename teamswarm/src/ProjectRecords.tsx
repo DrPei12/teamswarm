@@ -1,3 +1,4 @@
+import { FieldSelect } from "./FieldSelect";
 import { SegmentedControl } from "./design-system/SegmentedControl";
 import { useEffect, useState } from "react";
 import type {
@@ -177,14 +178,17 @@ export function ProjectRecords({
                 <div className="record-fields">
                   <label>
                     {t("Kind")}
-                    <select name="kind" defaultValue={current?.kind ?? "idea"}>
+                    <FieldSelect
+                      name="kind"
+                      defaultValue={current?.kind ?? "idea"}
+                    >
                       <option value="idea">{t("Idea")}</option>
                       <option value="decision">{t("Decision")}</option>
-                    </select>
+                    </FieldSelect>
                   </label>
                   <label>
                     {t("Status")}
-                    <select
+                    <FieldSelect
                       name="status"
                       defaultValue={current?.status ?? "proposed"}
                     >
@@ -198,7 +202,7 @@ export function ProjectRecords({
                           {t(`insight.${s}`)}
                         </option>
                       ))}
-                    </select>
+                    </FieldSelect>
                   </label>
                 </div>
                 <label>
@@ -295,25 +299,12 @@ function OutputRecord({
       </button>
       {open && (
         <div className="record-body">
-          <p className="record-hint">
-            {t(
-              output.current.restoredFrom
-                ? "Restored"
-                : (output.workStatus ?? "submitted"),
-            )}{" "}
-            ·{" "}
-            {t(
-              output.verification === "self-check"
-                ? "Producer self-check"
-                : "Independent review",
-            )}
-          </p>
           <label>
             {t("Version")}
-            <select
+            <FieldSelect
               aria-label={`${t("Version")} ${output.path}`}
               value={revision.id}
-              onChange={(e) => setSelected(e.target.value)}
+              onValueChange={(value) => setSelected(value)}
             >
               {[...output.revisions].reverse().map((r, i) => (
                 <option key={r.id} value={r.id}>
@@ -324,7 +315,7 @@ function OutputRecord({
                   {r.restoredFrom ? ` · ${t("Restored")}` : ""}
                 </option>
               ))}
-            </select>
+            </FieldSelect>
           </label>
           {revision.id !== output.current.id && (
             <button

@@ -1,3 +1,4 @@
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import express, { type ErrorRequestHandler, type Express, type RequestHandler } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,11 +11,11 @@ import { TeamRuntime } from './runtime/engine.js';
 import { runtimeRoutes } from './runtime/routes.js';
 import { productRoutes } from './product.js';
 import type { Harness } from './runtime/types.js';
+import type { ResourceSampling } from './runtime/resources.js';
 
 const DEFAULT_API_PORT = 4318;
 const DEFAULT_WEB_PORT = 4317;
 const WRITE_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
-const HARNESS_CHOICES = new Set(['unconfigured', 'codex', 'claude-code', 'grok', 'deepseek-harness', 'pi', 'opencode']);
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
 export interface CreateAppOptions {
@@ -23,6 +24,7 @@ export interface CreateAppOptions {
   webDistDir?: string;
   apiPort?: number;
   harnesses?: Harness[];
+  resourceSampling?: ResourceSampling;
 }
 
 export interface TeamService {
@@ -44,7 +46,7 @@ function defaultDataDir(): string {
 }
 
 function defaultWebDistDir(): string {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../web/dist');
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../teamswarm/dist');
 }
 
 function sendError(response: express.Response, error: ServiceError): void {
@@ -111,7 +113,7 @@ function parseSettings(body: Record<string, unknown>): TeamSettings {
   const harness = requiredStringValue(body.harness, 'harness', 40);
   const memory = requiredStringValue(body.memory, 'memory', 20);
 
-  if (!HARNESS_CHOICES.has(harness)) {
+  if (harness !== "unconfigured" && !harnessManifest(harness)) {
     throw badRequest('invalid_settings', 'harness 不是支持的选择。');
   }
   if (memory !== 'local') {
@@ -186,7 +188,7 @@ export function createApp(options: CreateAppOptions = {}): TeamService {
   const apiPort = options.apiPort ?? DEFAULT_API_PORT;
   const store = new TeamStore({ dataDir: options.dataDir ?? defaultDataDir() });
   let runtime: TeamRuntime;
-  try { runtime = new TeamRuntime(store, options.harnesses); } catch (error) { store.close(); throw error; }
+  try { runtime = new TeamRuntime(store, options.harnesses, options.resourceSampling); } catch (error) { store.close(); throw error; }
   const app = express();
   const webDistDir = path.resolve(options.webDistDir ?? defaultWebDistDir());
 
@@ -342,10 +344,20 @@ export function createApp(options: CreateAppOptions = {}): TeamService {
   });
 
   if (fs.existsSync(webDistDir)) {
-    app.use(express.static(webDistDir, { index: 'index.html', fallthrough: true }));
+    app.use(express.static(webDistDir, {
+      index: 'index.html',
+      fallthrough: true,
+      setHeaders(response, file) {
+        if (path.basename(file) === 'index.html') response.setHeader('Cache-Control', 'no-cache');
+      },
+    }));
+    app.use(['/assets', '/fonts'], (_request, response) => {
+      response.status(404).type('text/plain').send('Resource not found.');
+    });
     app.get(/.*/, (_request, response) => {
       const indexPath = path.join(webDistDir, 'index.html');
       if (fs.existsSync(indexPath)) {
+        response.setHeader('Cache-Control', 'no-cache');
         response.type('html').send(fs.readFileSync(indexPath, 'utf8'));
       } else {
         response.status(404).type('text/plain').send('Web build does not contain index.html.');

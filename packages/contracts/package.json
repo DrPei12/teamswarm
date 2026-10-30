@@ -1,10 +1,14 @@
 {
   "name": "@team/contracts",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "types": "./src/index.d.ts",
   "exports": {
+    "./harness-catalog": {
+      "types": "./src/harness-catalog.d.ts",
+      "default": "./src/harness-catalog.js"
+    },
     "./allocation": {
       "types": "./src/allocation.d.ts"
     },

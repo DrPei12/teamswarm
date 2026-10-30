@@ -13,6 +13,8 @@ import {
 } from "../src/runtime/allocation-portable.js";
 import type { PortableImportPreview } from "../src/runtime/allocation-portable.js";
 import { executionConfig } from "../src/runtime/validation.js";
+import { previewPackage, resourceIssues } from "../../../teamswarm/src/allocation.js";
+import { permissionsForAccess, permissionsForMode, permissionsForHarness } from "../../../teamswarm/src/permissions.js";
 
 const config = (patch: Partial<ExecutionConfig> = {}): ExecutionConfig =>
   executionConfig.parse({
@@ -51,6 +53,31 @@ const isServiceError = (error: unknown, status: number, code?: string): boolean 
   (error as { status?: number }).status === status &&
   (code == null || (error as { code?: string }).code === code);
 
+test("native permissions survive export and the UI accepts the backend package", () => {
+  const c = config({ harness: "codex", protocol: "responses", permissions: { harness: "codex", approvalPolicy: "on-request" } });
+  const pkg = buildPortablePackage({ resources: [resource("native-policy", c)], selections: [] });
+  assert.equal(previewPackage(pkg, []).ok, true);
+  assert.deepEqual(pkg.resources[0].config.permissions, c.permissions);
+  assert.equal(previewPortableImport(pkg, []).ok, true);
+  for (const protocol of ["responses", "anthropic-messages", "chat-completions"] as const) {
+    const grok = config({ harness: "grok", protocol });
+    assert.deepEqual(resourceIssues(grok), checkExecutionCompatibility(grok));
+    assert.deepEqual(resourceIssues(grok), []);
+  }
+});
+
+test("read-only selection narrows full access and Harness changes preserve native semantics", () => {
+  const c = config({ harness: "codex", access: "workspace-write" });
+  c.permissions = permissionsForMode(c, "full-access");
+  assert.deepEqual(c.permissions, { harness: "codex", approvalPolicy: "never", sandbox: "danger-full-access" });
+  const narrowed = { ...c, access: "read-only" as const, permissions: permissionsForAccess(c, "read-only") };
+  assert.deepEqual(narrowed.permissions, { harness: "codex", approvalPolicy: "untrusted", sandbox: "read-only" });
+  assert.doesNotThrow(() => executionConfig.parse(narrowed));
+  assert.deepEqual(permissionsForHarness(c, "claude-code"), { harness: "claude-code", mode: "bypassPermissions" });
+  assert.equal(permissionsForHarness(c, "pi"), undefined);
+  assert.equal(c.permissions?.harness === "codex" && c.permissions.sandbox, "danger-full-access");
+});
+
 test("export keeps only id/version/name/description/config and strips teamId", () => {
   const wide = resource("example", config({ harness: "opencode" })) as
     ExecutionResource & { teamId: string; secretField?: string };
@@ -87,8 +114,10 @@ test("one model binds many Harnesses and one Harness saves many models", () => {
 
 test("export refuses incompatible configs and secrets that cannot travel", () => {
   assert.throws(() =>
-    buildPortablePackage({ resources: [resource("bad", config({ harness: "codex", protocol: "chat-completions" }))], selections: [] }),
+    buildPortablePackage({ resources: [resource("bad", config({ harness: "codex", protocol: "anthropic-messages", effort: "high" }))], selections: [] }),
     (error) => isServiceError(error, 400, "incompatible_resource"));
+  const crossProtocol = buildPortablePackage({ resources: [resource("bridge", config({ harness: "codex", protocol: "chat-completions" }))], selections: [] });
+  assert.equal(previewPortableImport(crossProtocol, []).ok, true);
   assert.throws(() =>
     buildPortablePackage({ resources: [resource("bad", config({ credentialEnv: null }))], selections: [] }),
     (error) => isServiceError(error, 400, "incompatible_resource"));
@@ -149,7 +178,7 @@ test("preview reports package-internal failures with stable codes", () => {
     [(() => { const p = bundle(); delete (p as { version?: unknown }).version; return p; })(), "missing_version"],
     [{ ...bundle(), resources: [wire(), wire()] }, "duplicate_resource"],
     [{ ...bundle(), resources: [{ ...wire(), config: { ...config(), credentialEnv: null } }] }, "missing_configuration"],
-    [{ ...bundle(), resources: [wire("example", config({ harness: "codex", protocol: "chat-completions" }))] }, "incompatible_protocol"],
+    [{ ...bundle(), resources: [wire("example", config({ harness: "codex", protocol: "chat-completions", credentialEnv: null }))] }, "missing_configuration"],
     [{ ...bundle(), resources: [wire("example", config({ harness: "pi", effort: "higher" }))] }, "unsupported_effort"],
     [{ ...bundle(), resources: [wire("example", config({ harness: "codex", thinkingFormat: "qwen" }))] }, "unsupported_thinking_format"],
     [{ ...bundle(), token: "not-a-real-secret" }, "invalid_package"],

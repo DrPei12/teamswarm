@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
+import * as harnessCatalog from "@team/contracts/harness-catalog";
 
 const source = (name) =>
   readFileSync(new URL(`../teamswarm/src/${name}.ts`, import.meta.url), "utf8");
@@ -16,6 +17,7 @@ function load(text, globals, dependencies) {
   new Function(...Object.keys(globals), "require", "exports", outputText)(
     ...Object.values(globals),
     (name) => {
+      if (name === "@team/contracts/harness-catalog") return harnessCatalog;
       assert.ok(name in dependencies, `Unexpected import: ${name}`);
       return dependencies[name];
     },
@@ -24,6 +26,13 @@ function load(text, globals, dependencies) {
   return exports;
 }
 const outbox = load(source("preferences-outbox"), {}, {});
+const permissions = load(source("permissions"), {}, {});
+const modelCatalog = load(
+  source("modelCatalog"),
+  {},
+  { "./permissions": permissions },
+);
+const modelCatalogCache = load(source("modelCatalogCache"), {}, {});
 const service = source("service");
 function scenario() {
   const values = new Map();
@@ -98,7 +107,13 @@ function scenario() {
         setTimeout: () => 1,
         clearTimeout() {},
       },
-      { "./preferences-outbox": outbox, react: { useSyncExternalStore() {} } },
+      {
+        "./preferences-outbox": outbox,
+        "./modelCatalog": modelCatalog,
+        "./modelCatalogCache": modelCatalogCache,
+        "./permissions": permissions,
+        react: { useSyncExternalStore() {} },
+      },
     );
     return {
       product,

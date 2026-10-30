@@ -1,5 +1,6 @@
-import { ComposerSurface } from "./design-system/ComposerSurface";
-import { SegmentedControl } from "./design-system/SegmentedControl";
+import { ApprovalRequests } from "./ApprovalRequests";
+import { ComposerChin, ComposerSurface } from "./design-system/ComposerSurface";
+import { Select } from "radix-ui";
 import { isComposing } from "./design-system/motion";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
@@ -7,6 +8,8 @@ import {
   ArrowRight,
   ArrowUp,
   CircleHelp,
+  Check,
+  ChevronDown,
   LoaderCircle,
   MessageSquare,
   Square,
@@ -22,8 +25,11 @@ import type { Member, Workspace } from "./store";
 import { api, product } from "./service";
 import { useI18n } from "./i18n";
 import { MessageContent } from "./MessageContent";
-import { ConversationActivity, modelLabel } from "./ConversationActivity";
+import { ConversationActivity } from "./ConversationActivity";
+import { RuntimeControls } from "./ComposerTools";
+import { harnessLabel } from "./harnessCatalog";
 import { IconButton, useMediaQuery } from "./ui";
+import { executionFeedback } from "./executionFeedback";
 
 const statusLabels: Record<string, string> = {
   queued: "Queued",
@@ -53,6 +59,7 @@ type ConversationProps = {
   anchor?: string;
   workId?: string;
   onUpdate: (change: (old: Workspace) => Workspace) => boolean;
+  onSettings: (tab?: "harnesses" | "connections" | "runtime") => void;
 };
 const rootOf = (work: Work) => work.threadId ?? work.id;
 export function MemberConversation(props: ConversationProps) {
@@ -111,31 +118,57 @@ export function MemberConversation(props: ConversationProps) {
     <div className="work-thread-panel">
       {!!threads.length && (
         <div className="work-thread-picker">
-          <label>
-            {t("Work thread")}
-            <select
+          <Select.Root
+            value={chosen ? rootOf(chosen) : "member"}
+            onValueChange={setSelection}
+          >
+            <Select.Trigger
+              className="work-thread-trigger"
               aria-label={t("Work thread")}
-              value={chosen ? rootOf(chosen) : "member"}
-              onChange={(e) => setSelection(e.target.value)}
             >
-              <option value="member">{t("Conversation")}</option>
-              {threads.map((w) => (
-                <option key={rootOf(w)} value={rootOf(w)}>
-                  {w.title}
-                </option>
-              ))}
-            </select>
-          </label>
-          {chosen && (
-            <small>
-              {t(chosen.status)} ·{" "}
-              {t(
-                chosen.verification === "self-check"
-                  ? "Producer self-check"
-                  : "Independent review",
-              )}
-            </small>
-          )}
+              <Select.Value />
+              <Select.Icon>
+                <ChevronDown size={14} />
+              </Select.Icon>
+            </Select.Trigger>
+            <Select.Portal>
+              <Select.Content
+                className="menu work-thread-menu"
+                position="popper"
+                sideOffset={6}
+                collisionPadding={12}
+              >
+                <Select.ScrollUpButton className="thread-menu-scroll">
+                  <ChevronDown size={14} />
+                </Select.ScrollUpButton>
+                <Select.Viewport>
+                  {[
+                    { id: "member", title: t("Conversation") },
+                    ...threads.map((w) => ({
+                      id: rootOf(w),
+                      title: w.title.startsWith("Review: ")
+                        ? `${t("Review")} · ${w.title.slice(8)}`
+                        : w.title,
+                    })),
+                  ].map((item) => (
+                    <Select.Item
+                      key={item.id}
+                      value={item.id}
+                      className="menu-item work-thread-option"
+                    >
+                      <Select.ItemText>{item.title}</Select.ItemText>
+                      <Select.ItemIndicator>
+                        <Check size={14} />
+                      </Select.ItemIndicator>
+                    </Select.Item>
+                  ))}
+                </Select.Viewport>
+                <Select.ScrollDownButton className="thread-menu-scroll">
+                  <ChevronDown size={14} />
+                </Select.ScrollDownButton>
+              </Select.Content>
+            </Select.Portal>
+          </Select.Root>
         </div>
       )}
       <ConversationThread
@@ -152,6 +185,7 @@ function ConversationThread({
   workspace,
   anchor,
   onUpdate,
+  onSettings,
   work,
 }: ConversationProps & { work?: Work }) {
   const { t, locale } = useI18n();
@@ -161,7 +195,25 @@ function ConversationThread({
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
   const [sending, setSending] = useState(false);
-  const [mode, setMode] = useState<"discuss" | "revise">("discuss");
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [configuring, setConfiguring] = useState(false);
+  const configurationLock = useRef(false);
+  const team = workspace.teams.find((t) => t.id === member.teamId)!;
+  const executionConfig = member.id.startsWith("host:")
+    ? (workspace.executions?.[member.teamId]?.host?.config ??
+      workspace.executions?.[member.teamId]?.settings?.config)
+    : member.executionConfig;
+  const runtimeConfig = executionConfig
+    ? {
+        harness: harnessLabel(executionConfig.harness),
+        model: executionConfig.model ?? "",
+        effort: executionConfig.effort ?? "Default",
+      }
+    : {
+        harness: member.harness,
+        model: member.model,
+        effort: member.effort ?? "Default",
+      };
   const [hasMore, setHasMore] = useState(false);
   const [hasNewer, setHasNewer] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
@@ -377,9 +429,9 @@ function ConversationThread({
     return () => observer.disconnect();
   }, [hasNewer, requestAnchor, loading]);
   useLayoutEffect(() => {
-    if (input.current) {
+    if (input.current && !CSS.supports("field-sizing", "content")) {
       input.current.style.height = "0px";
-      input.current.style.height = `${Math.min(160, Math.max(56, input.current.scrollHeight))}px`;
+      input.current.style.height = `${Math.min(260, Math.max(24, input.current.scrollHeight))}px`;
     }
   }, [draft]);
   const stopAutoScroll = () => {
@@ -399,12 +451,13 @@ function ConversationThread({
       setRequestAnchor(undefined);
   };
   const send = async () => {
-    if (!draft.trim() || sending || !canSend) return;
+    if (!draft.trim() || sending || !canSend || configurationLock.current)
+      return;
     setSending(true);
     setError("");
     try {
       if (work)
-        await product.sendWork(member.teamId, work, draft, mode, draftKey);
+        await product.sendWork(member.teamId, work, draft, "discuss", draftKey);
       else await product.sendMember(member.teamId, member.id, draft);
       if (!mounted.current) return;
       setRequestAnchor(undefined);
@@ -470,6 +523,11 @@ function ConversationThread({
         }}
       >
         <div ref={list} className="member-thread-content">
+          <ApprovalRequests
+            teamId={member.teamId}
+            memberId={member.id}
+            workspace={workspace}
+          />
           {hasMore && (
             <button
               className="load-earlier"
@@ -528,11 +586,7 @@ function ConversationThread({
           {!loading && !entries.length && (
             <div className="thread-empty">
               <MessageSquare size={24} />
-              <p>
-                {t(
-                  "The member's conversation will appear here when work is assigned.",
-                )}
-              </p>
+              <p>{t("No messages yet")}</p>
             </div>
           )}
           {entries.map((entry) => (
@@ -586,7 +640,11 @@ function ConversationThread({
               )}
               {entry.text && (
                 <MessageContent
-                  text={entry.text}
+                  text={
+                    entry.id.startsWith("error:")
+                      ? t(executionFeedback(entry.text))
+                      : entry.text
+                  }
                   pending={entry.status === "running"}
                 />
               )}
@@ -608,6 +666,7 @@ function ConversationThread({
                   <div className="session-progress">{t("Working…")}</div>
                 )}
               {entry.role === "assistant" &&
+                !entry.id.startsWith("error:") &&
                 [
                   "failed",
                   "interrupted",
@@ -615,10 +674,40 @@ function ConversationThread({
                   "waiting",
                 ].includes(entry.status ?? "") && (
                   <div className="session-status">
-                    {entry.error ||
+                    {(entry.error ? t(executionFeedback(entry.error)) : "") ||
                       t(statusLabels[entry.status!] ?? entry.status!)}
                   </div>
                 )}
+              {entry.retryWorkId && !member.removedAt && (
+                <button
+                  className="text-button"
+                  disabled={!!retrying}
+                  onClick={async () => {
+                    const failed = workspace.executions?.[
+                      member.teamId
+                    ]?.works.find((w) => w.id === entry.retryWorkId);
+                    if (!failed) return;
+                    setRetrying(entry.id);
+                    setError("");
+                    try {
+                      await api(
+                        `/teams/${encodeURIComponent(member.teamId)}/works/${encodeURIComponent(failed.id)}/retry`,
+                        { expectedRevision: failed.revision },
+                      );
+                      await product.refresh();
+                    } catch (e) {
+                      setError(executionFeedback((e as Error).message));
+                    } finally {
+                      setRetrying(null);
+                    }
+                  }}
+                >
+                  {retrying === entry.id ? (
+                    <LoaderCircle size={14} className="spin" />
+                  ) : null}
+                  {t("Retry")}
+                </button>
+              )}
             </article>
           ))}
         </div>
@@ -628,145 +717,148 @@ function ConversationThread({
           {t(error || loadError)}
         </div>
       )}
-      <ComposerSurface
-        className="member-composer"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void send();
-        }}
-      >
-        {(!following || hasNewer) && (
-          <button
-            type="button"
-            className="thread-bottom"
-            aria-label={t("Scroll to latest")}
-            onClick={() => {
-              setRequestAnchor(undefined);
-              locatingUntil.current = 0;
-              inspectingActivity.current = false;
-              follow.current = true;
-              setFollowing(true);
-              scroller.current?.scrollTo({
-                top: scroller.current.scrollHeight,
-                behavior: reduced ? "instant" : "smooth",
-              });
-            }}
-          >
-            <ArrowDown size={15} />
-            {t("Latest")}
-          </button>
-        )}
-        {work && !work.reviewOf && (
-          <div className="work-message-mode">
-            <SegmentedControl
-              value={mode}
-              onChange={setMode}
-              label={t("Message purpose")}
-              options={[
-                { value: "discuss", label: t("Ask a question") },
-                {
-                  value: "revise",
-                  label: t("Continue modifying"),
-                  disabled: !!activeWork,
-                },
-              ]}
-            />
-          </div>
-        )}
-        <textarea
-          ref={input}
-          aria-label={t("Message {name}", { name: member.name })}
-          placeholder={
-            canSend
-              ? t("Message {name}…", { name: member.name })
-              : t("Waiting for an assignment")
-          }
-          value={draft}
-          disabled={!canSend}
-          onChange={(e) => {
-            const text = e.target.value;
-            onUpdate((old) => ({
-              ...old,
-              drafts: { ...old.drafts, [draftKey]: { text, files: [] } },
-            }));
+      {!member.removedAt && (
+        <ComposerSurface
+          className="member-composer"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void send();
           }}
-          onKeyDown={(e) => {
-            if (
-              e.key === "Enter" &&
-              !e.shiftKey &&
-              !isComposing(e.nativeEvent)
-            ) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-        />
-        <div className="member-composer-toolbar">
-          <div className="member-composer-config">
-            <span title={member.model}>
-              {member.harness} <span>·</span>{" "}
-              {modelLabel(t(member.model), member.effort)}
-            </span>
-            {canSend && (
-              <IconButton
-                className="member-composer-help"
-                label={t(
-                  work
-                    ? mode === "discuss"
-                      ? "Questions keep project files unchanged."
-                      : "Continue this work using its existing files and requirements."
-                    : "Follow up here. Assign project changes through Host.",
-                )}
-                aria-label={t("About member conversations")}
-              >
-                <CircleHelp size={14} />
-              </IconButton>
-            )}
-          </div>
-          {(work
-            ? activeWork
-            : member.status === "working" && member.workId) && (
+        >
+          {(!following || hasNewer) && (
             <button
               type="button"
-              aria-label={t("Stop member")}
-              onClick={async () => {
-                try {
-                  await product.command(
-                    `/teams/${member.teamId}/works/${activeWork?.id ?? member.workId}/stop`,
-                    {},
-                  );
-                } catch (e) {
-                  setError((e as Error).message);
-                }
+              className="thread-bottom"
+              aria-label={t("Scroll to latest")}
+              onClick={() => {
+                setRequestAnchor(undefined);
+                locatingUntil.current = 0;
+                inspectingActivity.current = false;
+                follow.current = true;
+                setFollowing(true);
+                scroller.current?.scrollTo({
+                  top: scroller.current.scrollHeight,
+                  behavior: reduced ? "instant" : "smooth",
+                });
               }}
             >
-              <Square size={13} />
+              <ArrowDown size={15} />
+              {t("Latest")}
             </button>
           )}
-          <button
-            type="submit"
-            className="member-send"
-            disabled={
-              !canSend ||
-              !draft.trim() ||
-              sending ||
-              (mode === "revise" && !!activeWork)
+          <textarea
+            ref={input}
+            aria-label={t("Message {name}", { name: member.name })}
+            placeholder={
+              canSend
+                ? t("Message {name}…", { name: member.name })
+                : t("Waiting for an assignment")
             }
-            aria-label={t("Send message")}
-          >
-            {sending ? (
-              <LoaderCircle size={15} className="spin" />
-            ) : (
-              <ArrowUp size={17} />
+            value={draft}
+            disabled={!canSend}
+            onChange={(e) => {
+              const text = e.target.value;
+              onUpdate((old) => ({
+                ...old,
+                drafts: { ...old.drafts, [draftKey]: { text, files: [] } },
+              }));
+            }}
+            onKeyDown={(e) => {
+              if (
+                e.key === "Enter" &&
+                !e.shiftKey &&
+                !isComposing(e.nativeEvent)
+              ) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+          />
+          <ComposerChin className="member-composer-toolbar">
+            <div className="member-composer-config">
+              <RuntimeControls
+                team={team}
+                config={runtimeConfig}
+                executionConfig={executionConfig}
+                showContext={false}
+                running={!!activeWork || member.status === "working"}
+                onPermissionChange={(permissions) =>
+                  product.configurePermissions(
+                    member.teamId,
+                    member.id,
+                    permissions,
+                  )
+                }
+                disabled={configuring || sending || !executionConfig}
+                onSettings={onSettings}
+                onChange={async (config, choice) => {
+                  if (configurationLock.current) return;
+                  configurationLock.current = true;
+                  setConfiguring(true);
+                  setError("");
+                  try {
+                    await product.configureMember(
+                      member.teamId,
+                      member.id,
+                      config,
+                      choice,
+                    );
+                  } catch (error) {
+                    if (mounted.current) setError((error as Error).message);
+                    throw error;
+                  } finally {
+                    configurationLock.current = false;
+                    if (mounted.current) setConfiguring(false);
+                  }
+                }}
+              />
+              {canSend && !work && (
+                <IconButton
+                  className="member-composer-help"
+                  label={t(
+                    "Follow up here. Assign project changes through Host.",
+                  )}
+                  aria-label={t("About member conversations")}
+                >
+                  <CircleHelp size={14} />
+                </IconButton>
+              )}
+            </div>
+            {(work
+              ? activeWork
+              : member.status === "working" && member.workId) && (
+              <button
+                type="button"
+                aria-label={t("Stop member")}
+                onClick={async () => {
+                  try {
+                    await product.command(
+                      `/teams/${member.teamId}/works/${activeWork?.id ?? member.workId}/stop`,
+                      {},
+                    );
+                  } catch (e) {
+                    setError((e as Error).message);
+                  }
+                }}
+              >
+                <Square size={13} />
+              </button>
             )}
-          </button>
-        </div>
-        {canSend && member.status === "working" && (
-          <small className="member-queue-hint">
-            {t("Received at the next inbox read or turn boundary.")}
-          </small>
-        )}
-      </ComposerSurface>
+            <button
+              type="submit"
+              className="member-send"
+              disabled={!canSend || !draft.trim() || sending || configuring}
+              aria-label={t("Send message")}
+            >
+              {sending ? (
+                <LoaderCircle size={15} className="spin" />
+              ) : (
+                <ArrowUp size={17} />
+              )}
+            </button>
+          </ComposerChin>
+        </ComposerSurface>
+      )}
     </div>
   );
 }
@@ -788,11 +880,7 @@ export function ExchangeList({
         {t("Open an exchange to see it in the recipient's conversation.")}
       </p>
       {!exchanges.length && (
-        <div className="thread-empty">
-          {t(
-            "The member has joined. Assignments and exchanges will appear here.",
-          )}
-        </div>
+        <div className="thread-empty">{t("No messages yet")}</div>
       )}
       {[...exchanges].reverse().map((exchange) => (
         <button

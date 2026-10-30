@@ -1,9 +1,9 @@
+import { FieldSelect } from "./FieldSelect";
 import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   Check,
   ChevronDown,
-  Cpu,
   KeyRound,
   Layers,
   LoaderCircle,
@@ -23,18 +23,14 @@ import { useI18n } from "./i18n";
 import { Disclosure } from "./Disclosure";
 import { HarnessInstallation } from "./HarnessInstallation";
 import { HarnessAccount } from "./HarnessAccount";
+import { ChatGPTConnection } from "./ChatGPTConnection";
+import { SubscriptionModelList } from "./SubscriptionModelList";
+import { connectionSource, subscriptionCatalogId } from "./modelCatalog";
+import { useSubscriptionCatalog } from "./useSubscriptionCatalog";
 import { ModelPicker, modelProvider } from "./ModelPicker";
-import type { HarnessInspection } from "./harnessCatalog";
+import { useHarnessCatalog, type HarnessInspection } from "./harnessCatalog.ts";
 import "./capabilities.css";
 
-const harnesses = [
-  { id: "codex", name: "Codex", mark: "C" },
-  { id: "claude-code", name: "Claude Code", mark: "✳" },
-  { id: "grok", name: "Grok", mark: "G" },
-  { id: "pi", name: "Pi", mark: "π" },
-  { id: "opencode", name: "OpenCode", mark: "O" },
-  { id: "deepseek-harness", name: "DeepSeek Harness", mark: "D" },
-];
 const protocols: ConnectionProtocol[] = [
   "chat-completions",
   "responses",
@@ -45,14 +41,6 @@ const protocolNames = {
   responses: "Responses",
   "anthropic-messages": "Anthropic Messages",
 };
-const compatible = (c: ModelAccess, id: string) =>
-  c.kind === "subscription"
-    ? c.subscriptionHarness === id
-    : id === "codex"
-      ? !!c.endpoints.responses
-      : ["claude-code", "deepseek-harness"].includes(id)
-        ? !!c.endpoints["anthropic-messages"]
-        : Object.keys(c.endpoints).length > 0;
 type Installation = { installed: boolean; version: string | null };
 type Tab = "harnesses" | "connections" | "preferences";
 
@@ -62,14 +50,17 @@ export function CapabilitySettings({
   teamId,
   workspace,
   onAdvanced,
+  initialTab = "harnesses",
 }: {
   open: boolean;
   onClose: () => void;
   teamId: string;
   workspace: Workspace;
   onAdvanced: () => void;
+  initialTab?: Tab;
 }) {
   const { t } = useI18n();
+  const harnesses = useHarnessCatalog((error) => setError(error.message));
   const [draft, setDraft] = useState<TeamCapabilities | null>(null),
     [saved, setSaved] = useState("");
   const [tab, setTab] = useState<Tab>("harnesses"),
@@ -89,7 +80,7 @@ export function CapabilitySettings({
     setError("");
     setNotice("");
     setEditor(null);
-    setTab("harnesses");
+    setTab(initialTab);
     void api<TeamCapabilities>(`/teams/${teamId}/capabilities`)
       .then((v) => {
         if (live) {
@@ -101,7 +92,7 @@ export function CapabilitySettings({
     return () => {
       live = false;
     };
-  }, [open, teamId]);
+  }, [open, teamId, initialTab]);
   useEffect(() => {
     if (!open) return;
     let live = true;
@@ -120,7 +111,7 @@ export function CapabilitySettings({
     return () => {
       live = false;
     };
-  }, [open, revision]);
+  }, [open, revision, harnesses]);
   const dirty = !!draft && JSON.stringify(draft) !== saved;
   async function save() {
     if (!draft || busy) return;
@@ -136,9 +127,7 @@ export function CapabilitySettings({
       );
       setDraft(next);
       setSaved(JSON.stringify(next));
-      setNotice(
-        t("Team choices saved. Host will use them when planning new work."),
-      );
+      setNotice(t("Saved"));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -221,7 +210,6 @@ export function CapabilitySettings({
           key={editor === "new" ? "new" : editor.id}
           teamId={teamId}
           initial={editor === "new" ? null : editor}
-          enabledHarnesses={draft.enabledHarnesses}
           onCancel={() => setEditor(null)}
           onSave={(connection) => {
             setDraft({
@@ -246,15 +234,7 @@ export function CapabilitySettings({
           >
             {tab === "harnesses" && (
               <>
-                <div className="cap-intro">
-                  <h3>{t("Choose the tools your team can use")}</h3>
-                  <p>
-                    {t(
-                      "Select any number of Harnesses. Host chooses how to use them for each task.",
-                    )}
-                  </p>
-                </div>
-                <div className="cap-harness-grid">
+                <div className="cap-harness-list">
                   {harnesses.map((h) => {
                     const selected = draft.enabledHarnesses.includes(h.id),
                       status = installations[h.id];
@@ -263,69 +243,61 @@ export function CapabilitySettings({
                         key={h.id}
                         className={`cap-harness ${selected ? "selected" : ""}`}
                       >
-                        <button
-                          className="cap-harness-select"
-                          aria-pressed={selected}
-                          onClick={() => toggle(h.id)}
-                          aria-label={t("Allow {name}", { name: h.name })}
-                        >
-                          <span className="cap-harness-mark" aria-hidden>
-                            {h.mark}
-                          </span>
-                          <span className="cap-harness-check" aria-hidden>
-                            {selected && <Check size={13} />}
-                          </span>
-                          <strong>{h.name}</strong>
-                          <span className="cap-install-status">
-                            {!status ? (
-                              t("Checking…")
-                            ) : status.installed ? (
-                              <>
-                                <i />
-                                {t("Installed")}
-                                {status.version && ` · ${status.version}`}
-                              </>
-                            ) : (
-                              t("Not installed")
+                        <div className="cap-harness-row">
+                          <button
+                            className="cap-harness-select"
+                            aria-pressed={selected}
+                            onClick={() => toggle(h.id)}
+                            aria-label={t("Allow {name}", { name: h.name })}
+                          >
+                            <span className="cap-harness-check" aria-hidden>
+                              {selected && <Check size={13} />}
+                            </span>
+                            <span className="cap-harness-copy">
+                              <strong>{h.name}</strong>
+                              <span className="cap-install-status">
+                                {!status ? (
+                                  t("Checking…")
+                                ) : status.installed ? (
+                                  <>
+                                    <i />
+                                    {t("Installed")}
+                                    {status.version && ` · ${status.version}`}
+                                  </>
+                                ) : (
+                                  t("Not installed")
+                                )}
+                              </span>
+                            </span>
+                          </button>
+                          <button
+                            className="cap-manage"
+                            aria-expanded={manage === h.id}
+                            onClick={() =>
+                              setManage(manage === h.id ? null : h.id)
+                            }
+                          >
+                            {t(
+                              status?.installed
+                                ? "Manage installation"
+                                : "Install on device",
                             )}
-                          </span>
-                        </button>
-                        <button
-                          className="cap-manage"
-                          aria-expanded={manage === h.id}
-                          onClick={() =>
-                            setManage(manage === h.id ? null : h.id)
-                          }
-                        >
-                          {t(
-                            status?.installed
-                              ? "Manage installation"
-                              : "Install on device",
-                          )}
-                          <ChevronDown size={12} />
-                        </button>
+                            <ChevronDown size={12} />
+                          </button>
+                        </div>
+                        <Disclosure open={manage === h.id}>
+                          <div className="cap-install-detail">
+                            {manage === h.id && (
+                              <HarnessInstallation
+                                harness={h.id}
+                                onInstalled={() => refresh((v) => v + 1)}
+                              />
+                            )}
+                          </div>
+                        </Disclosure>
                       </div>
                     );
                   })}
-                </div>
-                <Disclosure open={!!manage}>
-                  <div className="cap-install-detail">
-                    {manage && (
-                      <HarnessInstallation
-                        key={manage}
-                        harness={manage}
-                        onInstalled={() => refresh((v) => v + 1)}
-                      />
-                    )}
-                  </div>
-                </Disclosure>
-                <div className="cap-footnote">
-                  <Cpu size={16} />
-                  <p>
-                    {t(
-                      "Harnesses run on this device. Add subscriptions and API models separately in Models and connections.",
-                    )}
-                  </p>
                 </div>
                 {!draft.enabledHarnesses.length && (
                   <p role="alert" className="form-error">
@@ -338,12 +310,7 @@ export function CapabilitySettings({
               <>
                 <div className="cap-intro cap-intro-row">
                   <div>
-                    <h3>{t("Give your team access to models")}</h3>
-                    <p>
-                      {t(
-                        "Add subscriptions or your own API connections. One connection can include several models.",
-                      )}
-                    </p>
+                    <h3>{t("Models")}</h3>
                   </div>
                   <button
                     className="primary-button"
@@ -369,13 +336,7 @@ export function CapabilitySettings({
                         </span>
                         <div>
                           <h4>{c.name}</h4>
-                          <span>
-                            {t(
-                              c.kind === "api"
-                                ? "API connection"
-                                : "Subscription account",
-                            )}
-                          </span>
+                          <span>{t(connectionSource(c))}</span>
                         </div>
                         <button
                           className="secondary-button"
@@ -384,21 +345,14 @@ export function CapabilitySettings({
                           {t("Edit")}
                         </button>
                       </div>
-                      <div className="cap-model-chips">
-                        {c.models.length ? (
-                          c.models.map((m) => <span key={m}>{m}</span>)
-                        ) : (
-                          <span>{t("Account default model")}</span>
-                        )}
-                      </div>
+                      {!!c.models.length && (
+                        <div className="cap-model-chips">
+                          {c.models.map((m) => (
+                            <span key={m}>{m}</span>
+                          ))}
+                        </div>
+                      )}
                       <div className="cap-connection-footer">
-                        <span>
-                          {t("Works with")}:{" "}
-                          {harnesses
-                            .filter((h) => compatible(c, h.id))
-                            .map((h) => h.name)
-                            .join(" · ") || t("Add a compatible endpoint")}
-                        </span>
                         <label className="cap-enable">
                           <input
                             type="checkbox"
@@ -446,14 +400,6 @@ export function CapabilitySettings({
             )}
             {tab === "preferences" && (
               <>
-                <div className="cap-intro">
-                  <h3>{t("Tell Host what matters to you")}</h3>
-                  <p>
-                    {t(
-                      "These preferences guide each decision. Host still considers task complexity, context and available tools.",
-                    )}
-                  </p>
-                </div>
                 <fieldset className="cap-priority">
                   <legend>{t("When choosing models")}</legend>
                   <div>
@@ -553,7 +499,7 @@ export function CapabilitySettings({
                     <p>
                       {harnesses.find((h) => h.id === current?.harness)?.name ??
                         current?.harness}{" "}
-                      · {current?.model ?? t("Account default model")}
+                      {current?.model && ` · ${current.model}`}
                     </p>
                   </div>
                   <button
@@ -571,11 +517,6 @@ export function CapabilitySettings({
                     {t("Advanced settings")} →
                   </button>
                 </div>
-                <p className="cap-footnote">
-                  {t(
-                    "Manual Host, member and task choices are in Advanced settings. Running work keeps its current configuration.",
-                  )}
-                </p>
               </>
             )}
           </div>
@@ -589,13 +530,7 @@ export function CapabilitySettings({
                   {notice}
                 </span>
               ) : (
-                <span>
-                  {dirty
-                    ? t("Unsaved changes")
-                    : t(
-                        "Host combines enabled tools and models for each task.",
-                      )}
-                </span>
+                <span>{dirty ? t("Unsaved changes") : null}</span>
               )}
             </div>
             <button
@@ -616,17 +551,16 @@ export function CapabilitySettings({
 function ConnectionEditor({
   teamId,
   initial,
-  enabledHarnesses,
   onCancel,
   onSave,
 }: {
   teamId: string;
   initial: ModelAccess | null;
-  enabledHarnesses: string[];
   onCancel: () => void;
   onSave: (c: ModelAccess) => void;
 }) {
   const { t } = useI18n();
+
   const [draft, setDraft] = useState<ModelAccess>(() =>
     initial
       ? structuredClone(initial)
@@ -648,30 +582,21 @@ function ConnectionEditor({
     [catalog, setCatalog] = useState<NonNullable<HarnessInspection["models"]>>(
       [],
     ),
-    [inspection, setInspection] = useState<HarnessInspection | null>(null),
-    [revision, refresh] = useState(0);
+    [followCatalog, setFollowCatalog] = useState(!initial?.models.length);
+  const subscriptionId =
+    draft.kind === "subscription" ? subscriptionCatalogId(draft) : null;
+  const subscription = useSubscriptionCatalog(subscriptionId);
+  const selectedModels =
+    draft.kind === "subscription" && followCatalog
+      ? [
+          ...new Set([
+            ...subscription.models.map((model) => model.model),
+            ...draft.models,
+          ]),
+        ]
+      : draft.models;
   const primary = (Object.keys(draft.endpoints)[0] ??
     "chat-completions") as ConnectionProtocol;
-  useEffect(() => {
-    if (draft.kind !== "subscription" || !draft.subscriptionHarness) return;
-    let live = true;
-    setCatalog([]);
-    setInspection(null);
-    void api<HarnessInspection>(
-      `/harnesses/${draft.subscriptionHarness}/check`,
-      {},
-    )
-      .then((r) => {
-        if (live) {
-          setCatalog(r.models ?? []);
-          setInspection(r);
-        }
-      })
-      .catch((e) => live && setError(e.message));
-    return () => {
-      live = false;
-    };
-  }, [draft.kind, draft.subscriptionHarness, revision]);
   async function credential() {
     if (!secret.trim()) return draft.credentialEnv;
     const r = await api<{ reference: string }>(
@@ -725,8 +650,13 @@ function ConnectionEditor({
     try {
       if (!draft.name.trim())
         throw new Error(t("Give this connection a name."));
-      if (draft.kind === "api" && !draft.models.length)
-        throw new Error(t("Add at least one model."));
+      if (draft.kind === "subscription" && !draft.subscriptionHarness) {
+        if (!draft.chatgptAccountId)
+          throw new Error(t("Continue with ChatGPT first."));
+      }
+      if (!selectedModels.length) throw new Error(t("Add at least one model."));
+      if (selectedModels.length > 100)
+        throw new Error(t("Select up to {count} models.", { count: 100 }));
       const ref = draft.kind === "api" ? await credential() : null;
       if (draft.kind === "api" && !ref)
         throw new Error(t("Enter an API key first."));
@@ -737,6 +667,7 @@ function ConnectionEditor({
         throw new Error(t("Enter the API address."));
       onSave({
         ...draft,
+        models: selectedModels,
         name: draft.name.trim(),
         credentialEnv: ref,
         endpoints,
@@ -786,9 +717,11 @@ function ConnectionEditor({
                   models: [],
                   endpoints: kind === "api" ? { "chat-completions": "" } : {},
                   credentialEnv: null,
-                  subscriptionHarness: kind === "subscription" ? "codex" : null,
+                  subscriptionHarness: null,
+                  chatgptAccountId: null,
                 });
                 setCatalog([]);
+                setFollowCatalog(true);
                 setSecret("");
                 setError("");
               }}
@@ -864,10 +797,10 @@ function ConnectionEditor({
               <div className="cap-api-options">
                 <label className="cap-field">
                   <span>{t("Primary API format")}</span>
-                  <select
+                  <FieldSelect
                     value={primary}
-                    onChange={(e) => {
-                      const p = e.target.value as ConnectionProtocol;
+                    onValueChange={(value) => {
+                      const p = value as ConnectionProtocol;
                       setDraft({
                         ...draft,
                         endpoints: { [p]: draft.endpoints[primary] ?? "" },
@@ -880,13 +813,8 @@ function ConnectionEditor({
                         {protocolNames[p]}
                       </option>
                     ))}
-                  </select>
+                  </FieldSelect>
                 </label>
-                <p>
-                  {t(
-                    "Add another endpoint only if this provider supports it. Host can then use more compatible Harnesses.",
-                  )}
-                </p>
                 {protocols
                   .filter((p) => p !== primary)
                   .map((p) => (
@@ -914,119 +842,134 @@ function ConnectionEditor({
           <>
             <div className="cap-account-options">
               {[
-                { id: "codex", name: "ChatGPT" },
+                { id: "chatgpt", name: "ChatGPT" },
+                { id: "codex", name: "Codex local sign-in" },
                 { id: "claude-code", name: "Claude" },
                 { id: "grok", name: "Grok" },
               ].map((a) => (
                 <button
                   type="button"
                   key={a.id}
-                  aria-pressed={draft.subscriptionHarness === a.id}
+                  aria-pressed={
+                    (draft.subscriptionHarness ?? "chatgpt") === a.id
+                  }
                   onClick={() => {
+                    if ((draft.subscriptionHarness ?? "chatgpt") === a.id)
+                      return;
                     setDraft({
                       ...draft,
-                      subscriptionHarness: a.id,
+                      subscriptionHarness: a.id === "chatgpt" ? null : a.id,
+                      chatgptAccountId: null,
                       models: [],
                     });
+                    setFollowCatalog(true);
                     setError("");
                   }}
                 >
-                  {a.name}
-                  {draft.subscriptionHarness === a.id && <Check size={14} />}
+                  {t(a.name)}
+                  {(draft.subscriptionHarness ?? "chatgpt") === a.id && (
+                    <Check size={14} />
+                  )}
                 </button>
               ))}
             </div>
-            <p className="cap-footnote">
-              {t(
-                "Subscriptions use their official Harness login. API connections can be shared across compatible Harnesses.",
-              )}
-            </p>
-            {draft.subscriptionHarness === "codex" ? (
+            {!draft.subscriptionHarness ? (
+              <ChatGPTConnection
+                value={draft.chatgptAccountId}
+                onChange={(id) => {
+                  if (id !== draft.chatgptAccountId) {
+                    setDraft((v) => ({
+                      ...v,
+                      chatgptAccountId: id,
+                      models: [],
+                    }));
+                    setFollowCatalog(true);
+                    setError("");
+                  }
+                }}
+                onChanged={subscription.refresh}
+              />
+            ) : draft.subscriptionHarness === "codex" ? (
               <CodexAccount
-                inspection={inspection}
-                onChanged={() => refresh((v) => v + 1)}
+                inspection={subscription.inspection}
+                onChanged={subscription.refresh}
               />
             ) : (
               draft.subscriptionHarness && (
                 <HarnessAccount
                   harness={draft.subscriptionHarness}
-                  model={draft.models[0] ?? null}
-                  onChanged={() => refresh((v) => v + 1)}
+                  model={selectedModels[0] ?? null}
+                  onChanged={subscription.refresh}
                 />
               )
             )}
           </>
         )}
-        <div className="cap-model-section">
-          <div>
-            <h4>{t("Models available to Host")}</h4>
-            {draft.kind === "api" && (
-              <button
-                className="text-button"
-                type="button"
-                disabled={busy}
-                onClick={() => void loadModels()}
-              >
-                {busy ? <LoaderCircle size={13} className="spinner" /> : null}
-                {t("Load model list")}
-              </button>
-            )}
-          </div>
-          <p>
-            {t(
-              draft.kind === "api"
-                ? "Choose models from the provider, or enter their model IDs."
-                : "Choose specific models, or let Host use the account's available models.",
-            )}
-          </p>
-          <div className="cap-model-chips">
-            {draft.models.map((m) => (
-              <span key={m}>
-                {m}
-                <button
-                  type="button"
-                  aria-label={t("Remove {name}", { name: m })}
-                  onClick={() =>
-                    setDraft({
-                      ...draft,
-                      models: draft.models.filter((v) => v !== m),
-                    })
-                  }
-                >
-                  <X size={12} />
-                </button>
-              </span>
-            ))}
-          </div>
-          <ModelPicker
-            label={t("Add model…")}
-            allowDefault={false}
-            value={null}
-            models={catalog}
-            onChange={(model) => {
-              if (model && !draft.models.includes(model))
-                setDraft({ ...draft, models: [...draft.models, model] });
+        {draft.kind === "subscription" ? (
+          <SubscriptionModelList
+            key={subscriptionId ?? "unselected"}
+            models={subscription.models}
+            selected={selectedModels}
+            loading={subscription.loading}
+            error={subscription.error}
+            connected={!!subscriptionId}
+            onRefresh={subscription.refresh}
+            onChange={(models, all = false) => {
+              setDraft((value) => ({ ...value, models }));
+              setFollowCatalog(all);
+              setError("");
             }}
           />
-        </div>
-        <p className="cap-compatibility">
-          <Check size={14} />
-          {t("Enabled compatible Harnesses")}:{" "}
-          {harnesses
-            .filter(
-              (h) => enabledHarnesses.includes(h.id) && compatible(draft, h.id),
-            )
-            .map((h) => h.name)
-            .join(" · ") || t("Select a compatible Harness in the Harness tab")}
-        </p>
+        ) : (
+          <div className="cap-model-section">
+            <div>
+              <h4>{t("Models available to Host")}</h4>
+              {draft.kind === "api" && (
+                <button
+                  className="text-button"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void loadModels()}
+                >
+                  {busy ? <LoaderCircle size={13} className="spinner" /> : null}
+                  {t("Load model list")}
+                </button>
+              )}
+            </div>
+            <div className="cap-model-chips">
+              {draft.models.map((m) => (
+                <span key={m}>
+                  {m}
+                  <button
+                    type="button"
+                    aria-label={t("Remove {name}", { name: m })}
+                    onClick={() =>
+                      setDraft({
+                        ...draft,
+                        models: draft.models.filter((v) => v !== m),
+                      })
+                    }
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <ModelPicker
+              label={t("Add model…")}
+              value={null}
+              models={catalog}
+              onChange={(model) => {
+                if (model && !draft.models.includes(model))
+                  setDraft({ ...draft, models: [...draft.models, model] });
+              }}
+            />
+          </div>
+        )}
       </form>
       <footer className="cap-footer">
         <div role={error ? "alert" : undefined}>
-          {error ? (
-            <span className="form-error">{t(error)}</span>
-          ) : (
-            t("Add the connection, then save your team settings.")
-          )}
+          {error ? <span className="form-error">{t(error)}</span> : null}
         </div>
         <button
           type="button"
@@ -1040,7 +983,7 @@ function ConnectionEditor({
           type="submit"
           form="cap-connection-form"
           className="primary-button"
-          disabled={busy}
+          disabled={busy || (followCatalog && subscription.loading)}
         >
           {t(initial ? "Apply changes" : "Add connection")}
         </button>

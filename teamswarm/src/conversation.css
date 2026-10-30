@@ -40,6 +40,26 @@
   flex-basis: 500px;
   box-shadow: none;
 }
+.member-reading-view > .canvas-stage {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.member-reading-view > .conversation-detail {
+  flex: 1;
+  width: 100%;
+  border-left: 0;
+}
+.member-reading-view .member-thread-content {
+  max-width: 780px;
+  margin-inline: auto;
+}
+.member-reading-view .member-composer {
+  width: calc(100% - 40px);
+  max-width: 740px;
+  margin-inline: auto;
+}
 .conversation-detail .detail-content > header {
   min-height: 48px;
   padding: 10px 16px;
@@ -47,11 +67,27 @@
 }
 .member-header-model {
   color: var(--subtle);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 18px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 48%;
+  max-width: 100%;
+}
+.member-header-identity {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.member-header-identity strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 550;
 }
 .detail-scroll.member-thread-wrapper {
   padding: 0;
@@ -87,12 +123,12 @@
 }
 .member-entry.incoming {
   width: fit-content;
-  max-width: 82%;
+  max-width: 85%;
   margin-left: auto;
 }
-.member-entry.assistant,
-.member-entry.outgoing {
-  margin-right: 9%;
+.member-entry.assistant {
+  padding-left: 4px;
+  margin-right: clamp(0px, (100% - 384px) * 0.175, 56px);
 }
 .member-entry.incoming .member-entry-meta {
   justify-content: flex-end;
@@ -237,18 +273,8 @@
   flex: 1;
   min-width: 0;
 }
-.member-composer-config > span {
-  min-width: 0;
-  color: var(--subtle);
-  font-size: 11px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.member-composer-config > span > span {
-  margin-inline: 5px;
-}
-.member-composer-toolbar button {
+.member-composer-toolbar > button,
+.member-composer-help {
   border: 1px solid var(--line);
   border-radius: 50%;
   width: 28px;
@@ -402,17 +428,19 @@
   border-radius: 6px;
   color: var(--secondary);
   background: var(--surface-top);
-  font:
-    11px/18px ui-monospace,
-    "Cascadia Code",
-    Consolas,
-    monospace;
+  font: 11px/18px var(--font-mono);
   margin: 5px 0 9px;
 }
 .activity-change > span {
   display: block;
   color: var(--text);
   margin-top: 7px;
+}
+.activity-body .activity-diff-before {
+  border-left: 2px solid var(--danger);
+}
+.activity-body .activity-diff-after {
+  border-left: 2px solid var(--success);
 }
 .activity-items > .message-text {
   margin-block: 12px;
@@ -491,7 +519,7 @@
   height: 19px;
 }
 .collaboration-view .graph-copy strong {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 550;
   line-height: 20px;
   display: block;
@@ -512,7 +540,8 @@
   padding: 9px 16px;
   min-height: 34px;
   border-radius: 0 0 9px 9px;
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 18px;
   background: transparent;
 }
 .node-harness {
@@ -636,9 +665,6 @@
   }
   .nav-row {
     min-height: 40px;
-  }
-  .member-header-model {
-    max-width: 45%;
   }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { badRequest } from "../errors.js";
 import { definitionInput } from "./project-history.js";
 import { insightInput } from "./collaboration-records.js";
+import { nativePermissions } from "./harness/permissions.js";
 
 export const key = z.string().trim().min(1).max(200);
 export const text = z.string().trim().min(1).max(20000);
@@ -19,6 +20,7 @@ const nullableName = z.string().trim().min(1).max(200).nullable().default(null);
 export const executionConfig = z
   .object({
     harness: z.string().trim().min(1).max(64).default("codex"),
+    chatgptAccountId: z.string().uuid().nullable().optional(),
     model: nullableName,
     provider: nullableName,
     baseUrl: z
@@ -49,6 +51,7 @@ export const executionConfig = z
       .nullable()
       .default(null),
     access: z.enum(["read-only", "workspace-write"]).default("workspace-write"),
+    permissions: nativePermissions.optional(),
     protocol: z
       .enum(["responses", "chat-completions", "anthropic-messages"])
       .nullable()
@@ -63,12 +66,12 @@ export const runtimeSettings = z
     expectedVersion: z.number().int().min(0),
     workspace: z.string().trim().min(1).max(4096),
     config: executionConfig,
-    maxConcurrent: z.number().int().min(1).max(8).default(2),
+    maxConcurrent: z.number().int().positive().optional(),
     maxWorksPerRun: z.number().int().min(2).max(100).default(20),
     maxTurnsPerWork: z.number().int().min(1).max(100).default(20),
     timeoutSeconds: z.number().int().min(10).max(3600).default(600),
-    hostContextMaxBytes: z.number().int().min(32000).max(524288).default(96000),
-    hostSessionMaxTurns: z.number().int().min(1).max(20).default(6),
+    hostContextMaxBytes: z.number().int().min(32000).max(524288).optional(),
+    hostSessionMaxTurns: z.number().int().min(1).max(20).optional(),
     allowIsolatedWorkspaces: z.boolean().default(true),
   })
   .strict();
@@ -94,6 +97,23 @@ export function parse<T extends z.ZodType>(
   return result.data;
 }
 export const tools = {
+  team_pending_permissions: {
+    description: "Host only. Read pending native Harness permission requests in this conversation. Each request identifies the member, work, native tool call and input. The native tool waits for a one-time reply or task cancellation.",
+    schema: z.object({}).strict(),
+  },
+  team_answer_permission: {
+    description: "Host dialogue only. Relay the user's explicit allow or deny reply for one pending native permission request. Cite the latest user message ID and complete verbatim content. Never grant on behalf of a member or a background follow-up; do not reuse a previous grant.",
+    schema: z.object({ requestId: key, decision: z.enum(["allow", "deny"]), sourceMessageId: key, authorizationQuote: text }).strict(),
+  },
+  team_device_resources: {
+    description: "Host only. Read fresh device memory, Windows commit headroom, CPU load, process counts, shared reserve policy, per-Harness measured costs and estimated additional starts. This is device-wide across Teams. Forecasts change with load; use them when arranging parallel work.",
+    schema: z.object({}).strict(),
+  },
+  team_set_device_reserve: {
+    description: "Host dialogue only. Apply the user's explicit device memory reserve (MiB, 1024 MiB = 1 GiB), or null to remove the memory reserve. Optionally set the CPU utilization target. This affects all Teams on this device, including queued work; running work continues. Read team_device_resources for expectedVersion. Cite the latest user message and its complete verbatim content as authorizationQuote. Preserve the user's reserve until they change it. Explain the applied setting in the conversation.",
+    schema: z.object({expectedVersion:z.number().int().nonnegative(),reserveMemoryMiB:z.number().int().nonnegative().nullable(),
+      cpuTargetPercent:z.number().min(10).max(100).optional(),sourceMessageId:key,authorizationQuote:text}).strict(),
+  },
   team_save_insight: {
     description:
       "Preserve a useful idea or decision with exact sourceMessageIds from the current input or team_state. Use a stable key and expectedRevision (0 for new). Proposed/rejected/superseded ideas are NOT effective requirements. Host records explicit user judgments as adopted, uncertainty as proposed. When adopting a branch into mainline, keep its ideas proposed until team_adopt_branch atomically publishes them; use that tool instead of simply changing the insight status. Members may only propose. Never invent source IDs or turn a tentative idea into a commitment.",
@@ -152,31 +172,52 @@ export const tools = {
     description: "Host only. Save another model/effort choice using an EXISTING user-configured resource. Copies its Harness, endpoint, credential reference and maximum access unchanged. Read the native model/effort catalog with team_check_resource for subscriptions; use only user-provided model IDs for custom APIs. Does not switch any execution or verify access. Cannot add credentials, log in or change endpoints.",
     schema: z.object({ sourceResourceId: key, expectedResourceVersion: z.number().int().positive(), name: z.string().trim().min(1).max(100), model: key, effort: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/).nullable().default(null), reason: z.string().trim().min(1).max(2000) }).strict(),
   },
+  team_context_index: {
+    description: "Find project definitions, working notes, decisions, members and work in this branch. Expand topics or search by task; use returned refs with team_context_read. Filter by workId or memberId for a handoff. sinceAttemptId lists changed and removed material since that attempt.",
+    schema: z.object({ query: z.string().max(500).default(""), topic: z.string().max(200).optional(), workId: key.optional(), memberId: key.optional(), sinceAttemptId: key.optional(), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(50).default(20) }).strict(),
+  },
   team_context_read: {
     description:
-      "Host only. Retrieve original discussion or continuity notes in this branch with search and pagination. Use to recover earlier decisions without replaying all history.",
+      "Read branch materials by refs, or search original messages and notes. Follow nextOffset for content and nextRefOffset for remaining batch refs; on continuation pass expectedRevisions from the preceding page. section=links/sources pages complete relationships and provenance when linkCount/sourceCount exceed the header preview. Use messageId for an original message, or document:<revision> for a historical definition in this branch. If a revision changes, restart at offset 0.",
     schema: z
       .object({
-        kind: z.enum(["messages", "notes"]),
+        kind: z.enum(["messages", "notes", "materials"]),
+        refs: z.array(z.string().min(1).max(256)).min(1).max(20).optional(),
+        messageId: key.optional(),
+        expectedRevisions: z.record(z.string().min(1).max(256),key).optional(),
+        section: z.enum(["body","links","sources"]).default("body"),
+        maxChars: z.number().int().min(256).max(32000).default(12000),
         query: z.string().max(200).default(""),
         conversationId: key.optional(),
         offset: z.number().int().min(0).default(0),
         limit: z.number().int().min(1).max(20).default(5),
       })
-      .strict(),
+      .strict().refine(v => v.kind !== "materials" || !!v.refs?.length, "refs are required for materials"),
   },
   team_host_note: {
     description:
-      "Host only. Save a concise unresolved decision, its rationale/conditions, or what you are waiting for; cite actual source message IDs. Update the same key and resolve settled notes. Notes are advisory, do not change project requirements, assign work, grant permission or cross branches. Do not duplicate authoritative definitions or runtime facts.",
+      "Host only. Maintain a sourced project overview, decision, reusable experience or working note under a stable key. Write project facts directly; keep process narration and update history out of content. Reference current definitions/work with sourceRefs and original discussion with sourceMessageIds. Use memberIds for member-specific material. Refresh notes when their sources change; resolve settled working notes. Requirements and permissions remain in the project definition.",
     schema: z
       .object({
         key,
+        title: z.string().trim().min(1).max(160).optional(),
+        kind: z.enum(["overview", "decision", "experience", "working"]).optional(),
+        // JSON Schema has no regex flags; model providers do not all accept JS
+        // Unicode property escapes. Keep the exact check at tool execution.
+        topic: z.string().min(1).max(120)
+          .refine(value => /^[\p{L}\p{N}_/-]+$/u.test(value), "Use letters, numbers, underscores, slashes or hyphens.")
+          .describe("Letters and numbers in any language, underscores, slashes or hyphens only.").optional(),
+        sourceRefs: z.array(key).max(30).default([]),
+        sourcePaths: z.array(z.string().min(1).max(2000)).max(30).default([]),
+        expectedSourceRevisions: z.record(key,key).optional().describe("Exact returned revision for each sourceRef."),
+        expectedFileHashes: z.record(z.string().max(2000),z.string().regex(/^[a-f0-9]{64}$/)).optional().describe("sha256 returned by team_read_file for each sourcePath."),
+        memberIds: z.array(key).max(30).default([]),
         expectedVersion: z.number().int().min(0),
         content: z.string().trim().min(1).max(3000),
         status: z.enum(["open", "resolved"]),
-        sourceMessageIds: z.array(key).min(1).max(10),
+        sourceMessageIds: z.array(key).max(20).default([]),
       })
-      .strict(),
+      .strict().refine(v => v.sourceRefs.length + v.sourceMessageIds.length + v.sourcePaths.length > 0, "Cite sourceRefs, sourcePaths or sourceMessageIds"),
   },
   team_inbox: {
     description:
@@ -305,9 +346,15 @@ export const tools = {
         resourceId: key.optional(),
         expectedResourceVersion: z.number().int().min(1).optional(),
         access: z.enum(["read-only", "workspace-write"]).optional(),
+        permissions: nativePermissions.optional(),
         selectionReason: z.string().max(1000).optional(),
       })
       .strict(),
+  },
+  team_remove_member: {
+    description:
+      "Host only. Delete a member from this branch's active roster, preserving its conversations, work and results. The member must have no unfinished work, pending review, open exchanges or pending messages. The Host cannot be deleted. Use after the user asks to remove that member.",
+    schema: z.object({ memberId: key }).strict(),
   },
   team_continue_work: {
     description:
@@ -331,6 +378,7 @@ export const tools = {
         acceptanceCriteria: z.array(z.string().min(1).max(1000)).max(MAX_ACCEPTANCE_CRITERIA),
         acceptanceEvidence: acceptanceEvidence.optional(),
         inputArtifactIds: z.array(key).max(128),
+        contextRefs: z.array(z.string().min(1).max(256)).max(100).optional(),
         dependsOn: z.array(key).max(30),
         reviewOf: key.nullable().default(null),
         verification: z
@@ -340,7 +388,9 @@ export const tools = {
         responsibilityKey: key.optional(),
         writePaths: z.array(z.string().min(1).max(2000)).max(128).optional(),
         executionRequirements: executionRequirements.optional(),
-        workspaceMode: z.enum(["shared", "isolated"]).default("shared"),
+        permissions: nativePermissions.optional(),
+        workspaceMode: z.enum(["shared", "isolated"]).default("isolated"),
+        publicationMode: z.enum(["automatic", "integration"]).optional().describe("Private copies publish checked files by default. Choose integration to retain a candidate for a separately assigned integration work."),
         integratesWorkIds: z.array(key).max(30).default([]),
       })
       .strict(),
@@ -378,8 +428,12 @@ export const tools = {
     schema: z.object({ artifactId: key }).strict(),
   },
   team_read_file: {
-    description: "Read a project UTF-8 file and its current hash. Read before editing; use offsets for large files. Private/runtime directories are excluded.",
-    schema: z.object({ path: z.string().min(1).max(2000), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(64000).default(20000) }).strict(),
+    description: "Read a UTF-8 file in the assigned workspace and its current hash. Omit offset and limit to read from the beginning. Pagination uses character positions, not line numbers. When truncated is true, read the remaining content before quoting the full file. Private/runtime directories are excluded.",
+    schema: z.object({
+      path: z.string().min(1).max(2000).describe("File path relative to the assigned workspace."),
+      offset: z.number().int().min(0).default(0).describe("Zero-based character offset, not a line number. Omit or use 0 to include the first character."),
+      limit: z.number().int().min(1).max(64000).default(20000).describe("Maximum characters to read, not lines. Omit for 20000 characters. For pagination, advance offset by the length of the returned text."),
+    }).strict(),
   },
   team_list_files: {
     description: "List a project directory without private/runtime directories. Paths are relative to the assigned workspace.",
@@ -446,8 +500,17 @@ export const tools = {
       .strict(),
   },
 };
+/** The full native policy schemas live in the Harness section, not every Host tool declaration. */
+function progressivePermissions(schema: any): any {
+  if (Array.isArray(schema)) return schema.map(progressivePermissions);
+  if (!schema || typeof schema !== "object") return schema;
+  return Object.fromEntries(Object.entries(schema).map(([key, value]) => [key,
+    key === "properties" ? Object.fromEntries(Object.entries(value as object).map(([name, field]) => [name,
+      name === "permissions" ? { type: "object", properties: { harness: { type: "string" } }, required: ["harness"], additionalProperties: true,
+        description: "Harness-native policy. Read harness:<id>/permissions for its exact fields and supported values before selecting. Server validates that native schema." } : progressivePermissions(field)])) : progressivePermissions(value)]));
+}
 export const toolSpecs = Object.entries(tools).map(([name, value]) => ({
   name,
   description: value.description,
-  inputSchema: z.toJSONSchema(value.schema, { io: "input" }) as Record<string, unknown>,
+  inputSchema: progressivePermissions(z.toJSONSchema(value.schema, { io: "input" })) as Record<string, unknown>,
 }));

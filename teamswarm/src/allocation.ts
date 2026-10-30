@@ -1,10 +1,11 @@
 import type {
-  CompatibilityIssue,
   ExecutionResource,
   ResourceAvailability,
   ResourceSelection,
 } from "@team/contracts/allocation";
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import type { ExecutionConfig } from "@team/contracts/runtime";
+import { executionCompatibility } from "../../apps/server/src/runtime/model-routing";
 
 export type {
   CompatibilityIssue,
@@ -15,75 +16,16 @@ export type {
   ResourceSelection,
 } from "@team/contracts/allocation";
 
-/** Display mirror of the accepted shared rule
- * (apps/server/src/runtime/allocation-contract.ts checkExecutionCompatibility).
- * The server stays authoritative; this only labels resources the UI already
- * loaded, so a protocol, credential or install mismatch is never hidden. */
-const protocols: Record<string, readonly string[]> = {
-  codex: ["responses"],
-  grok: ["chat-completions"],
-  "claude-code": ["anthropic-messages"],
-  "deepseek-harness": ["anthropic-messages"],
-  pi: ["chat-completions", "responses", "anthropic-messages"],
-  opencode: ["chat-completions", "responses", "anthropic-messages"],
-};
-
-export function resourceIssues(config: ExecutionConfig): CompatibilityIssue[] {
-  const supported = Object.hasOwn(protocols, config.harness)
-    ? protocols[config.harness]
-    : undefined;
-  if (!supported) return ["unknown_harness"];
-  const issues: CompatibilityIssue[] = [];
-  if (config.protocol && !supported.includes(config.protocol))
-    issues.push("incompatible_protocol");
-  if (
-    (!["codex", "claude-code", "grok"].includes(config.harness) ||
-      config.baseUrl ||
-      config.credentialEnv) &&
-    (!config.model || !config.baseUrl || !config.credentialEnv)
-  )
-    issues.push("missing_configuration");
-  if (
-    config.harness !== "codex" &&
-    !(
-      config.harness === "claude-code" &&
-      !config.baseUrl &&
-      !config.credentialEnv
-    ) &&
-    config.effort != null &&
-    !(
-      config.harness === "pi" &&
-      (!config.protocol || config.protocol === "chat-completions") &&
-      ["minimal", "low", "medium", "high", "xhigh", "max"].includes(
-        config.effort,
-      )
-    )
-  )
-    issues.push("unsupported_effort");
-  if (
-    config.thinkingFormat &&
-    (config.harness !== "pi" ||
-      (config.protocol && config.protocol !== "chat-completions"))
-  )
-    issues.push("unsupported_thinking_format");
-  if (
-    config.maxOutputTokens != null &&
-    !["pi", "opencode"].includes(config.harness)
-  )
-    issues.push("unsupported_output_budget");
-  if (
-    config.contextWindowTokens != null &&
-    !["pi", "opencode"].includes(config.harness)
-  )
-    issues.push("unsupported_context_window");
-  return issues;
-}
+export const resourceIssues = executionCompatibility;
 
 /** A connection that brings its own endpoint or credential reference is not the
  * native account a harness check probes. Its availability comes from its own
  * configuration, never from the native ChatGPT account or model directory. */
 export function isCustomProvider(config: ExecutionConfig | null | undefined) {
-  return Boolean(config && (config.baseUrl || config.credentialEnv));
+  return Boolean(
+    config &&
+    (config.baseUrl || config.credentialEnv || config.chatgptAccountId),
+  );
 }
 
 /** Facts observed by an existing harness check. checkedAt null means the UI has
@@ -183,12 +125,12 @@ export type ResourceConfigField = { label: string; value: string };
 export function configFields(config: ExecutionConfig): ResourceConfigField[] {
   return [
     { label: "Harness", value: config.harness },
-    { label: "Model", value: config.model ?? "Default" },
+    { label: "Model", value: config.model ?? "Not selected" },
     { label: "Protocol", value: config.protocol ?? "Default" },
     { label: "API endpoint", value: config.baseUrl ?? "—" },
     { label: "Credential reference", value: config.credentialEnv ?? "—" },
     { label: "Effort", value: config.effort ?? "Default" },
-    ...(["pi", "opencode"].includes(config.harness)
+    ...(harnessManifest(config.harness)?.models.outputBudget
       ? [
           {
             label: "Context window tokens",
@@ -250,6 +192,8 @@ const configKeys = new Set([
   "thinkingFormat",
   "maxOutputTokens",
   "contextWindowTokens",
+  "chatgptAccountId",
+  "permissions",
 ]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>

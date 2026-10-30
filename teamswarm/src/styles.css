@@ -4,18 +4,65 @@
   font-weight: 100 900;
   font-display: swap;
 }
+@font-face {
+  font-family: "Anthropic Sans";
+  src: local("Anthropic Sans");
+  font-weight: 300 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Anthropic Sans";
+  src: local("Anthropic Sans Italic");
+  font-weight: 300 800;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Anthropic Serif";
+  src: local("Anthropic Serif");
+  font-weight: 300 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Anthropic Serif";
+  src: local("Anthropic Serif Italic");
+  font-weight: 300 800;
+  font-style: italic;
+  font-display: swap;
+}
 :root {
   --font-scale: 1;
   --icon-scale: 1;
-  font-family:
-    "Inter Variable",
-    "Noto Sans SC",
-    "PingFang SC",
-    "Microsoft YaHei UI",
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  --font-ui:
+    "Anthropic Sans", "Inter Variable", "Noto Sans SC", ui-sans-serif,
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "PingFang TC",
+    "Hiragino Sans", "Apple SD Gothic Neo", "Kohinoor Devanagari",
+    "Kohinoor Bangla", "Kohinoor Telugu", "Tamil Sangam MN",
+    "Kohinoor Gujarati", "Malayalam Sangam MN", "Nirmala UI",
+    "Noto Sans Devanagari UI", "Noto Sans Devanagari", "Noto Sans Bengali UI",
+    "Noto Sans Bengali", "Noto Sans Telugu UI", "Noto Sans Telugu",
+    "Noto Sans Tamil UI", "Noto Sans Tamil", "Noto Sans Gujarati UI",
+    "Noto Sans Gujarati", "Noto Sans Kannada UI", "Noto Sans Kannada",
+    "Noto Sans Malayalam UI", "Noto Sans Malayalam", Thonburi, "Leelawadee UI",
+    "Noto Sans Thai UI", "Noto Sans Thai", Kefa, Ebrima, "Noto Sans Ethiopic",
+    "Abyssinica SIL", sans-serif;
+  --font-conversation:
+    "Anthropic Serif", "Noto Sans SC", ui-serif, Georgia, "Times New Roman",
+    "Kohinoor Devanagari", "Kohinoor Bangla", "Kohinoor Telugu",
+    "Tamil Sangam MN", "Kohinoor Gujarati", "Malayalam Sangam MN", "Nirmala UI",
+    "Noto Sans Devanagari UI", "Noto Sans Devanagari", "Noto Sans Bengali UI",
+    "Noto Sans Bengali", "Noto Sans Telugu UI", "Noto Sans Telugu",
+    "Noto Sans Tamil UI", "Noto Sans Tamil", "Noto Sans Gujarati UI",
+    "Noto Sans Gujarati", "Noto Sans Kannada UI", "Noto Sans Kannada",
+    "Noto Sans Malayalam UI", "Noto Sans Malayalam", Thonburi, "Leelawadee UI",
+    "Noto Sans Thai UI", "Noto Sans Thai", Kefa, Ebrima, "Noto Sans Ethiopic",
+    "Abyssinica SIL", serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", "Noto Sans SC", monospace;
+  --font-caption-size: 12px;
+  font-family: var(--font-ui);
+  font-feature-settings: "dlig" 0;
   color: var(--text);
   background: var(--shell);
   font-synthesis: none;
@@ -25,6 +72,7 @@
   box-sizing: border-box;
 }
 body {
+  font-family: var(--font-ui);
   margin: 0;
   color: var(--text);
   background: var(--shell);
@@ -35,6 +83,20 @@ textarea,
 select {
   font: inherit;
   color: inherit;
+}
+optgroup,
+option,
+dialog,
+summary,
+small,
+label,
+legend {
+  font-family: inherit;
+}
+pre,
+code,
+samp {
+  font-family: var(--font-mono);
 }
 button {
   cursor: pointer;
@@ -85,9 +147,7 @@ p {
   margin: 0;
 }
 kbd {
-  font:
-    calc(11px * var(--font-scale)) "Inter Variable",
-    sans-serif;
+  font: calc(11px * var(--font-scale)) var(--font-ui);
   color: var(--subtle);
   font-variant-numeric: tabular-nums;
 }
@@ -1036,6 +1096,52 @@ button.menu-item:hover {
 .file-chip button:hover {
   background: var(--hover);
 }
+.file-chip.image-attachment {
+  position: relative;
+  width: 92px;
+  height: 92px;
+  padding: 3px;
+  border-radius: 10px;
+}
+.file-chip.image-attachment > button:first-child {
+  width: 100%;
+  justify-content: center;
+  padding: 0;
+  border-radius: 7px;
+  overflow: hidden;
+}
+.image-attachment img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.file-chip.image-attachment > button:first-child > span {
+  display: none;
+}
+.file-chip.image-attachment > button:last-child:not(:first-child) {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  padding: 4px;
+  background: var(--panel);
+  border-radius: 50%;
+  box-shadow: 0 1px 4px #0003;
+}
+.modal.attachment-preview-modal {
+  width: min(1000px, calc(100vw - 48px));
+}
+.attachment-preview-modal > img {
+  display: block;
+  width: 100%;
+  max-height: 65dvh;
+  object-fit: contain;
+  padding: 0 20px;
+}
+.attachment-preview-modal > .text-button {
+  margin: 16px 20px;
+}
 .selected-skill,
 .skill-tag {
   display: inline-flex;
@@ -1087,6 +1193,27 @@ button.menu-item:hover {
 }
 .spinner {
   animation: spin 1s linear infinite;
+}
+.view-feedback {
+  flex: 1;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--secondary);
+  font-family: var(--font-ui);
+  font-size: 14px;
+}
+.view-feedback p {
+  margin: 0;
+}
+.view-feedback-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 .recovery {
   height: 100dvh;

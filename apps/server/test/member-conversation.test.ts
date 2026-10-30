@@ -306,6 +306,34 @@ test("member HTTP input is idempotent, streams typed activity, and does not repl
   }
 });
 
+test("rebuilt member context retains the preceding final reply in chronological order and isolates other members", async () => {
+  const f = await fixture();
+  try {
+    const route = `/product/teams/${f.team.id}/members/${f.a.id}/messages`;
+    const first = await f.api(route, { clientRequestId: randomUUID(), content: "Read the current proof file." });
+    assert.equal(first.status, 200);
+    await until(() => f.harness.requests.length === 1);
+    f.harness.finish({ status: "completed", text: "PROOF_CURRENT_MEMBER_721" });
+    await until(() => f.store.list<Work>("works", f.team.id).some(w => w.result === "PROOF_CURRENT_MEMBER_721" && w.status === "submitted"));
+    const unrelated = f.store.createWork(f.run, f.b.id, "Other conversation", "Other input", [], [], []);
+    unrelated.interaction = { messageIds: [] };
+    unrelated.result = "UNRELATED_MEMBER_REPLY";
+    f.store.setStatus(unrelated, "submitted");
+    const second = await f.api(route, { clientRequestId: randomUUID(), content: "Repeat the full content from your immediately preceding reply." });
+    assert.equal(second.status, 200);
+    await until(() => f.harness.requests.length === 2);
+    const input = JSON.parse(f.harness.requests[1].input);
+    const history = input.conversationHistory;
+    assert(history.some((m: any) => m.content === "Read the current proof file."));
+    assert.equal(history.at(-1).content, "PROOF_CURRENT_MEMBER_721");
+    assert.equal(history.at(-1).senderId, f.a.id);
+    assert(!JSON.stringify(history).includes("UNRELATED_MEMBER_REPLY"));
+    f.harness.finish();
+  } finally {
+    await f.close();
+  }
+});
+
 test("graph links assignments and actual exchanges, never dependency chains; stopped mail stays stopped", async () => {
   const f = await fixture();
   try {
@@ -867,4 +895,90 @@ test("queued correspondence survives a service restart and keeps the same anchor
     await restarted?.close();
     await f.close();
   }
+});
+
+
+test("pre-start resource failure settles mail once and retry reuses the work", async () => {
+  const f = await fixture();
+  try {
+    f.a.selection = { resourceId: "team-default", resourceVersion: 999, reason: "Pinned old resource" };
+    f.store.save("members", f.a);
+    const message = f.service.runtime.correspondence.send(f.team.id, "user", f.a.id, "Continue this conversation", undefined, undefined, f.wa.id);
+    await until(() => f.service.runtime.correspondence.list(f.team.id).find(m => m.id === message.id)?.status === "failed");
+    for (let i = 0; i < 4; i++) await (f.service.runtime as any).pump();
+    const failed = f.store.list<Work>("works", f.team.id).filter(w => w.interaction?.messageIds.includes(message.id));
+    assert.equal(failed.length, 1);
+    assert.equal(failed[0].attemptId, null);
+    assert.equal(f.harness.requests.length, 0);
+    const conversation = memberConversation(f.service.runtime, f.team.id, f.a.id);
+    assert.equal(conversation.entries.filter(e => e.id.startsWith("error:")).length, 1);
+    assert.equal(conversation.entries.find(e => e.retryWorkId)?.retryWorkId, failed[0].id);
+    assert.throws(() => f.service.runtime.retry(f.team.id, failed[0].id, failed[0].revision), /changed to version/);
+    delete f.a.selection;
+    f.store.save("members", f.a);
+    f.service.runtime.retry(f.team.id, failed[0].id, failed[0].revision);
+    await until(() => f.harness.requests.length === 1);
+    assert.equal(f.store.list<Work>("works", f.team.id).filter(w => w.interaction?.messageIds.includes(message.id)).length, 1);
+    f.harness.finish();
+    await until(() => f.service.runtime.correspondence.list(f.team.id).find(m => m.id === message.id)?.status === "delivered");
+  } finally { await f.close(); }
+});
+
+test("deleted members retain a read-only conversation and reject new messages", async () => {
+  const f = await fixture();
+  try {
+    f.store.setStatus(f.wa, "accepted");
+    f.store.removeMember(f.team.id, f.a.id);
+    const conversation = memberConversation(f.service.runtime, f.team.id, f.a.id);
+    assert.equal(conversation.canSend, false);
+    assert(conversation.entries.some(e => e.text === "Explain the draft"));
+    assert.throws(() => f.service.runtime.correspondence.send(f.team.id, "user", f.a.id, "Hello"), /deleted/);
+  } finally { await f.close(); }
+});
+
+test("restart settles legacy queued mail without duplicating work or dropping a later message", async () => {
+  const f = await fixture();
+  let reopened: ReturnType<typeof createApp> | undefined;
+  try {
+    (f.service.runtime as any).pump = () => {};
+    const old = f.service.runtime.correspondence.send(f.team.id, "user", f.a.id, "Old failed message", undefined, undefined, f.wa.id);
+    const failed = f.store.createWork(f.run, f.a.id, "Member conversation", "Reply", [], [], []);
+    failed.threadId = f.wa.threadId ?? f.wa.id;
+    failed.interaction = { messageIds: [old.id], resumeFromWorkId: f.wa.id };
+    failed.error = "Old configuration failed before start";
+    failed.status = "failed";
+    f.store.save("works", failed);
+    const next = f.service.runtime.correspondence.send(f.team.id, "user", f.a.id, "A separate new message", undefined, undefined, f.wa.id);
+    await f.service.close();
+    const harness = new MailHarness();
+    reopened = createApp({ dataDir: path.join(f.root, "data"), harnesses: [harness] });
+    await until(() => harness.requests.length === 1);
+    const messages = reopened.runtime.correspondence.list(f.team.id);
+    assert.equal(messages.find(m => m.id === old.id)?.status, "failed");
+    assert.equal(messages.find(m => m.id === old.id)?.workId, failed.id);
+    assert.deepEqual(JSON.parse(harness.requests[0].input).incomingMessages.map((m: { id: string }) => m.id), [next.id]);
+    assert.equal(reopened.runtime.store.list<Work>("works", f.team.id).filter(w => w.interaction?.messageIds.includes(old.id)).length, 1);
+    harness.finish();
+    await until(() => reopened!.runtime.correspondence.list(f.team.id).find(m => m.id === next.id)?.status === "delivered");
+  } finally { await reopened?.close(); await f.close(); }
+});
+
+test("approval decisions are scoped to a live attempt, idempotent, and cancelled on stop", async () => {
+  const f = await fixture();
+  try {
+    f.store.setStatus(f.wa, "queued");
+    const attempt = f.store.start(f.wa, f.a.config);
+    const pending = f.service.runtime.approvals.request(f.wa, attempt.id, { tool: "Write", details: "draft.md" });
+    const [approval] = f.service.runtime.approvals.list(f.team.id);
+    assert.equal(approval.status, "pending");
+    assert.equal((await f.api(`/teams/${f.team.id}/approvals/${approval.id}`, { accepted: true })).status, 200);
+    assert.equal(await pending, true);
+    assert.equal((await f.api(`/teams/${f.team.id}/approvals/${approval.id}`, { accepted: true })).status, 200);
+    assert.equal((await f.api(`/teams/${f.team.id}/approvals/${approval.id}`, { accepted: false })).status, 409);
+    const second = f.service.runtime.approvals.request(f.wa, attempt.id, { tool: "Bash", details: "run tests" });
+    const waiting = f.service.runtime.approvals.list(f.team.id).at(-1)!;
+    await f.service.runtime.stop(f.team.id, f.wa.id);
+    assert.equal(await second, false);
+    assert.equal((await f.api(`/teams/${f.team.id}/approvals/${waiting.id}`, { accepted: true })).status, 409);
+  } finally { await f.close(); }
 });

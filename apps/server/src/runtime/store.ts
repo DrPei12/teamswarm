@@ -17,6 +17,10 @@ import { TeamStore } from "../store.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { ownedRuntimeLocks, processIdentity, processStartedAfterFile } from "./process-identity.js";
 import type { ProjectHistory } from "./project-history.js";
+import { RuntimeChanges } from "./changes.js";
+import { createMemberDirectory } from "./member-workspaces.js";
+import { WorkspaceAccess } from "./workspace-access.js";
+import { successfulCommand, finishedCommand } from "./harness/command-observations.js";
 import type {
   Acceptance,
   ArtifactVersion,
@@ -85,11 +89,14 @@ export function overlaps(a: string, b: string): boolean {
 
 export class RuntimeStore {
   readonly db: DatabaseSync;
+  readonly changes: RuntimeChanges;
   history?: ProjectHistory;
   private lockPath: string;
   private lockId = randomUUID();
+  private commitFrames: Array<Array<() => void>> = [];
   constructor(readonly teams: TeamStore) {
     this.db = teams.database;
+    this.changes = new RuntimeChanges(this.db);
     this.lockPath = path.join(teams.dataDir, "runtime.lock");
     if (existsSync(this.lockPath)) {
       const owner = JSON.parse(readFileSync(this.lockPath, "utf8"));
@@ -137,6 +144,21 @@ export class RuntimeStore {
             team_id TEXT NOT NULL REFERENCES teams(id), run_id TEXT, work_id TEXT, attempt_id TEXT,
             type TEXT NOT NULL, data TEXT NOT NULL CHECK(json_valid(data)), created_at TEXT NOT NULL);
           CREATE INDEX IF NOT EXISTS runtime_events_team ON runtime_events(team_id, sequence);
+          CREATE INDEX IF NOT EXISTS runtime_events_attempt ON runtime_events(attempt_id, type, sequence);
+          CREATE INDEX IF NOT EXISTS runtime_works_status ON runtime_works(json_extract(data,'$.status'),team_id);
+          CREATE INDEX IF NOT EXISTS runtime_works_run ON runtime_works(team_id,json_extract(data,'$.runId'));
+          CREATE INDEX IF NOT EXISTS runtime_works_member ON runtime_works(team_id,json_extract(data,'$.memberId'));
+          CREATE INDEX IF NOT EXISTS runtime_works_thread ON runtime_works(team_id,json_extract(data,'$.threadId'));
+          CREATE INDEX IF NOT EXISTS runtime_works_exchange ON runtime_works(team_id,json_extract(data,'$.collaborationExchangeId'));
+          CREATE INDEX IF NOT EXISTS runtime_runs_state ON runtime_runs(team_id,json_extract(data,'$.state'));
+          CREATE INDEX IF NOT EXISTS runtime_attempts_work ON runtime_attempts(team_id,json_extract(data,'$.workId'));
+          CREATE INDEX IF NOT EXISTS runtime_exchanges_status ON runtime_exchanges(team_id,json_extract(data,'$.status'));
+          CREATE INDEX IF NOT EXISTS runtime_works_global_status ON runtime_works(json_extract(data,'$.status'),team_id);
+          CREATE INDEX IF NOT EXISTS runtime_waiting_deadline ON runtime_works(json_extract(data,'$.continuation.deadline'),team_id)
+            WHERE json_extract(data,'$.status')='waiting' AND json_extract(data,'$.continuation.timeoutReportedAt') IS NULL;
+          CREATE INDEX IF NOT EXISTS runtime_open_exchanges_due ON runtime_exchanges(json_extract(data,'$.commitment.dueAt'),team_id)
+            WHERE json_extract(data,'$.status') NOT IN ('resolved','cancelled','declined');
+          CREATE INDEX IF NOT EXISTS runtime_exchange_messages_exchange ON runtime_exchange_messages(team_id,json_extract(data,'$.exchangeId'));
           CREATE TABLE IF NOT EXISTS runtime_receipts (scope TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(scope, request_id));
           CREATE UNIQUE INDEX IF NOT EXISTS runtime_run_message ON runtime_runs(json_extract(data, '$.sourceMessageId'));
           CREATE UNIQUE INDEX IF NOT EXISTS runtime_host_member ON runtime_members(team_id) WHERE json_extract(data, '$.kind') = 'host';
@@ -165,9 +187,12 @@ export class RuntimeStore {
           this.db.prepare("INSERT INTO runtime_migrations VALUES (4, ?)").run(timestamp());
         }
       });
+      for (const table of tables) this.changes.track(`runtime_${table}`, table, "team_id",
+        ["settings", "members", "runs", "works", "exchanges", "exchange_messages"].includes(table), "data");
+      this.changes.track("runtime_events", "events");
       // An interrupted service never turns an unknown execution into success or replays it.
       for (const team of teams.listTeams())
-        for (const work of this.list<Work>("works", team.id)) {
+        for (const work of this.workQuery(team.id, { statuses: ["running", "stopping"] })) {
           if (["running", "stopping"].includes(work.status))
             this.setStatus(
               work,
@@ -181,6 +206,7 @@ export class RuntimeStore {
     }
   }
   close(): void {
+    this.changes.close();
     if (
       existsSync(this.lockPath) &&
       JSON.parse(readFileSync(this.lockPath, "utf8")).id === this.lockId
@@ -191,16 +217,29 @@ export class RuntimeStore {
   transaction<T>(fn: () => T): T {
     const savepoint = "runtime_" + randomUUID().replaceAll("-", "");
     this.db.exec(`SAVEPOINT ${savepoint}`);
+    const callbacks: Array<() => void> = [];
+    this.commitFrames.push(callbacks);
+    let result: T;
     try {
-      const result = fn();
+      result = fn();
       this.db.exec(`RELEASE SAVEPOINT ${savepoint}`);
-      return result;
     } catch (error) {
+      this.commitFrames.pop();
       this.db.exec(
         `ROLLBACK TO SAVEPOINT ${savepoint}; RELEASE SAVEPOINT ${savepoint}`,
       );
       throw error;
     }
+    this.commitFrames.pop();
+    const parent = this.commitFrames.at(-1);
+    if (parent) parent.push(...callbacks);
+    else for (const callback of callbacks) callback();
+    return result;
+  }
+  afterCommit(callback: () => void) {
+    const frame = this.commitFrames.at(-1);
+    if (frame) frame.push(callback);
+    else callback();
   }
   save(table: Table, value: Entity): void {
     const id = "id" in value ? value.id : value.teamId;
@@ -209,6 +248,7 @@ export class RuntimeStore {
         `INSERT INTO runtime_${table}(id, team_id, data) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`,
       )
       .run(id, value.teamId, JSON.stringify(value));
+    this.changes.signal();
   }
   get<T extends Entity>(table: Table, teamId: string, id: string, missingMessage?: string): T {
     const row = this.db
@@ -224,6 +264,48 @@ export class RuntimeStore {
       )
       .all(teamId)
       .map((row) => JSON.parse(String(row.data)) as T);
+  }
+  workQuery(teamId?: string, options: {
+    statuses?: string[]; memberId?: string; runId?: string; threadId?: string;
+    exchangeId?: string; branchId?: string; limit?: number; before?: number;
+  } = {}): Work[] {
+    const terms: string[] = [], args: (string | number)[] = [];
+    if (teamId) { terms.push("team_id=?"); args.push(teamId); }
+    if (options.statuses) {
+      if (!options.statuses.length) return [];
+      terms.push(`json_extract(data,'$.status') IN (${options.statuses.map(() => "?").join(",")})`);
+      args.push(...options.statuses);
+    }
+    for (const [field,value] of [["memberId",options.memberId],["runId",options.runId],
+      ["collaborationExchangeId",options.exchangeId]] as const) {
+      if (value) { terms.push(`json_extract(data,'$.${field}')=?`); args.push(value); }
+    }
+    if (options.threadId) { terms.push("coalesce(json_extract(data,'$.threadId'),id)=?"); args.push(options.threadId); }
+    if (options.branchId) {
+      terms.push(`json_extract(data,'$.runId') IN (SELECT id FROM runtime_runs WHERE
+        json_extract(data,'$.branchId')=? OR (json_extract(data,'$.branchId') IS NULL AND
+        json_extract(data,'$.conversationId') IN (SELECT conversation_id FROM project_conversations WHERE branch_id=?)))`);
+      args.push(options.branchId, options.branchId);
+    }
+    if (options.before !== undefined) { terms.push("rowid<?"); args.push(options.before); }
+    const limit = options.limit === undefined ? "" : " LIMIT ?";
+    if (options.limit !== undefined) args.push(options.limit);
+    const rows = this.db.prepare(`SELECT data FROM runtime_works${terms.length ? " WHERE " + terms.join(" AND ") : ""}
+      ORDER BY rowid ${limit ? "DESC" : "ASC"}${limit}`).all(...args);
+    if (limit) rows.reverse();
+    return rows.map(row => JSON.parse(String(row.data)) as Work);
+  }
+  activeRuns(teamId: string): Run[] {
+    return this.db.prepare("SELECT data FROM runtime_runs WHERE team_id=? AND json_extract(data,'$.state')='active' ORDER BY rowid")
+      .all(teamId).map(r => JSON.parse(String(r.data)));
+  }
+  workCount(teamId: string, runId: string): number {
+    return Number(this.db.prepare("SELECT count(*) n FROM runtime_works WHERE team_id=? AND json_extract(data,'$.runId')=?")
+      .get(teamId, runId)?.n ?? 0);
+  }
+  openExchanges(teamId: string): TeamExchange[] {
+    return this.db.prepare("SELECT data FROM runtime_exchanges WHERE team_id=? AND json_extract(data,'$.status') NOT IN ('resolved','declined','cancelled') ORDER BY rowid")
+      .all(teamId).map(r => JSON.parse(String(r.data)));
   }
   settings(teamId: string): RuntimeSettings | null {
     return this.list<RuntimeSettings>("settings", teamId)[0] ?? null;
@@ -262,6 +344,7 @@ export class RuntimeStore {
         JSON.stringify(data),
         timestamp(),
       );
+    this.changes.signal();
   }
   events(teamId: string, after = 0, limit = 200): RuntimeEvent[] {
     if (!this.teams.getTeam(teamId)) throw notFound();
@@ -335,8 +418,9 @@ export class RuntimeStore {
           "active_execution",
           "Stop and reconcile pending work before changing runtime settings.",
         );
+      const { maxConcurrent: _legacyConcurrency, ...deviceManagedInput } = input;
       const settings = {
-        ...input,
+        ...deviceManagedInput,
         workspace,
         teamId,
         version: expectedVersion + 1,
@@ -355,6 +439,8 @@ export class RuntimeStore {
         config: { ...settings.config, access: "read-only" },
         createdAt: host?.createdAt ?? timestamp(),
         ...(host?.hostSelections ? { hostSelections: host.hostSelections } : {}),
+        ...(host?.permissionOverride ? { permissionOverride: host.permissionOverride } : {}),
+        ...(host?.permissionVersion ? { permissionVersion: host.permissionVersion } : {}),
       });
       this.event(teamId, "runtime.configured", {
         version: settings.version,
@@ -386,9 +472,39 @@ export class RuntimeStore {
       createdAt: timestamp(),
       branchId: branchId ?? this.history?.ensure(teamId).id,
     };
+    member.workspaceRoot = createMemberDirectory(this.teams.dataDir, teamId, member.id);
     this.save("members", member);
     this.event(teamId, "member.created", { memberId: member.id, name });
     return member;
+  }
+  activeMember(teamId: string, memberId: string): Member {
+    const member = this.get<Member>("members", teamId, memberId);
+    if (member.removedAt)
+      throw conflict("member_removed", "This member has been deleted.");
+    return member;
+  }
+  removeMember(teamId: string, memberId: string): Member {
+    return this.transaction(() => {
+      const member = this.get<Member>("members", teamId, memberId);
+      if (member.kind === "host")
+        throw conflict("host_member", "The Host cannot be deleted.");
+      if (member.removedAt) return member;
+      if (this.list<Work>("works", teamId).some(w =>
+        w.memberId === memberId && ["queued", "waiting", "yielded", "running", "stopping", "recovery_required", "submitted"].includes(w.status)))
+        throw conflict("member_busy", "Finish or stop this member's work and complete any pending review before deleting it.");
+      if (this.list<TeamExchange>("exchanges", teamId).some(e =>
+        [e.initiatorId, e.recipientId].includes(memberId) && !["resolved", "cancelled", "declined"].includes(e.status)))
+        throw conflict("member_exchange_pending", "Resolve or cancel this member's open exchanges before deleting it.");
+      const mailTable = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='runtime_correspondence'").get();
+      if (mailTable && this.db.prepare(`SELECT id FROM runtime_correspondence WHERE team_id=?
+        AND (json_extract(data, '$.recipientId')=? OR json_extract(data, '$.senderId')=?)
+        AND json_extract(data, '$.status') IN ('queued','processing') LIMIT 1`).get(teamId, memberId, memberId))
+        throw conflict("member_messages_pending", "Wait for this member's pending messages to finish before deleting it.");
+      member.removedAt = timestamp();
+      this.save("members", member);
+      this.event(teamId, "member.removed", { memberId, name: member.name });
+      return member;
+    });
   }
   enqueueHost(
     teamId: string,
@@ -465,7 +581,7 @@ export class RuntimeStore {
     dependsOn: string[],
     reviewOf: string | null = null,
   ): Work {
-    const recipient = this.get<Member>("members", run.teamId, memberId);
+    const recipient = this.activeMember(run.teamId, memberId);
     if (
       this.history &&
       recipient.kind !== "host" &&
@@ -513,6 +629,7 @@ export class RuntimeStore {
       inputs,
       dependsOn,
       reviewOf,
+      ...(recipient.kind !== "host" && run.settings.allowIsolatedWorkspaces !== false ? { workspaceMode: "isolated" as const } : {}),
       artifactIds: [],
       status: "queued",
       attemptId: null,
@@ -628,6 +745,8 @@ export class RuntimeStore {
     return attempt;
   }
   setStatus(work: Work, status: WorkStatus, error: string | null = null): void {
+    if (["queued", "waiting", "running"].includes(status))
+      this.activeMember(work.teamId, work.memberId);
     work.status = status;
     work.error = error;
     work.updatedAt = timestamp();
@@ -739,6 +858,9 @@ export class RuntimeStore {
     const submitted = new Map<string, { path: string; bytes: Buffer }>();
     let totalBytes = Buffer.byteLength(summary);
     for (const name of files) {
+      if (work.workspaceMode === "isolated" && work.writePaths !== undefined &&
+          !work.writePaths.some(owned => WorkspaceAccess.overlaps(owned, WorkspaceAccess.relative(name, false))))
+        throw conflict("artifact_outside_ownership", `The submitted path is outside this work's writePaths: ${name}`);
       const bytes = this.readWorkspaceFile(workspace, name);
       const canonical = path
         .relative(
@@ -840,7 +962,7 @@ export class RuntimeStore {
           )
           .get(id, work.teamId, work.attemptId!);
         const event = row ? JSON.parse(String(row.data)) : null;
-        if (!event || event.type !== "commandExecution" || event.exitCode !== 0 || event.status !== "completed")
+        if (!successfulCommand(event))
           throw conflict(
             "invalid_check",
             "Self-check evidence must reference a successful command from this attempt.",
@@ -977,10 +1099,8 @@ export class RuntimeStore {
               `No command evidence matches '${id}' in this review attempt. Copy the complete id returned by team_review_evidence, not an abbreviated ID, nativeItemId, or transcript event ID.`,
             );
           if (
-            check.type !== "commandExecution" ||
-            !Number.isInteger(check.exitCode) ||
-            check.status !== "completed" ||
-            (criterion.passed && check.exitCode !== 0)
+            !finishedCommand(check) ||
+            (criterion.passed && !successfulCommand(check))
           )
             throw conflict(
               "invalid_check",
@@ -999,6 +1119,11 @@ export class RuntimeStore {
         );
     }
     const artifacts = this.verifyArtifacts(target);
+    if (reviewer.workspaceMode === "isolated") {
+      for (const artifact of artifacts)
+        if (artifact.path !== "@result" && hash(this.readWorkspaceFile(this.workspace(reviewer), artifact.path)) !== artifact.sha256)
+          throw conflict("review_workspace_changed", `Restore the assigned artifact version before reviewing: ${artifact.path}`);
+    }
     for (const artifact of artifacts) {
       const received = this.db
         .prepare(

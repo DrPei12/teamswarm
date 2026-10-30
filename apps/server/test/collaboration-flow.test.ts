@@ -342,6 +342,8 @@ test("continuing an empty failed turn retains the original thread's saved artifa
     const failed = f.create("Interrupted before submission");
     failed.threadId = first.id;
     failed.continuationOf = first.id;
+    failed.workspace = f.store.workspace(f.store.get<Work>("works", f.team.id, first.id));
+    Object.assign(failed, f.service.runtime.workspaces.continuationSource(f.store.get<Work>("works", f.team.id, first.id)));
     f.store.save("works", failed);
     f.store.setStatus(failed, "failed", "No submitted artifacts in this turn");
     assert.deepEqual(failed.artifactIds, []);
@@ -625,6 +627,7 @@ test("two writers cannot silently overwrite the current output pointer", async (
     f.store.setStatus(b, "interrupted");
     writeFileSync(path.join(f.workspace, "guide.md"), "content");
     for (const work of [a, b]) {
+      work.workspaceMode = "shared"; // This contract covers shared output-head publication.
       const attempt = { id: randomUUID() } as Attempt;
       work.attemptId = attempt.id;
       work.artifactIds = f.store

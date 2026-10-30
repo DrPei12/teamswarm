@@ -1,12 +1,19 @@
+import { ExecutionApprovals } from "./approvals.js";
 import { bindEvidence, evidenceFor, reviewRequirements, reviewEvidenceContext } from "./acceptance-evidence.js";
 import { BranchAdoption } from "./branch-adoption.js";
+import { ModelGateway } from "./model-gateway.js";
 import { z } from "zod";
 import path from "node:path";
 import { delegationIdentity } from "./delegation.js";
 import { prepareExecutionEnvironment } from "./harness/execution-environment.js";
-import { badRequest, conflict, notFound } from "../errors.js";
+import { badRequest, conflict, notFound, ServiceError } from "../errors.js";
 import { TeamStore } from "../store.js";
 import { CodexHarness } from "./harness/codex.js";
+import { RuntimeResources, type Admission, type ResourceSampling } from "./resources.js";
+import { ResourceNotifications } from "./resource-notifications.js";
+import { MemberWorkspaces } from "./member-workspaces.js";
+import { NativePermissions } from "./native-permissions.js";
+import { validateNativePermissions } from "./harness/permissions.js";
 import { rebootConfirmsTermination, systemBootTime } from "./harness/native-recovery.js";
 import { RuntimeStore, activeStates, overlaps, hash } from "./store.js";
 import { redact } from "./redact.js";
@@ -31,6 +38,7 @@ import {
   resolveExecution,
 } from "./allocation.js";
 import { HostContext } from "./host-context.js";
+import { estimateTokens } from "./context-budget.js";
 import { WorkspaceAccess } from "./workspace-access.js";
 import { resourcePlanningGuidance } from "./resource-planning.js";
 import {
@@ -56,43 +64,61 @@ import type {
   TeamExchangeMessage,
 } from "./types.js";
 
-const hostInstructions = `You are the persistent Host of this Team. Respond in the user's language. Use team_state to inspect current facts. Distinguish discussion from delegation. For an actual task, declare acceptanceEvidence for every criterion: native_check for required command execution and review_judgment for semantic inspection. Classify unresolved legacy or continuation criteria with team_set_acceptance_evidence from the original requirements before verification. File-only production may submit with required native checks pending independent review. Establish effective requirements, organize appropriately scoped work, and use team_delegate. You may create independent members as needed with team_add_member. You are read-only; members perform implementation. A review member must use read-only access and a different identity from the producer. Work runs asynchronously; after delegation explain the useful reasoning and expected outcome, then finish this asynchronous turn. You will receive another turn when work finishes. Never poll or sleep waiting for other members. Read current state and explain results without claiming unrecorded progress. Choose verification=self-check for small reversible changes such as icons, copy edits, or scoped documents. Those tasks finish after their producer checks them; do not add a reviewer, test files, backup copies, or process reports unless the actual change needs them. Choose independent for complex, high-impact work or when the user requires independent acceptance. Do not downgrade such requirements. Use team_directory to read saved subscription and API resources; team_check_resource refreshes installation, credentials and native model/effort choices without a paid generation request. Use team_derive_resource to save a different model on an existing configured connection, and team_select_resource to change idle member defaults, nonexecuting tasks, or your future turns in this branch. Read exact versions and revisions before selecting; never invent availability, move credentials, change endpoints, interrupt an active Attempt, or retry a failed resource in a loop. Tell the user what changed and why. ${resourcePlanningGuidance} For shared production, supply writePaths with the exact relative files or directories ending in / owned by the work. Keep lightweight tasks on file tools with executionRequirements omitted. Request nativeCommands/childProcesses/scratchWrite/loopback only when required; choose a nativeChecks-capable executor for those checks. For follow-ups, set continuationOf to the precise existing production work ID. Preserve useful user ideas and judgments with team_save_insight and the actual sourceMessageId; proposals stay proposed and must not silently become requirements. Read retainedInsights and their sources before asking the user to repeat decisions. Do not spawn native subagents. Keep current user requirements above learned methods. Never accept a result only because a member says it is complete. Diagnose rejected work and delegate a bounded repair with current requirements. Respect the run work limit. Product records and tools are authoritative for ownership and acceptance. Tool permission denials are real boundaries.`;
-const memberInstructions = `You are an independent Team member. Complete only the assigned work and respect the configured workspace and permissions. Read assigned immutable input artifacts with team_read_artifact. Use actual tools to perform and check work. When writePaths is supplied, native project access is read-only; use team_read_file then team_edit_file/team_write_file for owned changes. The platform enforces file ownership and current hashes. Do not try native writes or shell workarounds. For implementation, submit real UTF-8 artifact paths and a factual summary with team_submit_result, including the input versions actually used. If verification=self-check, include selfChecks with one item for every exact acceptance criterion, in order, describing what you actually checked. Retrieve observed command event IDs with team_review_evidence when available; a semantic self-check may have no event IDs and is only your own judgment. Keep stable artifact filenames; TeamSwarm stores version history. For a small change do not create extra tests, backups, or reports unless necessary for correctness. Do not modify files after submitting. For a review assignment, independently inspect every target artifact and check every acceptance criterion, then record your evidenced decision with team_accept_work. Do not spawn subagents. Do not use another attempt's identity, change acceptance criteria, or claim unavailable observations. Pinned acceptanceEvidence is binding: use fresh native_check events for each required execution criterion. If a criterion is unresolved, ask Host to classify it; do not infer or weaken it. Report a blocker instead of manufacturing success.`;
+const hostInstructions = `You are the persistent Host of this Team. Respond in the user's language. Use team_state to inspect current facts. Distinguish discussion from delegation. For an actual task, declare acceptanceEvidence for every criterion: native_check for required command execution and review_judgment for semantic inspection. Classify unresolved legacy or continuation criteria with team_set_acceptance_evidence from the original requirements before verification. File-only production may submit with required native checks pending independent review. Establish effective requirements, organize appropriately scoped work, and use team_delegate. You may create independent members as needed with team_add_member. When the user requests removing a member, use team_remove_member after its work and exchanges have finished; its history is retained. You are read-only; members perform implementation. A review member must use read-only access and a different identity from the producer. Work runs asynchronously; after delegation explain the useful reasoning and expected outcome, then finish this asynchronous turn. You will receive another turn when work finishes. Never poll or sleep waiting for other members. Read current state and explain results without claiming unrecorded progress. Choose verification=self-check for small reversible changes such as icons, copy edits, or scoped documents. Those tasks finish after their producer checks them; do not add a reviewer, test files, backup copies, or process reports unless the actual change needs them. Choose independent for complex, high-impact work or when the user requires independent acceptance. Do not downgrade such requirements. Use team_directory to read saved subscription and API resources; team_check_resource refreshes installation, credentials and native model/effort choices without a paid generation request. Use team_derive_resource to save a different model on an existing configured connection, and team_select_resource to change idle member defaults, nonexecuting tasks, or your future turns in this branch. Read exact versions and revisions before selecting; never invent availability, move credentials, change endpoints, interrupt an active Attempt, or retry a failed resource in a loop. Tell the user what changed and why. ${resourcePlanningGuidance} For production, supply writePaths with the exact relative files or directories ending in / owned by the work. Members receive private working copies by default. Checked results return to the project only when source file versions still match. A publication conflict preserves the candidate and identifies the changed paths; assign integration from current versions when needed. Read harness:<id>/execution and harness:<id>/permissions through team_context_read before choosing native execution and permissions; expand results/isolation/models only as the task needs. Use each Harness's own policy structure, independently of its model connection. Native permission requests appear in this conversation; use team_pending_permissions and relay the user's reply through team_answer_permission. Keep lightweight tasks on file tools with executionRequirements omitted. Request nativeCommands/childProcesses/scratchWrite/loopback only when required; choose a nativeChecks-capable executor for those checks. For follow-ups, set continuationOf to the precise existing production work ID. Preserve useful user ideas and judgments with team_save_insight and the actual sourceMessageId; proposals stay proposed and must not silently become requirements. Read the project overview and team_context_index before asking the user to repeat decisions. Expand task-related definitions with team_context_read, then attach their contextRefs to delegated work. Maintain sourced overview/decision/experience/working notes with team_host_note when useful knowledge changes. Use the same stable topic keys and state project facts directly; do not produce reading reports or process explanations. Do not spawn native subagents. Keep current user requirements above learned methods. Never accept a result only because a member says it is complete. Diagnose rejected work and delegate a bounded repair with current requirements. Respect the run work limit. Product records and tools are authoritative for ownership and acceptance. Tool permission denials are real boundaries.`;
+const memberInstructions = `You are an independent Team member. Complete only the assigned work and respect the configured workspace and permissions. Read assigned immutable input artifacts with team_read_artifact. Use actual tools to perform and check work. In an isolated working copy, use the Harness's native tools and command loop within your assigned permissions; submit only owned writePaths. In an explicitly shared workspace, native project access is read-only; use team_read_file then team_edit_file/team_write_file for owned changes. The platform enforces shared file ownership and current hashes. Do not bypass a native permission denial. Read your Harness's description through team_context_read when its execution or permission behavior matters. For implementation, submit real UTF-8 artifact paths and a factual summary with team_submit_result, including the input versions actually used. If verification=self-check, include selfChecks with one item for every exact acceptance criterion, in order, describing what you actually checked. Retrieve observed command event IDs with team_review_evidence when available; a semantic self-check may have no event IDs and is only your own judgment. Keep stable artifact filenames; TeamSwarm stores version history. For a small change do not create extra tests, backups, or reports unless necessary for correctness. Do not modify files after submitting. For a review assignment, independently inspect every target artifact and check every acceptance criterion, then record your evidenced decision with team_accept_work. Do not spawn subagents. Do not use another attempt's identity, change acceptance criteria, or claim unavailable observations. Pinned acceptanceEvidence is binding: use fresh native_check events for each required execution criterion. If a criterion is unresolved, ask Host to classify it; do not infer or weaken it. Report a blocker instead of manufacturing success.`;
 
 export class TeamRuntime {
+  readonly models: ModelGateway;
   readonly store: RuntimeStore;
   readonly history: ProjectHistory;
   readonly correspondence: Correspondence;
+  readonly approvals: ExecutionApprovals;
   readonly records: CollaborationRecords;
   readonly communication: TeamCommunication;
   readonly harnesses: Map<string, Harness>;
   readonly catalog: TeamCatalog;
   readonly hostContext: HostContext;
+  readonly resources: RuntimeResources;
+  readonly workspaces: MemberWorkspaces;
+  readonly nativePermissions: NativePermissions;
+  private readonly resourceNotifications: ResourceNotifications;
+  private resourceWaiting = new Set<string>();
   private active = new Map<
     string,
     { teamId: string; attemptId: string; done: Promise<void> }
   >();
   private ticking = false;
   private closing = false;
-  private timer: NodeJS.Timeout;
+  private timer?: NodeJS.Timeout;
+  private pumpPending = false;
+  private unsubscribeChanges: () => void;
   private interrupting = new Set<string>();
   private schedulerError: string | null = null;
   get isClosing(): boolean {
     return this.closing;
   }
 
-  constructor(teams: TeamStore, harnesses: Harness[] = [new CodexHarness()]) {
+  constructor(teams: TeamStore, harnesses: Harness[] = [new CodexHarness()], sampling: ResourceSampling = {}) {
     this.store = new RuntimeStore(teams);
     this.history = new ProjectHistory(this.store);
     this.store.history = this.history;
+    this.workspaces = new MemberWorkspaces(this.store, this.history);
+    this.nativePermissions = new NativePermissions(this.store);
     this.correspondence = new Correspondence(this.store);
+    this.approvals = new ExecutionApprovals(this.store);
     this.records = new CollaborationRecords(this.store);
     this.communication = new TeamCommunication(this.store, this.history);
-    this.harnesses = new Map(harnesses.map((h) => [h.id, h]));
+    this.models = new ModelGateway(teams.dataDir);
+    this.harnesses = new Map(harnesses.map((h) => [h.id, this.models.wrap(h)]));
     this.catalog = new TeamCatalog(this.store, this.history, this.harnesses);
-    this.hostContext = new HostContext(this.store, this.history, this.catalog);
-    this.timer = setInterval(() => this.pump(), 500);
-    this.timer.unref();
+    this.resources = new RuntimeResources(this.store, this.harnesses, () => this.requestPump(), sampling.sample, sampling.availablePhysical, sampling.now);
+    this.hostContext = new HostContext(this.store, this.history, this.catalog, () => this.resources.summary());
+    this.resourceNotifications = new ResourceNotifications(this.store);
+    this.unsubscribeChanges = this.store.changes.subscribe(() => {
+      if (this.store.changes.pending().length) this.requestPump();
+    });
+    for (const team of teams.listTeams()) this.store.changes.mark(team.id);
+    this.scheduleMaintenance();
   }
   summary(teamId: string): { status: string; message: string } {
     if (this.schedulerError)
@@ -102,7 +128,7 @@ export class TeamRuntime {
         status: "not_connected",
         message: "Configure a workspace and harness to start this Team.",
       };
-    const work = this.store.list<Work>("works", teamId);
+    const work = this.store.workQuery(teamId, { statuses: ["queued", "waiting", "running", "stopping", "recovery_required"] });
     if (work.some((w) => w.status === "recovery_required"))
       return {
         status: "recovery_required",
@@ -133,6 +159,7 @@ export class TeamRuntime {
     ]);
     return {
       runtime: this.summary(teamId),
+      pendingPermissions: this.nativePermissions.list(teamId, scopedRun?.conversationId),
       harnesses: [...this.harnesses.values()].map((h) => ({
         id: h.id,
         capabilities: h.capabilities,
@@ -140,6 +167,7 @@ export class TeamRuntime {
       settings: scopedRun?.settings ?? this.store.settings(teamId),
       members: this.store
         .list<Member>("members", teamId)
+        .filter(m => !scope || !m.removedAt)
         .filter(
           (m) =>
             !scope ||
@@ -192,6 +220,7 @@ export class TeamRuntime {
         throw new Error(
           "The configured thinking format requires the Pi adapter.",
         );
+      validateNativePermissions(config);
       this.harnesses.get(config.harness)?.validateConfig?.(config);
     } catch (error) {
       throw badRequest(
@@ -256,6 +285,7 @@ export class TeamRuntime {
         includeClosed: query.includeClosed,
       },
       runtime: state.runtime,
+      deviceResources: this.resources.summary(),
       harnesses: state.harnesses,
       members: state.members.map((m) => {
         const effective = this.catalog.memberExecution(teamId, this.history.forRun(run).id, m);
@@ -289,6 +319,7 @@ export class TeamRuntime {
           runId: w.runId,
           reviewOf: w.reviewOf,
           workspaceMode: w.workspaceMode,
+          publication: w.publication,
           revision: w.revision,
           writePaths: w.writePaths,
           executionRequirements: w.executionRequirements,
@@ -469,10 +500,12 @@ export class TeamRuntime {
                 content.slice(0, 1000),
               ])],
               inputs: [...new Set(inputs)],
+              ...(base.contextRefs ? { contextRefs: base.contextRefs } : {}),
               threadId: threadOf(base),
               continuationOf: base.id,
               workspace: this.store.workspace(base),
               workspaceMode: base.workspaceMode ?? "shared",
+              ...this.workspaces.continuationSource(base),
               verification: base.verification ?? "independent",
               ...(base.legacyWorkspaceWrite && base.writePaths === undefined ? { legacyWorkspaceWrite: true } : { writePaths: base.writePaths ?? inputs.map((id) => this.store.get<ArtifactVersion>("artifacts", teamId, id).path).filter((p) => p !== "@result" && !p.startsWith(".local/")) }),
               ...(base.executionRequirements ? { executionRequirements: base.executionRequirements } : {}),
@@ -510,20 +543,49 @@ export class TeamRuntime {
       },
     );
   }
+  private requestPump(): void {
+    if (this.pumpPending || this.closing || this.schedulerError) return;
+    this.pumpPending = true;
+    setImmediate(() => { this.pumpPending = false; this.pump(); });
+  }
+  private scheduleMaintenance(): void {
+    if (this.closing) return;
+    if (this.timer) clearTimeout(this.timer);
+    const row = this.store.db.prepare(`SELECT min(due) due FROM (
+      SELECT json_extract(data,'$.continuation.deadline') due FROM runtime_works
+        WHERE json_extract(data,'$.status')='waiting' AND json_extract(data,'$.continuation.timeoutReportedAt') IS NULL
+      UNION ALL SELECT json_extract(data,'$.commitment.dueAt') due FROM runtime_exchanges
+        WHERE json_extract(data,'$.status') NOT IN ('resolved','cancelled','declined')) WHERE due>?`)
+      .get(new Date().toISOString());
+    const next = row?.due ? Date.parse(String(row.due)) - Date.now() : 5000;
+    this.timer = setTimeout(() => {
+      const due = this.store.db.prepare(`SELECT DISTINCT team_id FROM (
+        SELECT team_id FROM runtime_works WHERE json_extract(data,'$.status')='waiting'
+          AND json_extract(data,'$.continuation.timeoutReportedAt') IS NULL
+          AND json_extract(data,'$.continuation.deadline')<=?
+        UNION SELECT team_id FROM runtime_exchanges WHERE json_extract(data,'$.status') NOT IN ('resolved','cancelled','declined')
+          AND json_extract(data,'$.commitment.dueAt')<=?)`).all(new Date().toISOString(), new Date().toISOString());
+      for (const r of due) this.store.changes.mark(String(r.team_id));
+      this.pump();
+      this.scheduleMaintenance();
+    }, Math.max(20, Math.min(5000, next)));
+    this.timer.unref();
+  }
   private pump(): void {
     if (this.ticking || this.closing || this.schedulerError) return;
     this.ticking = true;
     try {
-      for (const team of this.store.teams.listTeams()) {
+      const changes = this.store.changes.pending();
+      for (const change of changes) {
+        const team = { id: change.teamId };
         this.correspondence.schedule(team.id);
         this.communication.schedule(team.id, (work) =>
           this.dependenciesReady(work, false),
         );
         // A late exchange can finish after Host has delivered. Re-evaluate the
         // original delivery gate, including after restarting an older service.
-        const works = this.store.list<Work>("works", team.id);
-        for (const run of this.store.list<Run>("runs", team.id).filter((r) => r.state === "active")) {
-          const own = works.filter((w) => w.runId === run.id);
+        for (const run of this.store.activeRuns(team.id)) {
+          const own = this.store.workQuery(team.id, { runId: run.id });
           if (own.some((w) => !w.interaction && (activeStates.has(w.status) || ["queued", "waiting"].includes(w.status)))) continue;
           const lastHost = own.filter((w) => !w.interaction && w.kind !== "collaboration" &&
             this.store.get<Member>("members", team.id, w.memberId).kind === "host").at(-1);
@@ -531,15 +593,15 @@ export class TeamRuntime {
             w.kind === "collaboration" && w.status === "submitted" && w.updatedAt >= lastHost.updatedAt))
             this.followUpRun(lastHost, this.store.get<Member>("members", team.id, lastHost.memberId));
         }
+        this.store.changes.acknowledge(team.id, change.revision);
       }
-      const all = this.store.teams
-        .listTeams()
-        .flatMap((team) => this.store.list<Work>("works", team.id))
+      const all = this.store.workQuery(undefined, { statuses: ["queued", "running", "stopping", "recovery_required"] })
         .sort(
           (a, b) =>
             Number(b.title === "Host") - Number(a.title === "Host") ||
             a.updatedAt.localeCompare(b.updatedAt),
         );
+      const resourceWaits: {work: Work; decision: Admission}[] = [];
       for (const work of all) {
         if (work.status === "stopping") {
           void this.interrupt(work);
@@ -547,7 +609,6 @@ export class TeamRuntime {
         }
         if (
           work.status !== "queued" ||
-          this.active.size >= 10 ||
           this.active.has(work.id)
         )
           continue;
@@ -592,6 +653,7 @@ export class TeamRuntime {
           this.followUp(work, member);
           continue;
         }
+        if (!this.dependenciesReady(work)) continue;
         if (work.workspaceMode === "isolated" && !work.workspace) {
           if (run.settings.allowIsolatedWorkspaces === false) {
             this.store.setStatus(work, "failed", "This Team requires the existing shared workspace; isolated workspaces are disabled.");
@@ -608,25 +670,7 @@ export class TeamRuntime {
           )
             continue;
           try {
-            const snapshot = this.history.snapshots.capture(
-              run.settings.workspace,
-            );
-            const workspace = path.join(
-              this.store.teams.dataDir + "-workspaces",
-              "work-" + work.id,
-            );
-            this.history.snapshots.restore(snapshot, workspace);
-            work.workspace = workspace;
-            work.baseSnapshotId = snapshot;
-            this.store.transaction(() => {
-              this.store.save("works", work);
-              this.store.event(
-                work.teamId,
-                "work.workspace_prepared",
-                { workspace, baseSnapshotId: snapshot },
-                work,
-              );
-            });
+            this.workspaces.prepare(work, member, run);
           } catch (error) {
             this.store.setStatus(
               work,
@@ -639,17 +683,6 @@ export class TeamRuntime {
             continue;
           }
         }
-        if (
-          member.kind !== "host" &&
-          blockers.filter(
-            (w) =>
-              w.teamId === work.teamId &&
-              this.store.get<Member>("members", w.teamId, w.memberId).kind !==
-                "host",
-          ).length >= run.settings.maxConcurrent
-        )
-          continue;
-        if (!this.dependenciesReady(work)) continue;
         const resolved = resolveExecution(
           { store: this.store, catalog: this.catalog },
           work.teamId,
@@ -657,11 +690,25 @@ export class TeamRuntime {
           work,
         );
         if (resolved.conflict) {
-          this.store.setStatus(work, "failed", resolved.conflict);
+          this.store.transaction(() => {
+            this.store.setStatus(work, "failed", resolved.conflict);
+            this.correspondence.failBeforeStart(work, resolved.conflict!);
+          });
           this.followUp(work, member);
           continue;
         }
         if (blockers.some((other) => this.workspaceConflict(work, resolved.config, other))) continue;
+        const hostControl = member.kind === "host" && !["host-followup","collaboration"].includes(work.kind ?? "");
+        const admission = this.resources.admission(resolved.config.harness, hostControl);
+        if (!admission.allowed) {
+          resourceWaits.push({work,decision:admission});
+          if (!this.resourceWaiting.has(work.id)) {
+            this.resourceWaiting.add(work.id);
+            this.store.event(work.teamId, "work.resource_wait", { reason: admission.reason, harness: resolved.config.harness }, work);
+          }
+          continue;
+        }
+        this.resourceWaiting.delete(work.id);
         this.records.bindOutputs(work);
         const attempt = this.store.transaction(() => {
           const started = this.store.start(work, resolved.config);
@@ -686,17 +733,23 @@ export class TeamRuntime {
           done: Promise.resolve(),
         };
         this.active.set(work.id, slot);
+        this.resources.reserve(work.id, resolved.config.harness, hostControl);
         slot.done = this.execute(work, attempt, member, run)
           .catch((error) => this.schedulerFault(error))
           .finally(() => {
             this.active.delete(work.id);
-            this.pump();
+            this.resources.finish(work.id);
+            this.requestPump();
           });
       }
+      this.resourceWaiting = new Set(resourceWaits.map(item=>item.work.id));
+      this.resources.setWaiting(resourceWaits.length > 0);
+      this.resourceNotifications.sync(resourceWaits,this.resources.summary());
     } catch (error) {
       this.schedulerFault(error);
     } finally {
       this.ticking = false;
+      this.scheduleMaintenance();
     }
   }
   private workspaceConflict(work: Work, config: ExecutionConfig, other: Work): boolean {
@@ -844,21 +897,26 @@ export class TeamRuntime {
       : undefined;
     return {
       sourceMessageId: run.sourceMessageId,
-      retainedInsights: insights.slice(-30),
+      retainedInsights: insights,
       retainedInsightCount: insights.length,
-      currentOutputs: outputs.slice(-50).map((o) => ({ path: o.path, artifactId: o.current.artifactId, revisionId: o.current.id })),
+      currentOutputs: outputs.map((o) => ({ path: o.path, artifactId: o.current.artifactId, revisionId: o.current.id })),
       currentOutputCount: outputs.length,
       incomingMessages: this.correspondence.take(work, attempt.id),
       conversationHistory: work.interaction
-        ? this.correspondence.list(work.teamId).filter((m) =>
+        ? [...this.correspondence.list(work.teamId).filter((m) =>
             (m.senderId === member.id || m.recipientId === member.id) &&
             m.branchId === branchId && (!m.threadId || m.threadId === threadOf(work)) && m.attemptId !== attempt.id,
-          ).slice(-30).map((m) => ({ id: m.id, senderId: m.senderId, recipientId: m.recipientId, content: m.content.slice(0, 12000), status: m.status, createdAt: m.createdAt }))
+          ).map((m) => ({ id: m.id, senderId: m.senderId, recipientId: m.recipientId, content: m.content, status: m.status, createdAt: m.createdAt })),
+          ...this.store.list<Work>("works", work.teamId).filter((w) =>
+            w.id !== work.id && w.memberId === member.id && w.interaction && w.result && w.status === "submitted" &&
+            threadOf(w) === threadOf(work) && this.history.forRun(this.store.get<Run>("runs", work.teamId, w.runId)).id === branchId,
+          ).map((w) => ({id: `work-result:${w.id}`, senderId: member.id, content: w.result!, status: w.status, createdAt: w.updatedAt})),
+          ].sort((a,b) => a.createdAt.localeCompare(b.createdAt))
         : undefined,
       recentMemberWork: member.kind === "host" ? undefined : this.store.list<Work>("works", work.teamId)
         .filter((w) => w.memberId === member.id && w.id !== work.id && threadOf(w) === threadOf(work) &&
           this.history.forRun(this.store.get<Run>("runs", work.teamId, w.runId)).id === branchId)
-        .slice(-8).map((w) => ({ title: w.title, instructions: w.instructions, result: w.result, status: w.status })),
+        .map((w) => ({ title: w.title, instructions: w.instructions, result: w.result, status: w.status })),
       attachmentsAndInstructions: member.kind === "host" && details ? JSON.parse(String(details.data)).executionInput : undefined,
     };
   }
@@ -891,7 +949,7 @@ export class TeamRuntime {
       if (requirements.nativeCommands && !harness.preflight && harness.capabilities.nativeChecks !== true)
         throw new Error("execution_capability_unavailable: assign executable checks to a nativeChecks-capable executor.");
       if (harness.preflight) {
-        const report = await harness.preflight({ workspace, config: attempt.config, writePaths, legacyWorkspaceWrite, scratchDirectory, requirements });
+        const report = await harness.preflight({ workspace, config: attempt.config, writePaths, legacyWorkspaceWrite, scratchDirectory, requirements, isolatedWorkspace: work.workspaceMode === "isolated" });
         executionEnvironment = report.environment;
         this.store.event(work.teamId, "execution.preflight", report, work, attempt.id);
         if (!report.passed) throw new Error(String(report.error ?? "Execution capability check failed."));
@@ -899,13 +957,13 @@ export class TeamRuntime {
       }
       const project = this.history.bind(attempt, run);
       const executionTools = toolSpecs.filter((t) =>
-        (t.name !== "team_execution_environment" || (attempt.config.harness === "codex" && Object.values(requirements).some(Boolean))) &&
+        (t.name !== "team_execution_environment" || ((attempt.config.harness === "codex" || work.workspaceMode === "isolated") && Object.values(requirements).some(Boolean))) &&
         !(attempt.config.access === "read-only" && ["team_write_file", "team_edit_file"].includes(t.name)) && (
         member.kind === "host"
           ? !["team_yield", "team_submit_result", "team_accept_work", "team_review_evidence"].includes(t.name)
           : ![
-              "team_publish_definition", "team_adoption_context", "team_adopt_branch", "team_host_note", "team_context_read",
-              "team_define_requirements", "team_add_member", "team_delegate",
+              "team_publish_definition", "team_adoption_context", "team_adopt_branch", "team_host_note",
+              "team_define_requirements", "team_add_member", "team_remove_member", "team_delegate",
               "team_replace_work", "team_review", "team_continue_work", "team_set_acceptance_evidence",
             ].includes(t.name) && !resourceTools.includes(t.name) &&
             !((work.interaction || work.kind === "collaboration") && t.name === "team_submit_result") &&
@@ -914,28 +972,9 @@ export class TeamRuntime {
             (t.name !== "team_review_evidence" || !!work.reviewOf || work.verification === "self-check")),
       );
       // A native session may only resume with the same actually exposed tools.
-      attempt.toolContractVersion = hash(JSON.stringify({ tools: executionTools, writePaths: writePaths ?? null, hostMode: member.kind === "host" ? hostMode(work.kind) : null, dialogueContract: 2 }));
+      attempt.toolContractVersion = hash(JSON.stringify({ tools: executionTools, writePaths: writePaths ?? null, workspace, permissions: attempt.config.permissions ?? null, hostMode: member.kind === "host" ? hostMode(work.kind) : null, dialogueContract: 4 }));
       attempt.nativeSessionScope = harness.sessionScope;
       this.store.save("attempts", attempt);
-      const messages =
-        member.kind === "host"
-          ? (this.store.teams.getConversationDetail(
-              work.teamId,
-              run.conversationId,
-            )?.messages ?? [])
-          : [];
-      const boundary =
-        work.kind === "host-followup" || work.kind === "collaboration"
-          ? messages.length
-          : messages.findIndex((m) => m.id === run.sourceMessageId) + 1;
-      const history =
-        member.kind === "host"
-          ? messages
-              .slice(0, boundary)
-              .filter((m) => work.kind !== "host-followup" || m.role === "user")
-              .slice(-30)
-              .map((m) => ({ role: m.role, content: m.content }))
-          : undefined;
       let previous =
         (member.kind === "host" || work.continuation || work.interaction || work.continuationOf) &&
         !(
@@ -959,6 +998,7 @@ export class TeamRuntime {
                     ) === threadOf(work)) &&
                   a.sessionId &&
                   a.toolContractVersion === attempt.toolContractVersion &&
+                  this.store.workspace(this.store.get<Work>("works", work.teamId, a.workId)) === workspace &&
                   !a.actual?.toolsRevokedAt &&
                   !activeStates.has(a.status) &&
                   (a.acknowledgedContextVersion ?? a.contextVersion) ===
@@ -983,7 +1023,6 @@ export class TeamRuntime {
       }
       if (
         previous &&
-        member.kind === "host" &&
         !this.hostContext.canResume(
           work.teamId,
           project.branchId,
@@ -993,18 +1032,23 @@ export class TeamRuntime {
       )
         previous = undefined;
       const collaborationInput = this.collaborationInput(work, attempt, run, member);
-      const hostInput =
-        member.kind === "host"
-          ? this.hostContext.assemble(
-              work,
-              attempt,
-              run,
-              project,
-              this.communication.deliverInbox(work, attempt),
-              previous,
-              collaborationInput,
-            )
-          : undefined;
+      if (member.kind === "host") Object.assign(collaborationInput, {
+        pendingPermissionCount: this.nativePermissions.list(work.teamId, run.conversationId).length,
+        permissionDetails: "team_pending_permissions",
+      });
+      const inbox = this.communication.deliverInbox(work, attempt);
+      const assemble = (replacePrepared = false) => this.hostContext.assemble(
+        work, attempt, run, project, inbox, previous, collaborationInput,
+        estimateTokens(executionTools) + estimateTokens(member.kind === "host" ? hostInstructions : memberInstructions) + 1200, replacePrepared,
+      );
+      let preparedInput;
+      try { preparedInput = assemble(); }
+      catch (error) {
+        if (!previous || !(error instanceof ServiceError) || error.code !== "context_capacity") throw error;
+        this.store.event(work.teamId, "session.context_rebuilt", { previousAttemptId: previous.id, reason: "incoming_context_pressure" }, work, attempt.id);
+        previous = undefined;
+        preparedInput = assemble();
+      }
       timeout = setTimeout(() => {
         void this.stop(
           work.teamId,
@@ -1017,13 +1061,15 @@ export class TeamRuntime {
       this.store.save("attempts", starting);
       const result = await harness.execute({
         workspace: this.store.workspace(work),
+        isolatedWorkspace: work.workspaceMode === "isolated",
         executionRequirements: requirements,
         executionEnvironment,
         ...(Object.values(requirements).some(Boolean) &&
-          attempt.config.harness === "codex"
+          attempt.config.harness === "codex" &&
+          (attempt.config.access === "read-only" || work.workspaceMode !== "isolated")
           ? { verificationDirectory: scratchDirectory }
           : {}),
-        ...(harness.capabilities.boundedWorkspaceWrites === true && !legacyWorkspaceWrite ? { workspaceBoundary: { writePaths: writePaths ?? [] } } : {}),
+        ...(harness.capabilities.boundedWorkspaceWrites === true && !legacyWorkspaceWrite && work.workspaceMode !== "isolated" ? { workspaceBoundary: { writePaths: writePaths ?? [] } } : {}),
         config: attempt.config,
         instructions:
           member.kind === "host"
@@ -1039,22 +1085,17 @@ export class TeamRuntime {
                   ? "You are this Team member handling a peer collaboration request, not a production assignment. Read the exchange with team_read_exchange and its relevant artifacts. Respond with team_reply using concrete findings, answers, or a specific blocker, then end the native turn with a final response. Only claim commands you actually executed. Do not submit or republish project artifacts in this exchange. Ask Host to assign separate production work if project files need changing."
                   : memberInstructions) +
               " The shared project definition is authoritative. On context_update_required, read team_project_context, reconsider the assignment, and acknowledge before continuing. Do not maintain a competing project-definition copy or import another branch's memories. For self-check work, use checks scoped to the changed files and required behavior. Do not inventory or hash the whole repository or generate baseline reports for a small change; the platform stores submitted artifact versions and checks publication conflicts.",
-        input: JSON.stringify(hostInput ?? {
-          member: { name: member.name, responsibility: member.responsibility },
-          work,
-          requirement: this.store.get<Requirement>("requirements", work.teamId, work.requirementId),
-          history,
-          project,
-          ...collaborationInput,
-          inbox: this.communication.deliverInbox(work, attempt),
-          collaboration: work.interaction
-            ? "This is a read-only conversation. Read relevant incoming messages and provide useful answers or corrections, then end with a final response. No artifact submission or yield checkpoint is needed. Avoid acknowledgment-only replies and do not poll for another message."
-            : "Use team_send for direct member requests and team_message for exact work-thread messages. Check team_inbox at natural boundaries and before submission; read and handle useful messages while retaining your assignment. Continue independent work after asking. Use team_yield then END only to checkpoint unfinished work or wait; never sleep or poll. After team_submit_result succeeds, finish any required handoff and END with a final response. Do not call team_yield or submit the same result again to finish. Answering another member does not complete your primary work. Read a reply before claiming application.",
-        }),
+        input: JSON.stringify(preparedInput),
+        onPermission: (input, signal) => this.nativePermissions.request(work, attempt, input, signal),
         contextIsolation: "branch",
         hostMode: member.kind === "host" ? hostMode(work.kind) : undefined,
         tools: executionTools,
         ...(previous?.sessionId ? { sessionId: previous.sessionId } : {}),
+        onContextRebuild: () => {
+          previous = undefined;
+          preparedInput = assemble(true);
+          return JSON.stringify(preparedInput);
+        },
         onDispatch: (native) => {
           const current = this.store.get<Work>("works", work.teamId, work.id);
           if (current.attemptId !== attempt.id || current.status !== "running")
@@ -1097,8 +1138,11 @@ export class TeamRuntime {
         },
         onEvent: (event) => {
           event = redact(event, attempt.config.credentialEnv);
+          this.resources.observe(work, attempt, event);
           const current = this.store.get<Work>("works", work.teamId, work.id);
           if (current.attemptId !== attempt.id) return;
+          if (event.type === "context.usage" || event.type === "context.compacted")
+            this.hostContext.observe(work.teamId, attempt.id, event.type === "context.compacted" ? { compacted: true } : event.data);
           if (event.type === "usage") {
             const a = this.store.get<Attempt>(
               "attempts",
@@ -1116,10 +1160,16 @@ export class TeamRuntime {
             attempt.id,
           );
         },
-        onTool: (name, args, callId) =>
-          this.tool(work.teamId, work.id, attempt.id, name, args, callId),
+        onTool: async (name, args, callId) => {
+          if (((attempt.config.permissions?.harness === "codex" && attempt.config.permissions.approvalPolicy === "untrusted") || (attempt.config.permissions?.harness === "claude-code" && attempt.config.permissions.mode === "default")) && attempt.config.access === "workspace-write" && ["team_write_file", "team_edit_file"].includes(name)) {
+            const allowed = await this.approvals.request(work, attempt.id, { tool: name, details: redact(JSON.stringify(args, null, 2), attempt.config.credentialEnv) });
+            if (!allowed) throw conflict("approval_denied", "Operation was not approved.");
+          }
+          return this.tool(work.teamId, work.id, attempt.id, name, args, callId);
+        },
       });
       result.text = redact(result.text, attempt.config.credentialEnv);
+      this.hostContext.recordOutput(work.teamId, attempt.id, result.text);
       if (result.error)
         result.error = redact(result.error, attempt.config.credentialEnv);
       nativeEnded = result.status !== "unknown";
@@ -1289,6 +1339,8 @@ export class TeamRuntime {
         );
     } finally {
       if (timeout) clearTimeout(timeout);
+      this.approvals.cancel(attempt.id);
+      this.nativePermissions.cancelAttempt(attempt.id);
       const current = this.store.get<Work>("works", work.teamId, work.id);
       if (nativeEnded || !activeStates.has(current.status))
         this.correspondence.finish(
@@ -1301,6 +1353,8 @@ export class TeamRuntime {
     }
   }
   private followUp(work: Work, member: Member): void {
+    if (work.interaction && !work.attemptId && ["failed", "interrupted"].includes(work.status))
+      this.store.transaction(() => this.correspondence.failBeforeStart(work, work.error ?? "Delivery stopped before execution."));
     this.followUpRun(work, member);
     const branchId = this.history.forRun(
       this.store.get<Run>("runs", work.teamId, work.runId),
@@ -1378,6 +1432,8 @@ export class TeamRuntime {
             (w.status === "queued" && !this.dependenciesReady(w, false)) ||
             (deliverable(w) &&
               w.workspaceMode === "isolated" &&
+              w.artifactIds.some(id => this.store.get<ArtifactVersion>("artifacts", w.teamId, id).path !== "@result") &&
+              w.publication?.state !== "published" &&
               !branchWorks.some(
                 (i) =>
                   deliverable(i) &&
@@ -1525,6 +1581,8 @@ export class TeamRuntime {
       const unintegrated = production.filter(
         (w) =>
           w.workspaceMode === "isolated" &&
+          w.artifactIds.some(id => this.store.get<ArtifactVersion>("artifacts", w.teamId, id).path !== "@result") &&
+          w.publication?.state !== "published" &&
           deliverable(w) &&
           !branchWorks.some(
             (i) =>
@@ -1729,7 +1787,7 @@ export class TeamRuntime {
         sameSet(existing.acceptanceCriteria, target.acceptanceCriteria) &&
         hash(JSON.stringify(evidenceFor(existing))) === hash(JSON.stringify(evidenceFor(target))) &&
         existing.dependsOn.includes(target.id) &&
-        this.store.workspace(existing) === this.store.workspace(target) &&
+        (existing.sourceWorkspace ?? this.store.workspace(existing)) === this.store.workspace(target) &&
         assignedReviewer.id !== target.memberId &&
         assignedReviewer.kind !== "host" &&
         assignedReviewer.config.access === "read-only";
@@ -1786,9 +1844,11 @@ export class TeamRuntime {
       [target.id],
       target.id,
     );
-    delegated.workspaceMode = target.workspaceMode ?? "shared";
+    delegated.workspaceMode = run.settings.allowIsolatedWorkspaces === false ? target.workspaceMode ?? "shared" : "isolated";
+    delegated.sourceWorkspace = this.store.workspace(target);
+    if (target.contextRefs) delegated.contextRefs = target.contextRefs;
     delegated.integratesWorkIds = [];
-    delegated.workspace = this.store.workspace(target);
+    if (run.settings.allowIsolatedWorkspaces === false) delegated.workspace = this.store.workspace(target);
     delegated.verification = "independent";
     delegated.reviewInstructionsRevision = 1;
     delegated.acceptanceEvidence = evidenceFor(target);
@@ -1889,12 +1949,14 @@ export class TeamRuntime {
       tools[name as keyof typeof tools].schema as z.ZodType,
       args,
     ) as Record<string, any>;
-    if (name === "team_check_resource") {
+    if (name === "team_check_resource" || name === "team_device_resources") {
       const work = this.store.assertActive(teamId, workId, attemptId);
       if (this.store.get<Member>("members", teamId, work.memberId).kind !== "host")
         throw conflict("host_required", "Only the Host can inspect execution resources.");
       this.history.assertCurrent(work, attemptId);
-      const result = await checkResource(this, teamId, input.resourceId, input.expectedResourceVersion);
+      const result = name === "team_device_resources"
+        ? (await this.resources.refresh(), this.resources.state(teamId))
+        : await checkResource(this, teamId, input.resourceId, input.expectedResourceVersion);
       this.store.assertActive(teamId, workId, attemptId);
       this.history.assertCurrent(work, attemptId);
       this.hostContext.recordRead(teamId, attemptId, name, input, result, callId);
@@ -1911,7 +1973,7 @@ export class TeamRuntime {
           `Review instructions changed to revision ${work.reviewInstructionsRevision}. Read team_read_work with workId=${work.id}, follow its current instructions and rerun required checks before acceptance.`);
       if (name === "team_execution_environment") {
         const requirements = this.executionRequirements(work);
-        if (attempt.config.harness !== "codex" || !Object.values(requirements).some(Boolean))
+        if ((attempt.config.harness !== "codex" && work.workspaceMode !== "isolated") || !Object.values(requirements).some(Boolean))
           throw conflict("execution_environment_unavailable", "This attempt has no verified native scratch grant.");
         const environment = prepareExecutionEnvironment(path.join(this.store.teams.dataDir, "review-scratch", attempt.id), requirements);
         this.store.event(teamId, "execution.environment_prepared", { ...environment, modelRequests: 0 }, work, attemptId);
@@ -1955,8 +2017,8 @@ export class TeamRuntime {
           "team_adoption_context",
           "team_adopt_branch",
           "team_host_note",
-          "team_context_read",
           "team_add_member",
+          "team_remove_member",
           "team_delegate",
           "team_replace_work",
           "team_review",
@@ -1991,6 +2053,7 @@ export class TeamRuntime {
         [
           "team_define_requirements",
           "team_add_member",
+          "team_remove_member",
           "team_delegate",
           "team_publish_definition",
         ].includes(name)
@@ -2013,6 +2076,21 @@ export class TeamRuntime {
       }
       if (name === "team_state")
         return this.modelState(teamId, run, input as any);
+      if (name === "team_pending_permissions") return this.nativePermissions.list(teamId, run.conversationId);
+      if (name === "team_answer_permission") {
+        if (member.kind !== "host" || work.kind === "host-followup" || work.kind === "collaboration")
+          throw conflict("user_request_required", "Only the Host user dialogue can answer a native permission request.");
+        return this.nativePermissions.answer(run, input.requestId, input.decision, input.sourceMessageId, input.authorizationQuote);
+      }
+      if (name === "team_set_device_reserve") {
+        this.history.assertCurrent(work, attemptId);
+        const source = this.store.db.prepare("SELECT id,content FROM messages WHERE conversation_id=? AND role='user' ORDER BY rowid DESC LIMIT 1").get(run.conversationId);
+        if (work.kind === "host-followup" || work.kind === "collaboration" || !source ||
+            source.id !== input.sourceMessageId || String(source.content).trim() !== input.authorizationQuote.trim())
+          throw conflict("user_request_required", "Use the latest user message in this Host conversation to change the device reserve.");
+        const {expectedVersion,reserveMemoryMiB,cpuTargetPercent} = input;
+        return this.resources.configure({expectedVersion,reserveMemoryMiB,cpuTargetPercent}, {teamId,messageId:input.sourceMessageId});
+      }
       if (name === "team_directory")
         return this.catalog.list(
           teamId,
@@ -2033,8 +2111,10 @@ export class TeamRuntime {
           ? selectResource(this, work, run, input as any)
           : deriveResource(this, teamId, input as any);
       }
+      if (name === "team_context_index")
+        return this.hostContext.index(run, work, input);
       if (name === "team_context_read")
-        return this.hostContext.read(run, input as any);
+        return this.hostContext.read(run, input as any, attemptId);
       if (name === "team_host_note")
         return this.hostContext.saveNote(work, attempt, input as any);
       if (name === "team_read_work") {
@@ -2283,6 +2363,14 @@ export class TeamRuntime {
           );
         return target;
       }
+      if (name === "team_remove_member") {
+        const target = this.store.get<Member>("members", teamId, input.memberId);
+        if (target.kind !== "host" &&
+          (target.branchId ?? this.history.ensure(teamId).id) !== this.history.forRun(run).id)
+          throw conflict("branch_scope", "A member's responsibilities belong to its project branch.");
+        const removed = this.store.removeMember(teamId, target.id);
+        return { id: removed.id, removedAt: removed.removedAt };
+      }
       if (name === "team_add_member") {
         if (input.resourceId && input.config)
           throw badRequest(
@@ -2307,6 +2395,7 @@ export class TeamRuntime {
               input.config ??
               this.store.settings(teamId)!.config),
             ...(input.access ? { access: input.access } : {}),
+            ...(input.permissions ? { permissions: input.permissions } : {}),
           },
         });
         this.validateConfig(value.config);
@@ -2514,6 +2603,7 @@ export class TeamRuntime {
             throw conflict("review_criteria_changed", "Use every original target criterion in order.");
           input.executionRequirements = reviewRequirements(target, input.executionRequirements);
         }
+        input.contextRefs = this.hostContext.materials.validateRefs(run, input.contextRefs ?? continuationBase?.contextRefs ?? []);
         const identity = delegationIdentity({ ...input, acceptanceEvidence });
         const delegationFingerprint = identity.fingerprint;
         const priorDelegation = this.store.list<Work>("works", teamId).find((w) => w.runId === run.id &&
@@ -2547,14 +2637,18 @@ export class TeamRuntime {
           input.reviewOf,
         );
         delegated.workspaceMode = input.workspaceMode;
+        delegated.publicationMode = input.publicationMode;
+        delegated.contextRefs = input.contextRefs;
         delegated.acceptanceEvidence = acceptanceEvidence;
         delegated.delegationFingerprint = delegationFingerprint;
         delegated.responsibilityKey = identity.key;
         delegated.delegationContract = identity.contract;
         delegated.writePaths = declaredPaths;
+        if (input.permissions) delegated.permissions = input.permissions;
         if (input.executionRequirements) delegated.executionRequirements = input.executionRequirements;
         delegated.integratesWorkIds = input.integratesWorkIds;
-        if (input.reviewOf)
+        if (input.reviewOf) delegated.sourceWorkspace = this.store.workspace(this.store.get<Work>("works", teamId, input.reviewOf));
+        if (input.reviewOf && delegated.workspaceMode !== "isolated")
           delegated.workspace = this.store.workspace(
             this.store.get<Work>("works", teamId, input.reviewOf),
           );
@@ -2607,6 +2701,10 @@ export class TeamRuntime {
           delegated.continuationOf = base.id;
           delegated.workspace = this.store.workspace(base);
           delegated.workspaceMode = base.workspaceMode ?? "shared";
+          delegated.sourceWorkspace = base.sourceWorkspace;
+          delegated.baseSnapshotId = base.baseSnapshotId;
+          Object.assign(delegated, this.workspaces.continuationSource(base));
+          delegated.permissions ??= base.permissions;
           if (delegated.writePaths === undefined && base.legacyWorkspaceWrite && base.writePaths === undefined)
             delegated.legacyWorkspaceWrite = true;
           else delegated.writePaths ??= base.writePaths ?? this.continuationArtifacts(base).map((id) => this.store.get<ArtifactVersion>("artifacts", teamId, id).path).filter((p) => p !== "@result" && !p.startsWith(".local/"));
@@ -2755,11 +2853,13 @@ export class TeamRuntime {
       this.store.transaction(() =>
         this.store.setStatus(work, "stopping", reason),
       );
+    if (work.attemptId) this.approvals.cancel(work.attemptId);
     if (work.status === "stopping") await this.interrupt(work);
     return this.store.get<Work>("works", teamId, workId);
   }
   private async interrupt(work: Work): Promise<void> {
     if (!work.attemptId || this.interrupting.has(work.attemptId)) return;
+    this.nativePermissions.cancelAttempt(work.attemptId);
     const attempt = this.store.get<Attempt>(
       "attempts",
       work.teamId,
@@ -2801,6 +2901,9 @@ export class TeamRuntime {
         "invalid_state",
         "Only a confirmed ended attempt can be retried.",
       );
+    const member = this.store.activeMember(teamId, work.memberId);
+    const resolved = resolveExecution({ store: this.store, catalog: this.catalog }, teamId, member, work);
+    if (resolved.conflict) throw conflict("execution_configuration_changed", resolved.conflict);
     this.store.transaction(() => {
       this.correspondence.retry(work);
       work.attemptId = null;
@@ -3054,7 +3157,9 @@ export class TeamRuntime {
   async close(): Promise<void> {
     if (this.closing) return;
     this.closing = true;
-    clearInterval(this.timer);
+    if (this.timer) clearTimeout(this.timer);
+    this.unsubscribeChanges();
+    await this.resources.close();
     for (const slot of this.active.values()) {
       const attempt = this.store.get<Attempt>(
         "attempts",
@@ -3065,6 +3170,7 @@ export class TeamRuntime {
     }
     await Promise.all([...this.harnesses.values()].map((h) => h.close()));
     await Promise.all([...this.active.values()].map((s) => s.done));
+    await this.models.close();
     this.store.close();
   }
 }

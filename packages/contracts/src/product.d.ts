@@ -1,5 +1,6 @@
 import type {
   RuntimeSettings,
+  ExecutionConfig,
   Work,
   Run,
   Attempt,
@@ -11,6 +12,7 @@ import type {
 } from "./runtime";
 export type { ProjectNode, ProjectBranch, ProjectDocument } from "./runtime";
 export type TeamExecution = {
+  host?: { config: ExecutionConfig; permissionVersion: number; memberId: string; branchId: string };
   settings: RuntimeSettings | null;
   works: Work[];
   runs: Run[];
@@ -52,7 +54,7 @@ export type Chat = {
   parent?: { chatId: string; messageId: string };
   inheritedDefinitions?: Definition[];
 };
-export type RuntimeConfig = { harness: string; model: string; effort: string };
+export type RuntimeConfig = { harness: string; model: string; effort: string; permissions?: ExecutionConfig["permissions"] };
 export type DefinitionKind =
   "problem" | "requirement" | "goal" | "understanding";
 export type Definition = {
@@ -69,6 +71,7 @@ export type Definition = {
 };
 export type Member = {
   id: string;
+  removedAt?: string;
   teamId: string;
   name: string;
   responsibility: string;
@@ -77,6 +80,9 @@ export type Member = {
   harness: string;
   model: string;
   effort?: string;
+  /** Configuration for the next execution, separate from the last attempt. */
+  executionConfig?: ExecutionConfig;
+  configurationVersion?: number;
   sessionId?: string;
   x?: number;
   y?: number;
@@ -137,6 +143,8 @@ export type ConversationEntry = {
   text: string;
   status?: string;
   error?: string;
+  /** Original failed delivery; retry reuses its existing work instead of resending. */
+  retryWorkId?: string;
   items?: TranscriptItem[];
   elapsedMs?: number;
   exchangeId?: string;

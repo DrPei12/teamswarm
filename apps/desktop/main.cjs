@@ -387,7 +387,9 @@ async function createWindow() {
       symbolColor: windowState.dark ? "#e8ecf4" : "#616d80",
       height: 40,
     },
-    icon: path.join(__dirname, process.platform === "win32" ? "icon.ico" : "icon.png"),
+    icon: app.isPackaged
+      ? path.join(__dirname, process.platform === "win32" ? "icon.ico" : "icon.png")
+      : path.join(productRoot, "teamswarm/branding", process.platform === "win32" ? "logo.ico" : "logo.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -539,6 +541,12 @@ ipcMain.on("theme", (event, dark) => {
     height: 40,
   });
   deferSave();
+});
+ipcMain.on("chatgpt-sign-in-return", (event) => {
+  if (!trustedIPC(event) || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
 });
 if (!app.requestSingleInstanceLock()) app.quit();
 else {

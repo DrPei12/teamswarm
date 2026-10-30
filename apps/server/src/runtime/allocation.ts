@@ -1,3 +1,5 @@
+import { memberPermissions } from "./permission-options.js";
+import { readOnlyExecution } from "./harness/permissions.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { conflict, notFound } from "../errors.js";
@@ -16,6 +18,7 @@ import {
   previewPortableImport,
 } from "./allocation-portable.js";
 import { executionConfig } from "./validation.js";
+import { readOnlyPermissions } from "./harness/permissions.js";
 import type { TeamCatalog } from "./catalog.js";
 import type { RuntimeStore } from "./store.js";
 import type { Attempt, ExecutionConfig, Member, Work, WorkStatus } from "./types.js";
@@ -113,7 +116,7 @@ export function deleteResource(
     // selection, but it must not lock the resource forever.
     const usedByMember = deps.store
       .list<Member>("members", teamId)
-      .some((m) => m.selection?.resourceId === resourceId || Object.values(m.hostSelections ?? {}).some(s => s.selection?.resourceId === resourceId));
+      .some((m) => !m.removedAt && (m.selection?.resourceId === resourceId || Object.values(m.hostSelections ?? {}).some(s => s.selection?.resourceId === resourceId)));
     const usedByOpenWork = deps.store
       .list<Work>("works", teamId)
       .some(
@@ -215,7 +218,7 @@ export function setMemberAllocation(
   memberId: string,
   input: AllocationRequest,
 ): Member {
-  const member = deps.store.get<Member>("members", teamId, memberId);
+  const member = deps.store.activeMember(teamId, memberId);
   if (member.kind === "host")
     throw conflict(
       "invalid_state",
@@ -312,7 +315,7 @@ export function resolveExecution(
     const hostChoice = member.kind === "host" && branchId ? member.hostSelections?.[branchId] : undefined;
     const retained = effective.selection.resourceId.startsWith("cap_") && hostChoice?.selection?.resourceId === effective.selection.resourceId && hostChoice.selection.resourceVersion === effective.selection.resourceVersion ? hostChoice.config : undefined;
     if ((!resource || resource.version !== effective.selection.resourceVersion) && retained)
-      return { config: {...retained,access:"read-only"}, selection: {...effective.selection}, conflict: null };
+      return { config: readOnlyExecution(memberPermissions(retained, member)), selection: {...effective.selection}, conflict: null };
     if (!resource)
       return {
         config,
@@ -328,8 +331,14 @@ export function resolveExecution(
     config = { ...resource.config };
     selection = { ...effective.selection };
   }
+  const permissions = work.permissions ?? (member.permissionOverride?.harness === config.harness ? member.permissionOverride : undefined) ?? (member.config.harness === config.harness ? member.config.permissions : undefined) ?? config.permissions;
+  if (permissions) {
+    if (permissions.harness !== config.harness)
+      return { config, selection, conflict: "Select a native permission policy for the chosen Harness." };
+    config = { ...config, permissions };
+  }
   if (member.config.access === "read-only" || work.interaction || work.kind === "collaboration")
-    config = { ...config, access: "read-only" };
+    config = readOnlyPermissions(config);
   if (member.kind !== "host" && !deps.catalog.capabilities.allowed(teamId,config))
     return {config,selection,conflict:"This Harness or model connection is no longer enabled for the Team. Ask Host to choose an enabled combination."};
   return { config, selection, conflict: null };
@@ -362,6 +371,7 @@ export function canReuseSession(
   previous: ExecutionConfig,
   next: ExecutionConfig,
 ): boolean {
+  if (JSON.stringify(previous.permissions ?? null) !== JSON.stringify(next.permissions ?? null)) return false;
   if (KNOWN_HARNESSES.has(next.harness)) return canReuseNativeSession(previous, next);
   return JSON.stringify(previous) === JSON.stringify(next);
 }
@@ -445,7 +455,7 @@ export function exportAllocationPackage(
     .list<Member>("members", teamId)
     .filter(
       (member) =>
-        member.selection &&
+        !member.removedAt && member.selection &&
         versions.get(member.selection.resourceId) ===
           member.selection.resourceVersion,
     )

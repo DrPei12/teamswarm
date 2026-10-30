@@ -1,3 +1,6 @@
+import { PermissionSelect } from "./PermissionSelect";
+import { permissionsForAccess } from "./permissions";
+import { FieldSelect } from "./FieldSelect";
 import { Disclosure } from "./Disclosure";
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -17,17 +20,28 @@ import type { Workspace } from "./store";
 import { AllocationSettings } from "./AllocationSettings";
 import { CapabilitySettings } from "./CapabilitySettings";
 import { ModelPicker } from "./ModelPicker";
+import { SwarmMark } from "./SwarmMark";
+import {
+  chooseModel,
+  selectedModelChoice,
+  switchHarness,
+} from "./modelCatalog";
+import { useModelCatalog } from "./useModelCatalog";
+import { cachedCatalog, invalidateModelCatalog } from "./modelCatalogCache";
+import type { TeamCapabilities } from "@team/contracts/allocation";
 import { HarnessInstallation } from "./HarnessInstallation";
 import { HarnessAccount, hasSubscription } from "./HarnessAccount";
-import { api, product } from "./service";
+import { api, product, resolveModelConnection } from "./service";
 import { useI18n } from "./i18n";
 import { Modal } from "./ui";
 import { isCustomProvider } from "./allocation";
+import { readSubscriptionCatalog } from "./subscriptionCatalog";
 import {
+  useHarnessCatalog,
   supportedEfforts,
   effortLabel,
   type HarnessInspection,
-} from "./harnessCatalog";
+} from "./harnessCatalog.ts";
 
 export function Startup({
   state,
@@ -60,7 +74,8 @@ export function Startup({
   return (
     <main className="startup">
       <div className="startup-brand">
-        <span className="workspace-mark">TS</span>TeamSwarm
+        <SwarmMark />
+        TeamSwarm
       </div>
       <section className="startup-content" aria-label={t("Workspace")}>
         {state.loading ? (
@@ -167,20 +182,38 @@ export function Startup({
 }
 
 type Inspection = HarnessInspection;
-export function ExecutionSettings(props: {
+type ExecutionSettingsProps = {
   open: boolean;
   onClose: () => void;
   teamId: string;
   workspace: Workspace;
-}) {
-  const [manual, setManual] = useState(false);
-  useEffect(() => {
-    if (!props.open) setManual(false);
-  }, [props.open]);
+  initialTab?: "harnesses" | "connections" | "runtime";
+};
+export function ExecutionSettings(props: ExecutionSettingsProps) {
+  return props.open ? <ExecutionSettingsContent {...props} /> : null;
+}
+function ExecutionSettingsContent(props: ExecutionSettingsProps) {
+  const [manual, setManual] = useState(props.initialTab === "runtime");
+  const [configurationTab, setConfigurationTab] = useState<
+    "harnesses" | "connections"
+  >(props.initialTab === "connections" ? "connections" : "harnesses");
   return manual ? (
-    <ManualExecutionSettings {...props} onClose={() => setManual(false)} />
+    <ManualExecutionSettings
+      {...props}
+      onClose={() =>
+        props.initialTab === "runtime" ? props.onClose() : setManual(false)
+      }
+      onConfigureModels={() => {
+        setConfigurationTab("connections");
+        setManual(false);
+      }}
+    />
   ) : (
-    <CapabilitySettings {...props} onAdvanced={() => setManual(true)} />
+    <CapabilitySettings
+      {...props}
+      initialTab={configurationTab}
+      onAdvanced={() => setManual(true)}
+    />
   );
 }
 function ManualExecutionSettings({
@@ -188,11 +221,13 @@ function ManualExecutionSettings({
   onClose,
   teamId,
   workspace,
+  onConfigureModels,
 }: {
   open: boolean;
   onClose: () => void;
   teamId: string;
   workspace: Workspace;
+  onConfigureModels: () => void;
 }) {
   const { t } = useI18n();
   const [settings, setSettings] = useState<RuntimeSettings | null>(null),
@@ -202,7 +237,15 @@ function ManualExecutionSettings({
     [error, setError] = useState(""),
     [inspection, setInspection] = useState<Inspection | null>(null);
   const [inspectionRevision, refreshInspection] = useState(0);
+  const [sharedInspection, setSharedInspection] = useState<Inspection | null>(
+    null,
+  );
   const [advanced, setAdvanced] = useState(false);
+  const modelCatalog = useModelCatalog(
+    teamId,
+    settings?.config.harness ?? "codex",
+    open,
+  );
   useEffect(() => {
     if (open) {
       setSettings(workspace.executions?.[teamId]?.settings ?? null);
@@ -216,13 +259,23 @@ function ManualExecutionSettings({
     let current = true;
     setChecking(true);
     setError("");
-    setInspection(null);
-    void api<Inspection>(
-      `/harnesses/${encodeURIComponent(settings.config.harness)}/check`,
-      {},
-    )
-      .then((value) => {
-        if (current) setInspection(value);
+    setSharedInspection(null);
+    void Promise.all([
+      cachedCatalog(`harness:${settings.config.harness}`, () =>
+        api<Inspection>(
+          `/harnesses/${encodeURIComponent(settings.config.harness)}/check`,
+          {},
+        ),
+      ),
+      settings.config.chatgptAccountId
+        ? readSubscriptionCatalog(`chatgpt:${settings.config.chatgptAccountId}`)
+        : Promise.resolve(null),
+    ])
+      .then(([value, account]) => {
+        if (current) {
+          setInspection(value);
+          setSharedInspection(account);
+        }
       })
       .catch((e) => {
         if (current) setError(e.message);
@@ -233,11 +286,17 @@ function ManualExecutionSettings({
     return () => {
       current = false;
     };
-  }, [open, settings?.config.harness, inspectionRevision]);
+  }, [
+    open,
+    settings?.config.harness,
+    settings?.config.chatgptAccountId,
+    inspectionRevision,
+  ]);
   // A connection with its own endpoint or credential reference is not the native
   // ChatGPT account the harness check probes. Its credential and reasoning-offer
   // facts must come from that configuration, never from an empty native catalog.
   const configuredProvider = isCustomProvider(settings?.config);
+  const sharedAccount = !!settings?.config.chatgptAccountId;
   const subscriptionHarness =
     settings?.config.harness === "codex" ||
     hasSubscription(settings?.config.harness ?? "");
@@ -245,9 +304,14 @@ function ManualExecutionSettings({
   useEffect(() => {
     setApiMode(configuredProvider);
   }, [open, settings?.config.harness, configuredProvider]);
-  const customProvider = configuredProvider || apiMode || !subscriptionHarness;
-  const subscriptionMode = subscriptionHarness && !customProvider && !apiMode;
-  const efforts = supportedEfforts(inspection, settings?.config.model);
+  const customProvider =
+    !sharedAccount && (configuredProvider || apiMode || !subscriptionHarness);
+  const subscriptionMode =
+    !sharedAccount && subscriptionHarness && !customProvider && !apiMode;
+  const efforts = supportedEfforts(
+    sharedAccount ? sharedInspection : inspection,
+    settings?.config.model,
+  );
   const configuredEffort = settings?.config.effort ?? "";
   const effortChoices = customProvider
     ? configuredEffort
@@ -262,10 +326,15 @@ function ManualExecutionSettings({
   const connectionNeedsAction = Boolean(
     inspection &&
     (inspection.available === false ||
-      (!customProvider && inspection.authenticated === false) ||
+      (sharedAccount
+        ? sharedInspection?.authenticated === false
+        : !customProvider && inspection.authenticated === false) ||
       (customProvider && !settings?.config.credentialEnv)),
   );
-  const inspect = () => refreshInspection((value) => value + 1);
+  const inspect = () => {
+    invalidateModelCatalog();
+    refreshInspection((value) => value + 1);
+  };
   const [secret, setSecret] = useState("");
   useEffect(() => {
     if (!open) setSecret("");
@@ -273,13 +342,7 @@ function ManualExecutionSettings({
   const [login, setLogin] = useState<{ loginId: string; url: string } | null>(
     null,
   );
-  const [catalog, setCatalog] = useState<{ id: string }[]>([]);
-  useEffect(() => {
-    if (open)
-      void api<{ harnesses: { id: string }[] }>("/harnesses")
-        .then((r) => setCatalog(r.harnesses))
-        .catch((e) => setError(e.message));
-  }, [open]);
+  const catalog = useHarnessCatalog((error) => setError(error.message));
   useEffect(() => {
     if (!open || !login || settings?.config.harness !== "codex") return;
     let current = true;
@@ -391,61 +454,74 @@ function ManualExecutionSettings({
             <div className="form-pair">
               <label>
                 {t("Harness")}
-                <select
+                <FieldSelect
                   value={settings.config.harness}
-                  onChange={(e) => {
-                    setInspection(null);
-                    setLogin(null);
-                    config({
-                      harness: e.target.value,
-                      model: null,
-                      effort: null,
-                      provider: null,
-                      baseUrl: null,
-                      credentialEnv: null,
-                      protocol: null,
-                      thinkingFormat: null,
-                    });
-                    setSecret("");
-                    setApiMode(false);
+                  disabled={busy}
+                  onValueChange={async (value) => {
+                    const harness = value;
+                    setBusy(true);
+                    setError("");
+                    try {
+                      const capabilities = await api<TeamCapabilities>(
+                        `/teams/${encodeURIComponent(teamId)}/capabilities`,
+                      );
+                      const next = await switchHarness(
+                        settings.config,
+                        harness,
+                        capabilities.connections,
+                        resolveModelConnection,
+                      );
+                      setInspection(null);
+                      setLogin(null);
+                      config(next);
+                      setSecret("");
+                      setApiMode(isCustomProvider(next));
+                    } catch (e) {
+                      setError((e as Error).message);
+                    } finally {
+                      setBusy(false);
+                    }
                   }}
                 >
-                  {catalog.map(({ id }) => (
+                  {catalog.map(({ id, name }) => (
                     <option key={id} value={id}>
-                      {(
-                        {
-                          codex: "Codex",
-                          grok: "Grok",
-                          "claude-code": "Claude Code",
-                          "deepseek-harness": "DeepSeek Harness",
-                          opencode: "OpenCode",
-                        } as Record<string, string>
-                      )[id] ?? id}
+                      {name}
                     </option>
                   ))}
-                </select>
+                </FieldSelect>
               </label>
               <div className="model-field">
                 {t("Model")}
                 <ModelPicker
-                  key={settings.config.harness + String(customProvider)}
                   value={settings.config.model}
-                  models={
-                    customProvider
-                      ? settings.config.model
-                        ? [
-                            {
-                              model: settings.config.model,
-                              name: settings.config.model,
-                              provider:
-                                settings.config.provider || "Custom provider",
-                            },
-                          ]
-                        : []
-                      : inspection?.models
+                  models={modelCatalog.models}
+                  selectedKey={
+                    selectedModelChoice(modelCatalog.models, settings.config)
+                      ?.key
                   }
-                  onChange={(model) => config({ model, effort: null })}
-                  loading={checking}
+                  onConfigure={onConfigureModels}
+                  onRetry={modelCatalog.retry}
+                  onChange={async (model, choice) => {
+                    setBusy(true);
+                    setError("");
+                    try {
+                      const next = await chooseModel(
+                        settings.config,
+                        model,
+                        choice,
+                        resolveModelConnection,
+                      );
+                      config(next);
+                      setSecret("");
+                      setApiMode(isCustomProvider(next));
+                    } catch (e) {
+                      setError((e as Error).message);
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                  loading={modelCatalog.loading}
+                  error={modelCatalog.error}
                 />
               </div>
             </div>
@@ -454,7 +530,7 @@ function ManualExecutionSettings({
               harness={settings.config.harness}
               onInstalled={inspect}
             />
-            {subscriptionHarness && (
+            {subscriptionHarness && !sharedAccount && (
               <div
                 className="account-mode"
                 role="group"
@@ -521,7 +597,7 @@ function ManualExecutionSettings({
                   )}{" "}
                   {t("Check connection")}
                 </button>
-                {inspection && (
+                {inspection && (!sharedAccount || sharedInspection) && (
                   <span
                     className={
                       connectionNeedsAction
@@ -537,13 +613,17 @@ function ManualExecutionSettings({
                     {t(
                       inspection.available === false
                         ? "Not installed"
-                        : customProvider
-                          ? customCredential
-                            ? "Configured · request not yet verified"
-                            : "Configure the endpoint and credential reference"
-                          : inspection.authenticated === false
-                            ? "Sign in to your harness"
-                            : "Available",
+                        : sharedAccount
+                          ? sharedInspection?.authenticated === true
+                            ? "Connected"
+                            : "Reconnect ChatGPT"
+                          : customProvider
+                            ? customCredential
+                              ? "Configured · request not yet verified"
+                              : "Configure the endpoint and credential reference"
+                            : inspection.authenticated === false
+                              ? "Sign in to your harness"
+                              : "Available",
                     )}
                   </span>
                 )}
@@ -557,6 +637,7 @@ function ManualExecutionSettings({
               </p>
             )}
             {settings.config.harness === "codex" &&
+              !sharedAccount &&
               !customProvider &&
               inspection?.authenticated === false && (
                 <div className="harness-login">
@@ -629,9 +710,10 @@ function ManualExecutionSettings({
             <div className="form-pair">
               <label>
                 {t("Effort")}
-                <select
+                <FieldSelect
                   value={settings.config.effort ?? ""}
-                  onChange={(e) => config({ effort: e.target.value || null })}
+                  disabled={!settings.config.model}
+                  onValueChange={(value) => config({ effort: value || null })}
                 >
                   {settings.config.effort && effortUnavailable && (
                     <option value={settings.config.effort} disabled>
@@ -643,36 +725,19 @@ function ManualExecutionSettings({
                       {v ? effortLabel(v) : t("Default")}
                     </option>
                   ))}
-                </select>
-                <small>
-                  {checking
-                    ? t("Loading harness options…")
-                    : customProvider &&
-                        settings.config.harness === "codex" &&
-                        !configuredEffort
-                      ? t(
-                          "Without an explicit effort, Codex API access uses None and does not inherit subscription settings.",
-                        )
-                      : customProvider
-                        ? t(
-                            "Effort follows this connection's own configuration; the native harness model list does not apply.",
-                          )
-                        : !efforts.length
-                          ? t(
-                              "This harness has not provided effort options for this model. Use its default.",
-                            )
-                          : t(
-                              "Options provided by the selected harness and model.",
-                            )}
-                </small>
+                </FieldSelect>
               </label>
               <label>
-                {t("Access")}
-                <select
+                {t("File access")}
+                <FieldSelect
                   value={settings.config.access}
-                  onChange={(e) =>
+                  onValueChange={(value) =>
                     config({
-                      access: e.target.value as "read-only" | "workspace-write",
+                      access: value as "read-only" | "workspace-write",
+                      permissions: permissionsForAccess(
+                        settings.config,
+                        value as "read-only" | "workspace-write",
+                      ),
                     })
                   }
                 >
@@ -680,10 +745,18 @@ function ManualExecutionSettings({
                     {t("Project read and write")}
                   </option>
                   <option value="read-only">{t("Read only")}</option>
-                </select>
+                </FieldSelect>
               </label>
             </div>
-            {!subscriptionMode && (
+            <label>
+              {t("Default execution permissions")}
+              <PermissionSelect
+                config={settings.config}
+                disabled={busy}
+                onChange={(permissions) => config({ permissions })}
+              />
+            </label>
+            {!subscriptionMode && !sharedAccount && (
               <div
                 className="advanced-settings"
                 onInvalidCapture={(event) => {
@@ -727,11 +800,11 @@ function ManualExecutionSettings({
                   </label>
                   <label>
                     {t("Protocol")}
-                    <select
+                    <FieldSelect
                       value={settings.config.protocol ?? ""}
-                      onChange={(e) =>
+                      onValueChange={(value) =>
                         config({
-                          protocol: (e.target.value ||
+                          protocol: (value ||
                             null) as RuntimeSettings["config"]["protocol"],
                         })
                       }
@@ -742,7 +815,7 @@ function ManualExecutionSettings({
                       <option value="anthropic-messages">
                         Anthropic Messages
                       </option>
-                    </select>
+                    </FieldSelect>
                   </label>
                   <label>
                     {t("API key")}
@@ -845,7 +918,9 @@ export function ExecutionActivity({
         : active.some((w) => w.status === "stopping")
           ? "Stopping…"
           : active.length
-            ? "Working"
+            ? active.every((work) => work.status === "queued")
+              ? "Queued for execution"
+              : "Working"
             : issue
               ? "Needs attention"
               : "";

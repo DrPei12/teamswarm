@@ -1,3 +1,4 @@
+import { JsonRpcPeer } from "./json-rpc-peer.js";
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
@@ -11,7 +12,7 @@ const spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
 const tools =
   spec.config.access === "workspace-write"
     ? "read_file,grep,list_dir,write,search_replace,run_terminal_cmd"
-    : "read_file,grep,list_dir";
+    : "read_file,grep,list_dir" + (spec.nativeCommands ? ",run_terminal_cmd" : "");
 // ACP does not inherit top-level TUI/headless --tools or --permission-mode.
 // Its native agent profile controls the actual model-visible tool registry.
 const profilePath = path.join(spec.home, "agent-profile.md");
@@ -25,7 +26,7 @@ writeFileSync(
       promptMode: "full",
       agentsMd: false,
       injectDefaultTools: false,
-      permissionMode: "default",
+      permissionMode: spec.config.permissions?.harness === "grok" ? spec.config.permissions.mode : "default",
       tools: tools.split(","),
     }) +
     "\n---\n" +
@@ -54,21 +55,12 @@ const child = spawn(
     stdio: "pipe",
   },
 );
-let nextId = 0,
-  sessionId = "",
+let sessionId = "",
   text = "",
   finished = false,
   cancelled = false,
   streaming = false;
-const pending = new Map<
-  number,
-  {
-    method: string;
-    resolve: (value: any) => void;
-    reject: (error: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }
->();
+const rpc = new JsonRpcPeer(value => child.stdin.write(JSON.stringify(value) + "\n"), "Grok ACP", method => { if (method === "session/prompt") streaming = false; });
 const catalogs = new Map<string, string[] | undefined>();
 let catalogChanged: (() => void) | undefined;
 const allowedNativeTools = tools
@@ -116,18 +108,26 @@ async function waitForCatalog() {
 }
 const emit = (value: unknown) =>
   process.stdout.write(JSON.stringify(value) + "\n");
+const permissionAbort = new AbortController();
+async function answerPermission(message: any) {
+  let outcome = grokPermissionOutcome(message.params, sessionId, spec.tools, spec.config.access, spec.nativeCommands);
+  if (cancelled || finished || !streaming) outcome = { outcome: "cancelled" };
+  else if (outcome.outcome === "selected" && spec.config.permissions?.harness === "grok") {
+    const policy = spec.config.permissions;
+    if (policy.mode === "dontAsk" || policy.mode === "plan" && ["Bash", "Write", "SearchReplace"].includes(message.params?.toolCall?.rawInput?.variant)) outcome = { outcome: "cancelled" };
+    else {
+      try {
+        const call = message.params.toolCall;
+        const response = await fetch(spec.permissionUrl, { method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ nativeId: String(call?.toolCallId ?? message.id), tool: call?.title ?? call?.rawInput?.variant ?? "Grok tool", input: call?.rawInput ?? {} }), signal: permissionAbort.signal });
+        if (!response.ok || (await response.json() as any).decision !== "allow" || cancelled || finished) outcome = { outcome: "cancelled" };
+      } catch { outcome = { outcome: "cancelled" }; }
+    }
+  }
+  if (!child.stdin.destroyed) child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { outcome } }) + "\n");
+}
 function call(method: string, params: unknown, timeout = 30000): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const id = ++nextId;
-    const timer = setTimeout(() => {
-      pending.delete(id);
-      reject(new Error(`Grok did not respond to ${method}.`));
-    }, timeout);
-    pending.set(id, { method, resolve, reject, timer });
-    child.stdin.write(
-      JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n",
-    );
-  });
+  return rpc.call(method, params, timeout).finally(() => { if (method === "session/prompt") streaming = false; });
 }
 createInterface({ input: child.stdout }).on("line", (line) => {
   let message: any;
@@ -157,42 +157,12 @@ createInterface({ input: child.stdout }).on("line", (line) => {
       }
     }
   }
-  if (message.id != null && !message.method) {
-    const p = pending.get(message.id);
-    if (!p) return;
-    pending.delete(message.id);
-    clearTimeout(p.timer);
-    if (p.method === "session/prompt") streaming = false;
-    message.error
-      ? p.reject(
-          new Error(
-            typeof message.error.message === "string"
-              ? message.error.message
-              : "Grok request failed.",
-          ),
-        )
-      : p.resolve(message.result);
+  if (rpc.receive(message)) {
+    return;
   } else if (message.id != null) {
     // Apply the same attempt access at ACP's approval boundary; never persist
     // an approval, including when a native tool requests one.
-    if (message.method === "session/request_permission")
-      child.stdin.write(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: message.id,
-          result: {
-            outcome:
-              cancelled || finished || !streaming
-                ? { outcome: "cancelled" }
-                : grokPermissionOutcome(
-                    message.params,
-                    sessionId,
-                    spec.tools,
-                    spec.config.access,
-                  ),
-          },
-        }) + "\n",
-      );
+    if (message.method === "session/request_permission") void answerPermission(message);
     else
       child.stdin.write(
         JSON.stringify({
@@ -230,15 +200,12 @@ function failPending(message: string) {
     catalogs.delete(sessionId);
     catalogChanged();
   }
-  for (const p of pending.values()) {
-    clearTimeout(p.timer);
-    p.reject(new Error(message));
-  }
-  pending.clear();
+  rpc.close(message);
 }
 async function finish(status: string, error?: string) {
   if (finished) return;
   finished = true;
+  permissionAbort.abort();
   failPending("Grok session ended.");
   const stopped = child.exitCode !== null || (await terminateNative(child));
   emit({
@@ -252,6 +219,7 @@ async function finish(status: string, error?: string) {
 createInterface({ input: process.stdin }).on("line", (line) => {
   if (line !== "abort" || finished) return;
   cancelled = true;
+  permissionAbort.abort();
   if (sessionId)
     child.stdin.write(
       JSON.stringify({

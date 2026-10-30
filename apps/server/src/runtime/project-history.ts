@@ -76,7 +76,7 @@ const version = (documents: Record<string, string>) =>
     ),
   );
 
-function cleanDefinition(content: string) {
+export function cleanDefinition(content: string) {
   // Narrow structural checks, not a ban on domain words such as "old password".
   if (
     /^\s*(?:#{1,6}\s*)?(?:变更记录|修订历史|更新日志|本次更新|版本演变|changelog|revision history)\s*[:：]?\s*$/im.test(
@@ -87,11 +87,12 @@ function cleanDefinition(content: string) {
     ) ||
     /^\s*(?:本文档|本方案|本版本)(?:是|为)?(?:最新|旧版|从.+更新)/m.test(
       content,
-    )
+    ) ||
+    /^\s*(?:我(?:们)?(?:已经|已|刚刚|先)(?:阅读|读取|检查|核对|更新|整理)|I (?:have (?:read|reviewed|updated)|will (?:read|review|update))\b)/im.test(content)
   )
     throw badRequest(
       "document_contains_history",
-      "Keep the complete project definition in the document. Put revision explanations in the history node reason.",
+      "State project facts directly. Keep revision explanations in source metadata and the history node reason.",
     );
 }
 
@@ -108,6 +109,7 @@ export class ProjectHistory {
       store.db.exec(`
         CREATE TABLE IF NOT EXISTS project_conversations (conversation_id TEXT PRIMARY KEY REFERENCES conversations(id), team_id TEXT NOT NULL REFERENCES teams(id), branch_id TEXT NOT NULL REFERENCES project_branches(id));
         CREATE TABLE IF NOT EXISTS project_main_conversations (team_id TEXT PRIMARY KEY REFERENCES teams(id), conversation_id TEXT NOT NULL REFERENCES conversations(id));
+        CREATE TABLE IF NOT EXISTS project_checkpoint_deletions (node_id TEXT PRIMARY KEY REFERENCES project_nodes(id), team_id TEXT NOT NULL REFERENCES teams(id), deleted_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS project_context_receipts (attempt_id TEXT NOT NULL, node_id TEXT NOT NULL, team_id TEXT NOT NULL, version TEXT NOT NULL, delivered_at TEXT, read_at TEXT, acknowledged_at TEXT, PRIMARY KEY(attempt_id, node_id));
         CREATE UNIQUE INDEX IF NOT EXISTS project_main_branch ON project_branches(team_id) WHERE json_extract(data, '$.baseNodeId') IS NULL;
         CREATE TRIGGER IF NOT EXISTS project_nodes_immutable BEFORE UPDATE ON project_nodes BEGIN SELECT RAISE(ABORT, 'History nodes are immutable'); END;
@@ -188,7 +190,7 @@ export class ProjectHistory {
     });
   }
   forConversation(teamId: string, conversationId: string): ProjectBranch {
-    if (!this.store.teams.getConversationDetail(teamId, conversationId))
+    if (!this.store.db.prepare("SELECT id FROM conversations WHERE team_id=? AND id=?").get(teamId, conversationId))
       throw notFound();
     const row = this.store.db
       .prepare(
@@ -323,14 +325,25 @@ export class ProjectHistory {
     this.ensure(teamId);
     const nodes = this.store.db
       .prepare(
-        "SELECT rowid AS sequence,data FROM project_nodes WHERE team_id=? AND rowid>? ORDER BY rowid LIMIT ?",
+        "SELECT n.rowid AS sequence,n.data,d.deleted_at FROM project_nodes n LEFT JOIN project_checkpoint_deletions d ON d.node_id=n.id WHERE n.team_id=? AND n.rowid>? ORDER BY n.rowid LIMIT ?",
       )
       .all(teamId, after, limit)
       .map((r) => ({
         sequence: Number(r.sequence),
         ...JSON.parse(String(r.data)),
+        ...(r.deleted_at ? { deletedAt: String(r.deleted_at) } : {}),
       }));
     return { nodes, nextCursor: nodes.at(-1)?.sequence ?? after };
+  }
+  deleteCheckpoint(teamId: string, nodeId: string) {
+    return this.store.transaction(() => {
+      const node = this.node(teamId, nodeId);
+      if (node.kind !== "checkpoint" || node.source.actor !== "user" || node.artifactIds.length || node.source.workId)
+        throw conflict("checkpoint_delete_not_allowed", "Only manually created checkpoints can be deleted.");
+      const inserted = this.store.db.prepare("INSERT OR IGNORE INTO project_checkpoint_deletions(node_id,team_id,deleted_at) VALUES (?,?,?)").run(nodeId, teamId, now());
+      if (inserted.changes) this.store.event(teamId, "project.checkpoint_deleted", { nodeId });
+      return { nodeId };
+    });
   }
   detail(teamId: string, nodeId: string) {
     const node = this.node(teamId, nodeId);

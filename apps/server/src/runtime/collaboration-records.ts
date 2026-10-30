@@ -10,6 +10,7 @@ import path from "node:path";
 import { z } from "zod";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { RuntimeStore, activeStates, hash, overlaps } from "./store.js";
+import { WorkspaceAccess } from "./workspace-access.js";
 import type {
   ArtifactVersion,
   Member,
@@ -52,6 +53,13 @@ export class CollaborationRecords {
       CREATE INDEX IF NOT EXISTS insights_team ON project_insights(team_id);
       CREATE TABLE IF NOT EXISTS project_restore_intents (id TEXT PRIMARY KEY, data TEXT NOT NULL);`);
     this.recoverRestorations();
+    // A committed submission is the durable intent. Each file is applied by
+    // expected hash, so restart can finish an interrupted copy without replaying
+    // a native agent or overwriting a newer project edit.
+    for (const team of store.teams.listTeams())
+      for (const work of store.list<Work>("works", team.id))
+        if (deliverable(work) && work.sourceSnapshotId && !work.reviewOf &&
+            (!work.publication || work.publication.state === "pending")) this.publishOutputs(work);
   }
   private rows<T>(table: "outputs" | "insights", teamId: string): T[] {
     return this.store.db
@@ -100,8 +108,60 @@ export class CollaborationRecords {
     this.store.save("works", work);
   }
   publishOutputs(work: Work) {
-    // Accepted isolated work is an input, not the shared project's current file.
-    if (!deliverable(work) || work.workspaceMode === "isolated") return;
+    if (!deliverable(work)) return;
+    if (work.workspaceMode === "isolated") {
+      if (work.sourceWorkspace && work.sourceSnapshotId && !work.reviewOf && work.publicationMode !== "integration")
+        this.store.afterCommit(() => this.publishWorkingCopy(this.store.get<Work>("works", work.teamId, work.id)));
+      return;
+    }
+    this.publishRevisions(work);
+  }
+  private publishWorkingCopy(work: Work) {
+    if (work.publication?.state === "published" || work.publication?.state === "conflict") return;
+    const branch = this.store.history!.forRun(this.store.get<Run>("runs", work.teamId, work.runId));
+    const priorApplied = work.publication?.appliedPaths ?? [];
+    work.publication = { state: "pending", artifactIds: [...work.artifactIds], appliedPaths: priorApplied };
+    this.store.save("works", work);
+    try {
+      const artifacts = this.store.verifyArtifacts(work).filter(a => a.path !== "@result");
+      const baseline = this.store.history!.snapshots.manifest(work.sourceSnapshotId!);
+      const expected = new Map(baseline.files.map(f => [process.platform === "win32" ? f.path.toLowerCase() : f.path, f.hash]));
+      for (const [file, value] of Object.entries(work.sourceFileHeads ?? {}))
+        expected.set(process.platform === "win32" ? file.toLowerCase() : file, value);
+      const access = new WorkspaceAccess(work.sourceWorkspace!, work.writePaths ?? artifacts.map(a => a.path),
+        [this.store.teams.dataDir], bytes => this.store.history!.snapshots.preserveFile(bytes));
+      const outputs = this.outputs(work.teamId, branch.id);
+      // Validate the complete set before the first write. Never publish a stale
+      // candidate just because it happens to produce the same final bytes.
+      for (const artifact of artifacts) {
+        const current = outputs.find(o => o.path === artifact.path)?.current;
+        if (current?.artifactId !== artifact.id && (work.outputHeads?.[artifact.path] ?? null) !== (current?.id ?? null))
+          throw conflict("output_conflict", `The current result for ${artifact.path} changed. Continue from its current version before publishing.`);
+        const before = access.read(artifact.path).sha256;
+        const original = expected.get(process.platform === "win32" ? artifact.path.toLowerCase() : artifact.path) ?? null;
+        if (before !== original && before !== artifact.sha256)
+          throw conflict("file_changed", `Project file ${artifact.path} changed while this member was working. Its working copy has been preserved.`);
+      }
+      for (const artifact of artifacts) {
+        const original = expected.get(process.platform === "win32" ? artifact.path.toLowerCase() : artifact.path) ?? null;
+        if (access.read(artifact.path).sha256 !== artifact.sha256) access.write(artifact.path, artifact.content, original);
+        if (!work.publication.appliedPaths.includes(artifact.path)) work.publication.appliedPaths.push(artifact.path);
+        this.store.save("works", work);
+      }
+      this.store.transaction(() => {
+        this.publishRevisions(work);
+        work.publication!.state = "published";
+        this.store.save("works", work);
+        this.store.event(work.teamId, "work.files_published", { paths: work.publication!.appliedPaths, workspace: work.sourceWorkspace }, work);
+      });
+    } catch (error) {
+      work.publication.state = "conflict";
+      work.publication.error = error instanceof Error ? error.message : String(error);
+      this.store.save("works", work);
+      this.store.event(work.teamId, "work.publication_conflict", { error: work.publication.error, appliedPaths: work.publication.appliedPaths }, work);
+    }
+  }
+  private publishRevisions(work: Work) {
     this.store.transaction(() => {
       const branch = this.store.history!.forRun(
         this.store.get<Run>("runs", work.teamId, work.runId),

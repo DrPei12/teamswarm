@@ -25,7 +25,7 @@ export const SessionManager={create:()=>({getSessionId:()=> 'fixture-session',ge
 export const SettingsManager={inMemory:x=>x};
 export const createExtensionRuntime=()=>({});
 export const loadProjectContextFiles=()=>[];
-export const createAgentSession=async(opts)=>{console.log(JSON.stringify({type:'thinking',level:opts.thinkingLevel}));return {session:{subscribe(){},prompt:async()=>console.log(JSON.stringify({type:'prompt'})),messages:[{role:'assistant',stopReason:'length'}],getLastAssistantText:()=>'',dispose(){}}}};
+export const createAgentSession=async(opts)=>{console.log(JSON.stringify({type:'thinking',level:opts.thinkingLevel,compaction:opts.settingsManager.compaction}));return {session:{subscribe(fn){fn({type:'compaction_end',result:{summary:'Retain original facts'},aborted:false})},prompt:async()=>console.log(JSON.stringify({type:'prompt'})),messages:[{role:'assistant',stopReason:'length'}],getLastAssistantText:()=>'',dispose(){}}}};
 `);
     for (const [budget, effort, context] of [[undefined, undefined, undefined], [null, null, null], [32768, "high", 1048576], [65536, "max", 1048576]] as const) {
       const spec = path.join(root, "spec.json");
@@ -40,6 +40,8 @@ export const createAgentSession=async(opts)=>{console.log(JSON.stringify({type:'
       assert.equal(events.find(e => e.type === "budget").reasoning, Boolean(effort));
       if (effort) assert.equal(events.find(e => e.type === "budget").map[effort], effort);
       assert.equal(events.find(e => e.type === "thinking").level, effort ?? "off");
+      assert.equal(events.find(e => e.type === "thinking").compaction.enabled,true);
+      assert.equal(events.find(e => e.type === "pi.event").event.type,"compaction_end");
       assert.equal(events.filter(e => e.type === "prompt").length, 1);
       assert.deepEqual(events.find(e => e.type === "result"), { type: "result", status: "failed", text: "", error: "Native Pi stopped with length." });
     }

@@ -16,6 +16,7 @@ import {
   groupActivity,
   delegationRows,
   toolValue,
+  canExpandActivity,
   field,
   type ActivityGroup,
 } from "./activityPresentation.ts";
@@ -28,7 +29,6 @@ function GroupedActivity({
   members: { id: string; name: string }[];
 }) {
   const { t } = useI18n();
-  const [open, setOpen] = useState(false);
   const failed = group.items.some(
     (i) => i.status === "failed" || i.status === "interrupted",
   );
@@ -49,68 +49,28 @@ function GroupedActivity({
         {running && <small>{t("Running…")}</small>}
       </div>
     );
+  const names = [
+    ...new Set(
+      delegationRows(group.items, members)
+        .map((row) => row.name)
+        .filter(Boolean),
+    ),
+  ];
   return (
     <div
       className={`activity-item ${failed ? "failed" : running ? "running" : ""}`}
     >
-      <button
-        className="activity-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
+      <div className="activity-summary-row">
         <Users size={15} />
-        <span>{t("Create members and assign work")}</span>
-        <ChevronRight size={13} className={open ? "expanded" : ""} />
+        <span>
+          {t("Create members and assign work")}
+          {names.length ? ` · ${names.join("、")}` : ""}
+        </span>
         {failed && <small>{t("Needs attention")}</small>}
-      </button>
-      <ActivityBody open={open} className="activity-body activity-readable">
-        <ul>
-          {delegationRows(group.items, members).map((row) => (
-            <li key={row.id}>
-              {row.created && (
-                <>
-                  <p>
-                    {t(
-                      row.created.status === "completed"
-                        ? "Created {name}, responsible for {responsibility}"
-                        : row.created.status === "running"
-                          ? "Creating {name}, responsible for {responsibility}"
-                          : "Could not create {name}: {responsibility}",
-                      {
-                        name: row.name || t("Member"),
-                        responsibility: row.responsibility,
-                      },
-                    )}
-                  </p>
-                  <ActionError item={row.created} />
-                </>
-              )}
-              {row.assignments.map((item) => {
-                const args = toolValue(item.text);
-                return (
-                  <div key={item.id}>
-                    <p>
-                      {t(
-                        item.status === "completed"
-                          ? "Assigned {name}: {task}"
-                          : item.status === "running"
-                            ? "Assigning {name}: {task}"
-                            : "Could not assign {name}: {task}",
-                        {
-                          name: row.name || t("Member"),
-                          task:
-                            field(args, "title") || field(args, "instructions"),
-                        },
-                      )}
-                    </p>
-                    <ActionError item={item} />
-                  </div>
-                );
-              })}
-            </li>
-          ))}
-        </ul>
-      </ActivityBody>
+      </div>
+      {group.items.map((item) => (
+        <ActionError key={item.id} item={item} />
+      ))}
     </div>
   );
 }
@@ -129,72 +89,36 @@ function ActionError({ item }: { item: TranscriptItem }) {
 }
 
 function ToolDetails({ item }: { item: TranscriptItem }) {
-  const { t } = useI18n();
-  if (!item.title?.startsWith("team_"))
+  const args = toolValue(item.text);
+  if (item.title === "team_write_file")
     return (
       <>
-        {item.text && <pre>{item.text}</pre>}
-        {item.output && <pre className="activity-output">{item.output}</pre>}
+        <pre>{field(args, "text")}</pre>
+        <ActionError item={item} />
       </>
     );
-  const rawArgs = toolValue(item.text);
-  const args =
-    item.title === "team_adopt_branch" &&
-    rawArgs.definition &&
-    typeof rawArgs.definition === "object"
-      ? (rawArgs.definition as Record<string, unknown>)
-      : rawArgs;
-  const result = toolValue(item.output);
-  const lines = [
-    "summary",
-    "objective",
-    "reason",
-    "content",
-    "message",
-    "title",
-  ]
-    .map((k) => field(args, k))
-    .filter(Boolean);
-  for (const key of ["criteria", "acceptanceCriteria", "files"])
-    if (Array.isArray(args[key]))
-      lines.push(
-        ...args[key].filter((v): v is string => typeof v === "string"),
-      );
-  if (Array.isArray(args.documents))
-    for (const document of args.documents)
-      if (document && typeof document === "object") {
-        const d = document as Record<string, unknown>;
-        lines.push(
-          [
-            field(d, "title"),
-            field(d, "content") || field(d, "text") || field(d, "body"),
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        );
-      }
-  const error = field(result, "error") || field(result, "message");
+  if (item.title === "team_edit_file")
+    return (
+      <>
+        <pre className="activity-diff-before">{field(args, "oldText")}</pre>
+        <pre className="activity-diff-after">{field(args, "newText")}</pre>
+        <ActionError item={item} />
+      </>
+    );
   return (
-    <div className="activity-readable">
-      {lines.map((line, i) => (
-        <p key={i}>{line}</p>
-      ))}
-      {item.status === "failed" || item.status === "interrupted" ? (
-        <p className="session-status">
-          {error || t("This action did not complete.")}
-        </p>
-      ) : (
-        !lines.length && (
-          <p>
-            {t(item.status === "running" ? "Running…" : "Action completed")}
-          </p>
-        )
-      )}
-    </div>
+    <>
+      {item.text && <pre>{item.text}</pre>}
+      {item.output && <pre className="activity-output">{item.output}</pre>}
+    </>
   );
 }
 
 const toolLabels: Record<string, string> = {
+  team_write_file: "Wrote file",
+  team_edit_file: "Edited file",
+  team_read_work: "Read work details",
+  team_read_file: "Read file",
+  team_review: "Request independent review",
   team_directory: "Read execution resources",
   team_directory_detail: "Read resource details",
   team_check_resource: "Check execution connection",
@@ -205,6 +129,8 @@ const toolLabels: Record<string, string> = {
   team_adopt_branch: "Adopt ideas into mainline",
   team_save_insight: "Preserve an idea",
   team_state: "Read team progress",
+  team_device_resources: "Read device resources",
+  team_set_device_reserve: "Set device memory reserve",
   team_submit_result: "Submit work result",
   team_read_artifact: "Read submitted file",
   team_accept_work: "Record independent review",
@@ -230,7 +156,7 @@ const ActivityItem = memo(function ActivityItem({
 }) {
   const { t } = useI18n();
   const [choice, setChoice] = useState<boolean | null>(null);
-  const open = choice ?? item.status === "running";
+  const open = choice ?? false;
   if (item.kind === "message")
     return (
       <MessageContent text={item.text} pending={item.status === "running"} />
@@ -238,11 +164,17 @@ const ActivityItem = memo(function ActivityItem({
   const Icon =
     item.kind === "command"
       ? Terminal
-      : item.kind === "file"
+      : item.kind === "file" ||
+          ["team_write_file", "team_edit_file"].includes(item.title ?? "")
         ? FileCode2
         : item.kind === "reasoning"
           ? Circle
           : Wrench;
+  const filePath = ["team_write_file", "team_edit_file"].includes(
+    item.title ?? "",
+  )
+    ? field(toolValue(item.text), "path").split(/[\\/]/).at(-1)
+    : undefined;
   const title =
     (item.kind === "command"
       ? t(
@@ -254,7 +186,9 @@ const ActivityItem = memo(function ActivityItem({
           { command: commandLabel(item.title || item.text) },
         )
       : item.title
-        ? t(toolLabels[item.title] ?? item.title)
+        ? [t(toolLabels[item.title] ?? item.title), filePath]
+            .filter(Boolean)
+            .join(" ")
         : "") ||
     (item.kind === "reasoning"
       ? t("Thinking")
@@ -262,6 +196,16 @@ const ActivityItem = memo(function ActivityItem({
         ? item.changes?.map((c) => c.path.split(/[\\/]/).at(-1)).join(", ") ||
           t("File changes")
         : t("Tool activity"));
+  if (!canExpandActivity(item))
+    return (
+      <div className={`activity-item ${item.status}`}>
+        <div className="activity-summary-row">
+          <Icon size={15} />
+          <span title={title}>{title}</span>
+        </div>
+        <ActionError item={item} />
+      </div>
+    );
   return (
     <div className={`activity-item ${item.status}`}>
       <button
@@ -357,6 +301,7 @@ export const ConversationActivity = memo(function ConversationActivity({
 });
 
 export function modelLabel(model: string, effort?: string) {
+  if (!model || model === "Default model" || model === "默认模型") return "";
   const display = model
     .replace(/^gpt-/i, "GPT-")
     .replace(

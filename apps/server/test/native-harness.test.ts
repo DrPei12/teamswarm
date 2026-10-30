@@ -47,7 +47,14 @@ test(
       };
       const result = await h.execute(req);
       assert.equal(result.status, "unknown");
-      assert.match(result.error ?? "", /descendant execution is unknown/);
+      assert.match(result.error ?? "", process.platform === "win32" ? /without a completion receipt/ : /descendant execution is unknown/);
+      if (process.platform === "win32" && descendant) {
+        for (let i=0;i<100;i++) {
+          try { process.kill(descendant,0); } catch { break; }
+          await new Promise(r=>setTimeout(r,20));
+        }
+        assert.throws(() => process.kill(descendant!,0), {code:"ESRCH"});
+      }
       await h.close();
     } finally {
       if (descendant) {
@@ -155,10 +162,7 @@ test("native configuration import preserves routing and never imports executable
     models: ["model-a"],
     credentialEnv: "TEST_MODEL_KEY",
   });
-  assert.throws(
-    () => resolveConnection(connection, "codex", "model-a", "read-only"),
-    /protocol/,
-  );
+  assert.equal(resolveConnection(connection,"codex","model-a","read-only").config.protocol,"chat-completions");
   assert.throws(
     () => resolveConnection(connection, "pi", "missing", "read-only"),
     /model/,
@@ -453,7 +457,7 @@ test("OpenCode receives the explicit output budget without changing its default"
   const saved = [process.env.TEAM_OPENCODE_BIN, process.env.TEAM_HARNESS_HOME, process.env.TEST_MODEL_KEY];
   try {
     const entry = path.join(root, "fixture.mjs");
-    writeFileSync(entry, `const c=JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);console.log(JSON.stringify({type:'fixture-budget',value:c.provider.teamswarm.models.fixture.limit.output,context:c.provider.teamswarm.models.fixture.limit.context,requestLimit:Number(process.env.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX)}));console.log(JSON.stringify({type:'step_finish',part:{reason:'stop'}}));`);
+    writeFileSync(entry, `import{createInterface}from'node:readline';const c=JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);console.log(JSON.stringify({type:'fixture-budget',value:c.provider.teamswarm.models.fixture.limit.output,context:c.provider.teamswarm.models.fixture.limit.context,requestLimit:Number(process.env.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX)}));createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);const result=m.method==='initialize'?{protocolVersion:1,agentCapabilities:{}}:m.method==='session/new'?{sessionId:'budget'}:{stopReason:'end_turn'};console.log(JSON.stringify({jsonrpc:'2.0',id:m.id,result}));});`);
     process.env.TEAM_OPENCODE_BIN = entry;
     process.env.TEAM_HARNESS_HOME = path.join(root, "native");
     process.env.TEST_MODEL_KEY = "fixture-only";

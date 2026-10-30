@@ -7,6 +7,7 @@ export interface ModelAccess {
   kind: "subscription" | "api";
   enabled: boolean;
   subscriptionHarness: string | null;
+  chatgptAccountId?: string | null;
   endpoints: Partial<Record<ConnectionProtocol, string>>;
   credentialEnv: string | null;
   models: string[];

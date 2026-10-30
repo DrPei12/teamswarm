@@ -1,8 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 export default defineConfig({
+  resolve: {
+    // TypeScript is authoritative when a local tool has emitted a sibling .js file.
+    extensions: [".mts", ".ts", ".tsx", ".mjs", ".js", ".jsx", ".json"],
+  },
   plugins: [
     react(),
     {
@@ -24,11 +28,24 @@ export default defineConfig({
       },
       writeBundle(options) {
         const output = options.dir!;
-        for (const file of [
-          "favicon.svg",
-          "fonts/InterVariable.woff2",
-          "fonts/LICENSE.txt",
-        ]) {
+        mkdirSync(path.join(output, "branding"), { recursive: true });
+        copyFileSync(
+          path.resolve("branding/logo.ico"),
+          path.join(output, "branding/logo.ico"),
+        );
+        for (const directory of ["cmaps", "standard_fonts"]) {
+          const source = path.resolve("../node_modules/pdfjs-dist", directory);
+          const target = path.join(output, "pdf", directory);
+          mkdirSync(target, { recursive: true });
+          for (const file of readdirSync(source, { withFileTypes: true })) {
+            if (file.isFile())
+              copyFileSync(
+                path.join(source, file.name),
+                path.join(target, file.name),
+              );
+          }
+        }
+        for (const file of ["fonts/InterVariable.woff2", "fonts/LICENSE.txt"]) {
           const target = path.join(output, file);
           mkdirSync(path.dirname(target), { recursive: true });
           copyFileSync(path.resolve("public", file), target);

@@ -1,3 +1,4 @@
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import { existsSync, realpathSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -61,17 +62,7 @@ export function deviceEntry(id: string): string | undefined {
     opencode: "opencode",
     "deepseek-harness": "dsh",
   };
-  const entries: Record<string, string[]> = {
-    codex: ["@openai/codex/bin/codex.js"],
-    grok: ["@xai-official/grok/bin/grok-bootstrap.js"],
-    "claude-code": [
-      "@anthropic-ai/claude-code/bin/claude.exe",
-      "@anthropic-ai/claude-code/cli.js",
-    ],
-    pi: ["@earendil-works/pi-coding-agent/dist/index.js"],
-    "deepseek-harness": ["@deepseek-ai/dsh/lib/bin.js"],
-    opencode: ["opencode-ai/bin/opencode.exe", "opencode-ai/bin/opencode"],
-  };
+  const entries = harnessManifest(id)?.runtime?.entries ?? [];
   for (const directory of devicePaths()) {
     const executable = path.join(
       directory,
@@ -88,7 +79,7 @@ export function deviceEntry(id: string): string | undefined {
       path.join(directory, "node_modules"),
       path.resolve(directory, "../lib/node_modules"),
     ])
-      for (const suffix of entries[id] ?? []) {
+      for (const suffix of entries) {
         const entry = path.join(root, suffix);
         if (existsSync(entry) && isDeviceFile(entry))
           return realpathSync(entry);

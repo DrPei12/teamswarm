@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld(
     platform: "windows",
     chooseDirectory: () => ipcRenderer.invoke("choose-directory"),
     setTheme: (dark) => ipcRenderer.send("theme", dark === true),
+    returnFromChatGPT: () => ipcRenderer.send("chatgpt-sign-in-return"),
     storage: Object.freeze({
       getItem: (key) => pending("get", key),
       setItem: (key, value) => pending("set", key, value),

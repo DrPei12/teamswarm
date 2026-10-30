@@ -19,3 +19,4 @@ test-results/
 Thumbs.db
 apps/desktop/icon.ico
 apps/desktop/icon.png
+teamswarm/src/*.js

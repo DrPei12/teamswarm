@@ -1,3 +1,5 @@
+import { permissionsForAccess, permissionsForHarness } from "./permissions";
+import { FieldSelect } from "./FieldSelect";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
@@ -14,6 +16,7 @@ import type {
   ExecutionResource,
   ResourceSelection,
 } from "@team/contracts/allocation";
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import type { ExecutionConfig, Work } from "@team/contracts/runtime";
 import type { Workspace } from "./store";
 import { ApiError, api, product } from "./service";
@@ -22,10 +25,11 @@ import { ModelPicker } from "./ModelPicker";
 import { HarnessInstallation } from "./HarnessInstallation";
 import { HarnessAccount, hasSubscription } from "./HarnessAccount";
 import {
+  useHarnessCatalog,
   supportedEfforts,
   effortLabel,
   type HarnessInspection,
-} from "./harnessCatalog";
+} from "./harnessCatalog.ts";
 import {
   allocationMessage,
   availabilityFacts,
@@ -42,22 +46,14 @@ import {
   type ServerPackagePreview,
 } from "./allocation";
 
-const harnessOptions = [
-  { id: "codex", label: "Codex" },
-  { id: "claude-code", label: "Claude Code" },
-  { id: "grok", label: "Grok" },
-  { id: "pi", label: "Pi" },
-  { id: "opencode", label: "OpenCode" },
-  { id: "deepseek-harness", label: "DeepSeek Harness" },
-];
-
 const issueLabels: Record<string, string> = {
   incompatible_protocol: "Protocol not supported by this harness",
   unknown_harness: "Unknown harness",
   missing_configuration: "Missing model, endpoint or credential reference",
   unsupported_context_window:
-    "A context window override requires Pi or OpenCode",
-  unsupported_output_budget: "An output token budget requires Pi or OpenCode",
+    "This Harness does not accept a context window override",
+  unsupported_output_budget:
+    "This Harness does not accept an output token budget",
   unsupported_effort: "This harness does not support an explicit effort",
   unsupported_thinking_format: "Thinking format requires Pi chat completions",
 };
@@ -172,13 +168,6 @@ export function AllocationSettings({
 
   return (
     <div className="allocation-settings">
-      {assignmentsOnly && (
-        <p className="allocation-note">
-          {t(
-            "Manual choices override Host for the selected target. Manage available connections in Models and connections.",
-          )}
-        </p>
-      )}
       {!assignmentsOnly && (
         <section
           className="allocation-section"
@@ -217,11 +206,7 @@ export function AllocationSettings({
               </button>
             </div>
           </header>
-          <p className="allocation-note">
-            {t(
-              "Each resource stores a Harness and model connection configuration and can be shared by multiple members.",
-            )}
-          </p>
+
           {loading ? (
             <p role="status">
               <LoaderCircle size={15} className="spinner" /> {t("Loading…")}
@@ -439,6 +424,9 @@ function ResourceForm({
   onSubmit: (input: ResourceInput) => Promise<void>;
 }) {
   const { t } = useI18n();
+  const harnessOptions = useHarnessCatalog((error) =>
+    setSaveError(error.message),
+  );
   const config = resource?.config;
   const [secret, setSecret] = useState("");
   const [saving, setSaving] = useState(false);
@@ -524,16 +512,29 @@ function ResourceForm({
             name: name.trim(),
             description: description.trim(),
             config: {
+              ...config,
+              permissions: permissionsForAccess(
+                {
+                  harness,
+                  access,
+                  permissions: permissionsForHarness(config, harness),
+                },
+                access,
+              ),
               harness,
               model: model.trim() || null,
               provider: provider.trim() || null,
               baseUrl: baseUrl.trim() || null,
               credentialEnv: reference,
+              chatgptAccountId:
+                !apiMode && harness === config?.harness
+                  ? (config?.chatgptAccountId ?? null)
+                  : null,
               effort: effort.trim() || null,
               access,
               protocol: (protocol || null) as ExecutionConfig["protocol"],
               thinkingFormat: thinkingFormat ? "qwen" : null,
-              ...(["pi", "opencode"].includes(harness)
+              ...(harnessManifest(harness)?.models.outputBudget
                 ? {
                     contextWindowTokens: contextWindowTokens.trim()
                       ? Number(contextWindowTokens)
@@ -542,7 +543,7 @@ function ResourceForm({
                       ? Number(maxOutputTokens)
                       : null,
                   }
-                : {}),
+                : { contextWindowTokens: null, maxOutputTokens: null }),
             },
           });
         } catch (error) {
@@ -565,10 +566,10 @@ function ResourceForm({
         </label>
         <label>
           {t("Harness")}
-          <select
+          <FieldSelect
             value={harness}
-            onChange={(event) => {
-              setHarness(event.target.value);
+            onValueChange={(value) => {
+              setHarness(value);
               setMaxOutputTokens("");
               setContextWindowTokens("");
               setModel("");
@@ -587,7 +588,7 @@ function ResourceForm({
                 {option.label}
               </option>
             ))}
-          </select>
+          </FieldSelect>
         </label>
       </div>
       <label>
@@ -693,23 +694,23 @@ function ResourceForm({
         {!subscriptionMode && (
           <label>
             {t("Protocol")}
-            <select
+            <FieldSelect
               value={protocol}
-              onChange={(event) => setProtocol(event.target.value)}
+              onValueChange={(value) => setProtocol(value)}
             >
               <option value="">{t("Default")}</option>
               <option value="responses">Responses</option>
               <option value="chat-completions">Chat Completions</option>
               <option value="anthropic-messages">Anthropic Messages</option>
-            </select>
+            </FieldSelect>
           </label>
         )}
         <label>
           {t("Effort")}
           {subscriptionMode ? (
-            <select
+            <FieldSelect
               value={effort}
-              onChange={(event) => setEffort(event.target.value)}
+              onValueChange={(value) => setEffort(value)}
             >
               <option value="">{t("Default")}</option>
               {supportedEfforts(inspection, model).map((option) => (
@@ -720,7 +721,7 @@ function ResourceForm({
                   {effortLabel(option.reasoningEffort)}
                 </option>
               ))}
-            </select>
+            </FieldSelect>
           ) : (
             <input
               value={effort}
@@ -778,7 +779,7 @@ function ResourceForm({
           </label>
         </>
       )}
-      {["pi", "opencode"].includes(harness) && (
+      {harnessManifest(harness)?.models.outputBudget && (
         <div className="form-pair">
           <label>
             {t("Context window tokens")}
@@ -814,17 +815,17 @@ function ResourceForm({
       <div className="form-pair">
         <label>
           {t("Access")}
-          <select
+          <FieldSelect
             value={access}
-            onChange={(event) =>
-              setAccess(event.target.value as "read-only" | "workspace-write")
+            onValueChange={(value) =>
+              setAccess(value as "read-only" | "workspace-write")
             }
           >
             <option value="workspace-write">
               {t("Project read and write")}
             </option>
             <option value="read-only">{t("Read only")}</option>
-          </select>
+          </FieldSelect>
         </label>
       </div>
       {harness === "pi" && (
@@ -914,10 +915,10 @@ function HostAllocation({
         </p>
       )}
       <div className="allocation-picker">
-        <select
+        <FieldSelect
           aria-label={t("Host execution resource")}
           value={selected}
-          onChange={(event) => setSelected(event.target.value)}
+          onValueChange={(value) => setSelected(value)}
           disabled={busy || !value}
         >
           <option value="">{t("Team default")}</option>
@@ -926,10 +927,10 @@ function HostAllocation({
             .map((resource) => (
               <option key={resource.id} value={resource.id}>
                 {resource.name} · {resource.config.harness} ·{" "}
-                {resource.config.model ?? t("Default model")}
+                {resource.config.model ?? t("Choose model")}
               </option>
             ))}
-        </select>
+        </FieldSelect>
         <button
           className="secondary-button"
           disabled={busy || !value}
@@ -1025,14 +1026,20 @@ function AllocationBoard({
   const [rowError, setRowError] = useState<Record<string, string>>({});
   const [busyRow, setBusyRow] = useState("");
   const members = workspace.members.filter(
-    (member) => member.teamId === teamId && member.id !== `host:${teamId}`,
+    (member) =>
+      member.teamId === teamId &&
+      member.id !== `host:${teamId}` &&
+      !member.removedAt,
   ) as unknown as MemberAllocationView[];
   const works = useMemo(() => {
     const list: Work[] = workspace.executions?.[teamId]?.works ?? [];
     return [...list]
       .filter((work) =>
         workspace.members.some(
-          (member) => member.teamId === teamId && member.id === work.memberId,
+          (member) =>
+            member.teamId === teamId &&
+            member.id === work.memberId &&
+            !member.removedAt,
         ),
       )
       .sort(
@@ -1182,12 +1189,12 @@ function AllocationBoard({
                         </span>
                       </div>
                       <div className="allocation-picker">
-                        <select
+                        <FieldSelect
                           value={draft[rowKey] ?? ""}
-                          onChange={(event) =>
+                          onValueChange={(value) =>
                             setDraft((state) => ({
                               ...state,
-                              [rowKey]: event.target.value,
+                              [rowKey]: value,
                             }))
                           }
                           aria-label={t("Set member default")}
@@ -1198,7 +1205,7 @@ function AllocationBoard({
                               {item.name} · {t("Version")} {item.version}
                             </option>
                           ))}
-                        </select>
+                        </FieldSelect>
                         <button
                           type="button"
                           className="secondary-button"
@@ -1317,12 +1324,12 @@ function AllocationBoard({
                         </span>
                       </div>
                       <div className="allocation-picker">
-                        <select
+                        <FieldSelect
                           value={draft[rowKey] ?? ""}
-                          onChange={(event) =>
+                          onValueChange={(value) =>
                             setDraft((state) => ({
                               ...state,
-                              [rowKey]: event.target.value,
+                              [rowKey]: value,
                             }))
                           }
                           aria-label={t("Set task resource")}
@@ -1333,7 +1340,7 @@ function AllocationBoard({
                               {item.name} · {t("Version")} {item.version}
                             </option>
                           ))}
-                        </select>
+                        </FieldSelect>
                         <button
                           type="button"
                           className="secondary-button"

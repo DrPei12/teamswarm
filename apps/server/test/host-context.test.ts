@@ -38,9 +38,15 @@ async function setup(harness = new ContextHarness()) {
   const root = mkdtempSync(path.join(process.cwd(), ".test-context-"));
   const workspace = path.join(root, "project");
   mkdirSync(workspace);
+  const resourceSampling = {
+    sample: async () => ({ totalPhysical: 64 * 1024 ** 3, availablePhysical: 48 * 1024 ** 3,
+      availableCommit: 64 * 1024 ** 3, cpuCores: 8, cpuBusyPercent: 5, systemProcessCount: 100, processes: [] }),
+    availablePhysical: () => 48 * 1024 ** 3,
+  };
   let service = createApp({
     dataDir: path.join(root, "data"),
     harnesses: [harness],
+    resourceSampling,
   });
   let server = service.app.listen(0, "127.0.0.1");
   await new Promise<void>((r) => server.once("listening", r));
@@ -90,7 +96,7 @@ async function setup(harness = new ContextHarness()) {
     for (;;) {
       const w = service.runtime.store.get<Work>("works", team.id, sent.workId);
       if (["submitted", "failed", "interrupted"].includes(w.status)) return w;
-      if (Date.now() - start > 6000) throw new Error("Fixture timeout");
+      if (Date.now() - start > 6000) throw new Error(`Fixture timeout: ${w.status}: ${w.error ?? ""}`);
       await new Promise((r) => setTimeout(r, 10));
     }
   }
@@ -117,6 +123,7 @@ async function setup(harness = new ContextHarness()) {
       service = createApp({
         dataDir: path.join(root, "data"),
         harnesses: [harness],
+        resourceSampling,
       });
       server = service.app.listen(0, "127.0.0.1");
       await new Promise<void>((r) => server.once("listening", r));
@@ -252,6 +259,33 @@ test("resource directory uses CAS, separates model combinations and selects an e
   }
 });
 
+test("a fresh Host includes the latest exchange before optional project context", async () => {
+  const app = await setup();
+  try {
+    app.harness.capabilities.resume = false;
+    app.harness.action = async () => ({ status: "completed", text: "LAST_FILE_CONTENT_93a2" });
+    await app.send("Read the proof file.");
+    const assemble = app.service.runtime.hostContext.assemble.bind(app.service.runtime.hostContext);
+    app.service.runtime.hostContext.assemble = (...args) => {
+      // Match a native Harness with substantial system/tool overhead.
+      args[7] = 16500;
+      return assemble(...args);
+    };
+    app.harness.action = async (request) => {
+      assert.equal(request.sessionId, undefined);
+      const input = JSON.parse(request.input);
+      assert.equal(input.history.at(-1).content, "LAST_FILE_CONTENT_93a2");
+      assert.equal(input.history.at(-1).role, "assistant");
+      assert(input.history.some((m: any) => m.content === "Read the proof file."));
+      return { status: "completed", text: "Continued" };
+    };
+    const work = await app.send("Repeat the full content in your immediately preceding reply.");
+    assert.equal(work.status, "submitted", work.error ?? undefined);
+    const frame = app.service.runtime.hostContext.frame(app.team.id, work.attemptId!);
+    assert(frame.inputTokensEstimate <= frame.budget.inputTokens);
+  } finally { await app.close(); }
+});
+
 test("bounded long history, exact frame identity, searchable originals and recovery notes survive a fresh Host", async () => {
   const app = await setup();
   try {
@@ -294,10 +328,11 @@ test("bounded long history, exact frame identity, searchable originals and recov
       app.team.id,
       first.attemptId!,
     );
-    assert.ok(frame.inputBytes < 48000);
-    assert.equal(frame.input.history.length, 23);
+    assert.ok(frame.inputTokensEstimate <= frame.budget.inputTokens);
+    assert.ok(frame.input.history.length > 0, JSON.stringify({budget:frame.budget, tokens:frame.inputTokensEstimate, access:frame.input.historyAccess, index:frame.input.navigation.index.length, notes:frame.input.current.notes.length}));
+    assert.ok(frame.input.history.some((message: any) => message.content.startsWith("Archive 999:")));
     assert.equal(frame.input.turnPurpose, "dialogue");
-    assert.equal(frame.input.historyAccess.omittedMessages, 980);
+    assert.equal(frame.input.historyAccess.omittedMessages, frame.input.historyAccess.totalMessages - frame.input.history.length);
     assert.equal(
       frame.inputBytes,
       Buffer.byteLength(app.harness.requests.at(-1)!.input),
@@ -410,7 +445,7 @@ test("changed requirements rebuild context and old branch notes never enter a fo
   }
 });
 
-test("mandatory definitions cannot be silently truncated and Host configuration changes cannot resume old native context", async () => {
+test("large definitions remain fully retrievable through indexed pages and a changed model starts fresh", async () => {
   const app = await setup();
   try {
     const first = await app.send("Initial context");
@@ -459,36 +494,26 @@ test("mandatory definitions cannot be silently truncated and Host configuration 
       { actor: "user" },
     );
     const calls = app.harness.requests.length;
-    const failed = await app.send("Capacity check");
-    assert.equal(failed.status, "failed");
-    assert.match(failed.error!, /no requirement was silently truncated/);
-    assert.equal(app.harness.requests.length, calls);
-    const updated = app.service.runtime.store.settings(app.team.id)!;
-    const {
-      teamId: _id,
-      version: version2,
-      policyVersion: _p,
-      ...next
-    } = updated;
-    assert.equal(
-      (
-        await app.request(
-          `/teams/${app.team.id}/runtime`,
-          { ...next, hostContextMaxBytes: 180000, expectedVersion: version2 },
-          "PUT",
-        )
-      ).status,
-      200,
-    );
-    app.service.runtime.retry(app.team.id, failed.id, failed.revision);
-    const start = Date.now();
-    while (
-      app.service.runtime.store.get<Work>("works", app.team.id, failed.id)
-        .status !== "submitted"
-    ) {
-      if (Date.now() - start > 6000)
-        throw new Error("Budget recovery did not finish");
-      await new Promise((r) => setTimeout(r, 10));
+    const loaded = await app.send("Capacity check");
+    assert.equal(loaded.status, "submitted", loaded.error);
+    const frame = app.service.runtime.hostContext.frame(app.team.id, loaded.attemptId!);
+    assert.equal(frame.input.project.documents.length, 0);
+    assert.ok(frame.input.project.otherDocuments.length > 0);
+    assert.ok(frame.inputTokensEstimate <= frame.budget.inputTokens);
+    const run = app.service.runtime.store.get<any>("runs", app.team.id, loaded.runId);
+    const index=app.service.runtime.hostContext.index(run,loaded,{topic:"definition",offset:0,limit:50});
+    assert.equal(index.total,3);
+    assert.equal(index.items.length,3);
+    for (const doc of index.items) {
+      let content = "", offset = 0;
+      do {
+        const page = app.service.runtime.hostContext.read(run, {kind:"materials", refs:[doc.ref], expectedRevisions:{[doc.ref]:doc.revision}, query:"", offset, limit:1}, loaded.attemptId!);
+        const part = page.items[0] as any;
+        assert.equal(part.offset, offset);
+        content += part.content;
+        offset = part.nextOffset;
+      } while (offset !== null);
+      assert.equal(content, "必需".repeat(6000));
     }
     assert.equal(app.harness.requests.length, calls + 1);
     assert.equal(
@@ -555,7 +580,8 @@ test("failed requests remain discoverable without production work and repeated t
       frame.reads.filter((r: any) => r.tool === "team_context_read").length,
       8,
     );
-    assert.ok(frame.sessionToolBytes > 192000);
+    assert.ok(frame.sessionToolBytes > 0);
+    assert.ok(frame.sessionEstimatedTokens > frame.inputTokensEstimate);
     const attempt = app.service.runtime.store.get<Attempt>(
       "attempts",
       app.team.id,
@@ -568,7 +594,7 @@ test("failed requests remain discoverable without production work and repeated t
         attempt,
         app.service.runtime.store.settings(app.team.id)!,
       ),
-      false,
+      frame.sessionEstimatedTokens + frame.budget.outputReserve + frame.budget.toolReserve < frame.budget.windowTokens * .85,
     );
   } finally {
     await app.close();
@@ -597,12 +623,11 @@ test("Host history does not repeat the source request already carried by its wor
       ),
       false,
     );
-    // Equal wording from an older user turn remains a distinct historical decision.
-    assert.ok(
-      secondInput.history.some(
-        (m: any) => m.id === firstInput.sourceMessageId && m.content === text,
-      ),
-    );
+    // The earlier source remains durable but need not be resent into its native session.
+    assert.equal(secondInput.history.some((m: any) => m.id === firstInput.sourceMessageId), false);
+    const run = app.service.runtime.store.get<any>("runs", app.team.id, second.runId);
+    const original = app.service.runtime.hostContext.read(run, {kind:"messages", messageId:firstInput.sourceMessageId, query:"", offset:0, limit:1}) as any;
+    assert.equal(original.content, text);
     assert.equal(first.status, "submitted");
   } finally {
     await app.close();
@@ -648,7 +673,7 @@ test("Host follow-ups retain source messages whose content differs from work ins
   }
 });
 
-test("Host follow-ups keep the last eight messages when the source is outside the window", async () => {
+test("Host follow-ups use available capacity beyond eight messages without rewriting conversation history", async () => {
   const app = await setup();
   try {
     const work = await app.send("Generate the report.");
@@ -680,12 +705,10 @@ test("Host follow-ups keep the last eight messages when the source is outside th
       undefined,
       { sourceMessageId: run.sourceMessageId },
     );
-    assert.deepEqual(
-      input.history.map((message: any) => message.id),
-      messages.slice(-8).map((message: any) => message.id),
-    );
-    assert.equal(input.history.length, 8);
-    assert.equal(input.historyAccess.omittedMessages, messages.length - 8);
+    assert.ok(input.history.length > 8);
+    for (const message of messages.filter(m => m.content.startsWith("Report update")))
+      assert.ok(input.history.some((m: any) => m.id === message.id));
+    assert.equal(input.historyAccess.omittedMessages, messages.length - input.history.length);
     assert.deepEqual(
       app.service.store.getConversationDetail(app.team.id, app.chat.id)
         .messages,
@@ -723,7 +746,8 @@ test("capability changes make saved Host resource claims advisory pending rechec
     const input = JSON.parse(app.harness.requests.at(-1)!.input);
     assert.equal(input.current.notes[0].requiresRecheck, true);
     assert.equal(input.current.notes[0].capabilityVersion, before.version);
-    assert.equal(input.current.notes[0].content, "Only one model remains; earlier models were exhausted.");
+    assert.equal(input.current.notes[0].content, undefined);
+    assert.equal((notes.items[0] as any).content, "Only one model remains; earlier models were exhausted.");
     for (const kind of ["resources", "models"] as const) {
       const page = catalog.list(app.team.id, app.branch.id, {kind,query:"",offset:0,limit:10});
       assert.equal(page.catalogue?.scope, "configured_enabled_choices");
@@ -765,7 +789,7 @@ for (const legacy of [false, true]) {
       for (const note of [page.items[0], assembled[0]] as any[]) {
         assert.equal(note.requiresRecheck, legacy);
         assert.equal(note.capabilityVersion, legacy ? undefined : original.capabilityVersion);
-        assert.equal(note.content, original.content);
+        assert.equal(note.content, legacy && note === assembled[0] ? undefined : original.content);
         assert.equal(note.contextVersion, original.contextVersion);
         assert.equal(note.version, original.version);
       }

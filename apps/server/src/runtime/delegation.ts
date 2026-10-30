@@ -12,11 +12,12 @@ export function delegationIdentity(input: Record<string, any>) {
   const contract = {
     memberId: input.memberId, acceptanceCriteria: set(input.acceptanceCriteria),
     acceptanceEvidence: input.acceptanceEvidence?.slice().sort((a: any, b: any) => a.criterion.localeCompare(b.criterion)) ?? null,
+    contextRefs: set(input.contextRefs),
     inputs: set(input.inputArtifactIds), dependsOn: set(input.dependsOn),
     reviewOf: input.reviewOf ?? null, verification: input.verification ?? "independent",
     continuationOf: input.continuationOf ?? null, writePaths: paths ? set(paths) : null,
     executionRequirements: Object.fromEntries(Object.entries(input.executionRequirements ?? {}).filter(([,v]) => v).sort()),
-    workspaceMode: input.workspaceMode ?? "shared", integratesWorkIds: set(input.integratesWorkIds),
+    workspaceMode: input.workspaceMode ?? "isolated", publicationMode: input.publicationMode ?? "automatic", integratesWorkIds: set(input.integratesWorkIds), permissions: input.permissions ?? null,
   };
   return {
     key: input.responsibilityKey ?? (paths?.length

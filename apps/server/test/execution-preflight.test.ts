@@ -309,7 +309,9 @@ test("a pure file lightweight task requests no command capability and creates no
 
     const call = t.harness.call(work.id);
     assert.equal(call.request.verificationDirectory, undefined);
-    assert.deepEqual(call.request.workspaceBoundary, { writePaths: ["notes.md"] });
+    assert.equal(call.request.workspaceBoundary, undefined);
+    assert.equal(call.request.isolatedWorkspace, true);
+    assert.deepEqual(stored.writePaths, ["notes.md"]);
     assert(
       !Object.values(call.request).some(
         (value) =>
@@ -338,7 +340,8 @@ test("a pure file lightweight task requests no command capability and creates no
       text: "file only",
       expectedSha256: null,
     });
-    assert.equal(readFileSync(path.join(t.workspace, "notes.md"), "utf8"), "file only");
+    assert.equal(readFileSync(path.join(call.request.workspace, "notes.md"), "utf8"), "file only");
+    assert.equal(existsSync(path.join(t.workspace, "notes.md")), false);
     await t.tool(work.id, "team_submit_result", {
       summary: "Updated the scoped file.",
       files: ["notes.md"],
@@ -353,6 +356,7 @@ test("a pure file lightweight task requests no command capability and creates no
     });
     t.harness.finish(work.id);
     await until(() => t.state(work.id).status === "self_checked");
+    assert.equal(readFileSync(path.join(t.workspace, "notes.md"), "utf8"), "file only");
     assert(t.state(work.id).artifactIds.length > 0, "the submission captured an artifact");
     assert.equal(
       t.service.runtime.store
@@ -381,9 +385,8 @@ test("a continuation inherits the original write scope and executes with that bo
       writePaths: ["docs/"],
     })) as Work;
     await until(() => t.harness.call(original.id));
-    assert.deepEqual(t.harness.call(original.id).request.workspaceBoundary, {
-      writePaths: ["docs/"],
-    });
+    assert.equal(t.harness.call(original.id).request.workspaceBoundary, undefined);
+    assert.equal(t.harness.call(original.id).request.isolatedWorkspace, true);
     t.harness.finish(original.id, "failed");
     await until(() => t.state(original.id).status === "failed");
 
@@ -410,7 +413,8 @@ test("a continuation inherits the original write scope and executes with that bo
     await until(() => t.harness.call(continuation.id));
 
     const call = t.harness.call(continuation.id);
-    assert.deepEqual(call.request.workspaceBoundary, { writePaths: ["docs/"] });
+    assert.equal(call.request.workspaceBoundary, undefined);
+    assert.equal(call.request.isolatedWorkspace, true);
     assert.equal(call.request.verificationDirectory, undefined);
     const attempt = t.service.runtime.store.get<Attempt>(
       "attempts",
@@ -437,7 +441,7 @@ test("a continuation inherits the original write scope and executes with that bo
       expectedSha256: null,
     });
     assert.equal(
-      readFileSync(path.join(t.workspace, "docs", "continued.md"), "utf8"),
+      readFileSync(path.join(call.request.workspace, "docs", "continued.md"), "utf8"),
       "continued",
     );
     await assert.rejects(
@@ -489,7 +493,7 @@ test("upgrading preserves retries and unpublished files in legacy work continuat
     const original = await t.tool(t.hostId, "team_delegate", {
       memberId: member.id, title: "Existing document", instructions: "Finish draft.md",
       acceptanceCriteria: ["draft.md is complete"], inputArtifactIds: [], dependsOn: [],
-      verification: "self-check", writePaths: ["draft.md"],
+      verification: "self-check", writePaths: ["draft.md"], workspaceMode: "shared",
     }) as Work;
     await until(() => t.harness.call(original.id));
     writeFileSync(path.join(t.workspace, "draft.md"), "unpublished draft");

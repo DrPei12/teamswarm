@@ -66,25 +66,41 @@ export class WorkspaceAccess {
       .slice(0, 200).map((e) => ({ name: e.name, directory: e.isDirectory() }));
   }
   write(value: string, text: string, expectedSha256: string | null) {
-    const { relative, absolute } = this.file(value, true);
     if (Buffer.byteLength(text, "utf8") > 2 * 1024 * 1024) throw badRequest("workspace_file_size", "Project text edits are limited to 2 MiB.");
+    return this.writeBytes(value, Buffer.from(text, "utf8"), expectedSha256);
+  }
+  readBytes(value: string, limit = 10 * 1024 * 1024) {
+    const { relative, absolute } = this.file(value);
+    if (!existsSync(absolute)) throw badRequest("file_missing", "The file no longer exists.");
+    const stat = lstatSync(absolute);
+    if (!stat.isFile() || stat.size > limit) throw badRequest("workspace_file_size", "Open a file of at most 10 MiB.");
+    const bytes = readFileSync(absolute);
+    return { path: relative, bytes, sha256: digest(bytes) };
+  }
+  entries(value?: string) {
+    const directory = value ? this.file(value).absolute : this.root;
+    return readdirSync(directory, { withFileTypes: true }).filter((e) => !protectedNames.test(e.name) && !e.isSymbolicLink() && (e.isDirectory() || e.isFile()));
+  }
+  writeBytes(value: string, bytes: Buffer, expectedSha256: string | null) {
+    if (bytes.length > 10 * 1024 * 1024) throw badRequest("workspace_file_size", "File edits are limited to 10 MiB.");
+    const { relative, absolute } = this.file(value, true);
     const beforeBytes = existsSync(absolute) ? readFileSync(absolute) : null;
     const before = beforeBytes ? digest(beforeBytes) : null;
     if (before !== expectedSha256) throw conflict("file_changed", "Read the current file before editing; another change must be preserved.");
-    if (before === digest(text)) return { path: relative, beforeSha256: before, sha256: before, bytes: Buffer.byteLength(text), unchanged: true };
+    if (before === digest(bytes)) return { path: relative, beforeSha256: before, sha256: before, bytes: bytes.length, unchanged: true };
     if (beforeBytes) this.preserve?.(beforeBytes);
     mkdirSync(path.dirname(absolute), { recursive: true });
     this.file(value, true);
     // Rename replaces the directory entry, so a hard-linked original is never modified in place.
     const temporary = path.join(path.dirname(absolute), `.teamswarm-write-${randomUUID()}`);
     try {
-      writeFileSync(temporary, text, { flag: "wx", mode: existsSync(absolute) ? lstatSync(absolute).mode : 0o600 });
+      writeFileSync(temporary, bytes, { flag: "wx", mode: existsSync(absolute) ? lstatSync(absolute).mode : 0o600 });
       this.file(value, true);
       if ((existsSync(absolute) ? digest(readFileSync(absolute)) : null) !== before)
         throw conflict("file_changed", "The file changed while preparing this edit.");
       renameSync(temporary, absolute);
     } finally { if (existsSync(temporary)) unlinkSync(temporary); }
-    return { path: relative, beforeSha256: before, sha256: digest(text), bytes: Buffer.byteLength(text) };
+    return { path: relative, beforeSha256: before, sha256: digest(bytes), bytes: bytes.length };
   }
   edit(value: string, oldText: string, newText: string, expectedSha256: string) {
     const current = this.read(value, 0, 2 * 1024 * 1024);

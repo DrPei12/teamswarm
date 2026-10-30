@@ -14,33 +14,64 @@
   min-height: 0;
 }
 .work-thread-picker {
-  padding: 12px 18px;
-  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 6px 16px;
+  border-bottom: var(--cds-hairline) solid var(--line);
 }
-.work-thread-picker label,
-.work-message-mode label {
+.work-thread-trigger {
+  flex: 1 1 160px;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 12px;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 30px;
+  padding: 5px 8px;
+  border-radius: var(--cds-radius-control);
+  text-align: left;
+  font-size: 13px;
 }
-.work-thread-picker select {
+.work-thread-trigger > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.work-thread-trigger:hover,
+.work-thread-trigger[data-state="open"] {
+  background: var(--hover);
+}
+.menu.work-thread-menu {
+  width: min(420px, calc(100vw - 24px));
+  min-width: min(var(--radix-select-trigger-width), calc(100vw - 24px));
+  max-height: min(360px, var(--radix-select-content-available-height));
+  padding: 5px;
+  animation: appear 100ms ease-out;
+}
+.work-thread-option {
+  gap: 16px;
+  min-height: 34px;
+}
+.work-thread-option > span:first-child {
   flex: 1;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
-.work-thread-picker small,
-.work-message-mode small {
-  display: block;
-  margin-top: 6px;
-  opacity: 0.65;
+.thread-menu-scroll {
+  display: grid;
+  place-items: center;
+  height: 20px;
+}
+.thread-menu-scroll:first-child svg {
+  transform: rotate(180deg);
+}
+.work-thread-picker small {
+  color: var(--secondary);
   font-size: 11px;
-  line-height: 1.5;
+  line-height: 18px;
 }
-.work-message-mode {
-  padding: 5px 0 10px;
-}
-.work-thread-picker select,
-.work-message-mode select,
 .project-records select,
 .record-editor input,
 .record-editor textarea {

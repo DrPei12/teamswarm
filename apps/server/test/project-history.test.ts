@@ -216,6 +216,42 @@ const doc = (key: string, content: string, dependencies: string[] = []) => ({
   content,
   dependencies,
 });
+test("manual checkpoint deletion persists while ancestry, definitions and snapshots remain usable", async () => {
+  const f = await setup();
+  try {
+    const checkpoint = (await f.api(`${f.prefix}/branches/${f.main.id}/checkpoints`, {
+      clientRequestId: randomUUID(), expectedHeadId: f.main.headNodeId, title: "Temporary checkpoint",
+    })).body;
+    const next = (await f.api(`${f.prefix}/branches/${f.main.id}/checkpoints`, {
+      clientRequestId: randomUUID(), expectedHeadId: checkpoint.id, title: "Following checkpoint",
+    })).body;
+    const fork = f.service.runtime.history.fork(f.team.id, checkpoint.id, "Existing branch", []);
+    const route = `${f.prefix}/history/${checkpoint.id}`;
+    assert.equal((await f.api(route, undefined, "DELETE", false)).status, 401);
+    assert.equal((await f.api(route, undefined, "DELETE")).status, 200);
+    assert.equal((await f.api(route, undefined, "DELETE")).status, 200);
+    assert.equal((await f.api(`${f.prefix}/history/${f.main.headNodeId}`, undefined, "DELETE")).status, 409);
+    const other = (await f.api("/teams", { name: "Other history" })).body;
+    assert.equal((await f.api(`/teams/${other.id}/history/${checkpoint.id}`, undefined, "DELETE")).status, 404);
+    await f.restart();
+    const timeline = (await f.api(`${f.prefix}/history`)).body.nodes;
+    assert.ok(timeline.find((n: any) => n.id === checkpoint.id).deletedAt);
+    assert.equal(timeline.find((n: any) => n.id === next.id).parentNodeId, checkpoint.id);
+    assert.equal((await f.context()).nodeId, next.id);
+    assert.equal((await f.context(fork.branch.id)).nodeId, fork.branch.headNodeId);
+    assert.equal(readFileSync(path.join(fork.branch.workspace!, "app.txt"), "utf8"), "A_GOOD_BYTES");
+    assert.equal(f.service.runtime.history.node(f.team.id, checkpoint.id).deletedAt, undefined);
+    assert.ok(f.service.runtime.history.node(f.team.id, checkpoint.id).workspaceSnapshotId);
+    const { visibleHistory, visibleHistoryNodeId } = await import("../../../teamswarm/src/historyPresentation.js");
+    assert.equal(visibleHistory(timeline).find(n => n.id === next.id)?.parentNodeId, f.main.headNodeId);
+    await f.api(`${f.prefix}/history/${next.id}`, undefined, "DELETE");
+    const after = (await f.api(`${f.prefix}/history`)).body.nodes;
+    assert.equal(visibleHistoryNodeId(after, next.id), f.main.headNodeId);
+    assert.equal(visibleHistory(after).filter(n => n.branchId === f.main.id).length, 1);
+    assert.equal(visibleHistory(after).find(n => n.kind === "fork")?.parentNodeId, f.main.headNodeId);
+    assert.equal(readFileSync(path.join(f.workspace, "app.txt"), "utf8"), "A_GOOD_BYTES");
+  } finally { await f.close(); }
+});
 const tool = (request: HarnessRequest, name: string, args: unknown = {}) =>
   request.onTool(name, withJudgmentEvidence(name, args), randomUUID());
 const code = (expected: string) => (error: unknown) =>

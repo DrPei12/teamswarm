@@ -293,6 +293,9 @@ test("member and task allocation use stable contract codes and never half-write"
     store.publishRequirement(hostWork, "Do the thing", []);
     const run = store.get<Run>("runs", teamId, hostWork.runId);
     store.setStatus(hostWork, "accepted");
+    // Keep configuration work queued while exercising the HTTP allocation API.
+    run.state = "paused";
+    store.save("runs", run);
     const work = store.createWork(run, writer.id, "Task", "Task", ["criterion"], [], []);
 
     const workStale = await api(running, `/api/teams/${teamId}/works/${work.id}/allocation`, {

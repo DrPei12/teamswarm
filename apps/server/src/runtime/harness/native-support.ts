@@ -1,3 +1,4 @@
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import { createServer } from "node:http";
 import { productVersion } from "../../version.js";
 import { randomUUID } from "node:crypto";
@@ -81,16 +82,7 @@ export function nativeHome(id: string): string {
 
 /** Resolve installed native software. Never run an npx download during a task. */
 export function nativeEntry(id: string): string {
-  const names: Record<string, string[]> = {
-    grok: ["@xai-official/grok/bin/grok-bootstrap.js"],
-    "claude-code": [
-      "@anthropic-ai/claude-code/bin/claude.exe",
-      "@anthropic-ai/claude-code/cli.js",
-    ],
-    pi: ["@earendil-works/pi-coding-agent/dist/index.js"],
-    "deepseek-harness": ["@deepseek-ai/dsh/lib/bin.js"],
-    opencode: ["opencode-ai/bin/opencode.exe", "opencode-ai/bin/opencode"],
-  };
+  const entries = harnessManifest(id)?.runtime?.entries ?? [];
   const configured =
     process.env[`TEAM_${id.replaceAll("-", "_").toUpperCase()}_BIN`];
   if (configured) {
@@ -127,7 +119,7 @@ export function nativeEntry(id: string): string {
       .map((p) => path.join(p, "node_modules")),
   ];
   for (const root of roots)
-    for (const name of names[id] ?? []) {
+    for (const name of entries) {
       const file = path.join(root, name);
       if (existsSync(file)) return file;
     }
@@ -147,6 +139,7 @@ export function childEnvironment(request: HarnessRequest): NodeJS.ProcessEnv {
   );
   const name = request.config.credentialEnv;
   if (name) {
+    if (request.modelRoute) { env[name] = request.modelRoute.token; return env; }
     if (!process.env[name])
       throw new Error(`Credential environment variable ${name} is not set.`);
     env[name] = process.env[name];
@@ -157,13 +150,15 @@ export function childEnvironment(request: HarnessRequest): NodeJS.ProcessEnv {
 /** Per-attempt capability endpoint. The model never supplies Team/Attempt identity. */
 export async function toolBridge(request: HarnessRequest) {
   const token = randomUUID();
+  const permissionToken = randomUUID();
+  const pendingPermissions = new Set<AbortController>();
   const server = createServer(async (req, res) => {
     const send = (status: number, body?: unknown) => {
       res.writeHead(status, { "content-type": "application/json" });
       res.end(body === undefined ? undefined : JSON.stringify(body));
     };
     if (
-      req.url !== `/mcp/${token}` ||
+      ![`/mcp/${token}`, `/permission/${permissionToken}`].includes(req.url ?? "") ||
       (req.headers.origin &&
         !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(
           req.headers.origin,
@@ -180,6 +175,17 @@ export async function toolBridge(request: HarnessRequest) {
         chunks.push(chunk);
       }
       const message = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      if (req.url === `/permission/${permissionToken}`) {
+        if (typeof message.nativeId !== "string" || typeof message.tool !== "string") return send(400);
+        const controller = new AbortController();
+        pendingPermissions.add(controller);
+        const abort = () => controller.abort();
+        res.once("close", abort);
+        try {
+          const decision = await request.onPermission?.(message, controller.signal) ?? "deny";
+          return send(200, { decision });
+        } finally { res.removeListener("close", abort); pendingPermissions.delete(controller); }
+      }
       if (message.id === undefined) return send(202);
       const reply = (result: unknown) =>
         send(200, { jsonrpc: "2.0", id: message.id, result });
@@ -231,7 +237,9 @@ export async function toolBridge(request: HarnessRequest) {
     throw new Error("MCP bind failed.");
   return {
     url: `http://127.0.0.1:${address.port}/mcp/${token}`,
+    permissionUrl: `http://127.0.0.1:${address.port}/permission/${permissionToken}`,
     close: async () => {
+      for (const controller of pendingPermissions) controller.abort();
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },

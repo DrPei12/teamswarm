@@ -18,6 +18,7 @@ function walk(directory) {
     const file = path.join(directory, entry.name), relative = path.relative(root,file).replaceAll('\\','/');
     if (lstatSync(file).isSymbolicLink()) { findings.push({file:relative,reason:'filesystem link'}); continue; }
     if (denied.test(relative)) findings.push({file:relative,reason:'private/generated publication path'});
+    if (/Anthropic(?:Sans|Serif).*\.(?:woff2?|ttf|otf)$/i.test(relative)) findings.push({file:relative,reason:"font has no redistribution grant"});
     if (entry.isDirectory()) { walk(file); continue; }
     const content = readFileSync(file); files++; bytes += content.length;
     if (secrets.some(secret => content.includes(secret))) findings.push({file:relative,reason:'known credential bytes'});
