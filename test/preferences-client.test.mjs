@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
+import * as harnessCatalog from "@team/contracts/harness-catalog";
 
 const source = (name) =>
   readFileSync(new URL(`../teamswarm/src/${name}.ts`, import.meta.url), "utf8");
@@ -16,6 +17,7 @@ function load(text, globals, dependencies) {
   new Function(...Object.keys(globals), "require", "exports", outputText)(
     ...Object.values(globals),
     (name) => {
+      if (name === "@team/contracts/harness-catalog") return harnessCatalog;
       assert.ok(name in dependencies, `Unexpected import: ${name}`);
       return dependencies[name];
     },

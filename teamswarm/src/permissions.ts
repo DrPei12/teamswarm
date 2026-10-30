@@ -1,11 +1,14 @@
 import type {
+  BuiltinNativePermissions,
   ExecutionConfig,
   NativePermissions,
 } from "@team/contracts/runtime";
 
 export type PermissionMode = "manual" | "auto" | "full-access" | "accept-edits";
-export function permissionMode(config: ExecutionConfig): PermissionMode | "" {
-  const p = config.permissions;
+export function permissionMode(
+  config: Pick<ExecutionConfig, "permissions">,
+): PermissionMode | "" {
+  const p = config.permissions as BuiltinNativePermissions | undefined;
   if (p?.harness === "codex") {
     if (p.sandbox === "danger-full-access") return "full-access";
     if (p.approvalPolicy === "untrusted") return "manual";
@@ -23,6 +26,11 @@ export function permissionMode(config: ExecutionConfig): PermissionMode | "" {
       )[p.mode as "default" | "auto" | "acceptEdits" | "bypassPermissions"] ??
       ""
     );
+  if (p?.harness === "opencode") {
+    if (p.permission["*"] === "ask") return "manual";
+    if (p.permission["*"] === "allow")
+      return p.permission.doom_loop === "ask" ? "auto" : "full-access";
+  }
   return "";
 }
 export function permissionsForMode(
@@ -57,6 +65,32 @@ export function permissionsForMode(
         } as const
       )[mode],
     };
+  if (config.harness === "opencode")
+    return {
+      harness: "opencode",
+      permission:
+        mode === "full-access"
+          ? { "*": "allow" }
+          : mode === "auto"
+            ? {
+                "*": "allow",
+                doom_loop: "ask",
+                external_directory: "ask",
+                read: {
+                  "*": "allow",
+                  "*.env": "ask",
+                  "*.env.*": "ask",
+                  "*.env.example": "allow",
+                },
+              }
+            : {
+                "*": "ask",
+                read: "allow",
+                glob: "allow",
+                grep: "allow",
+                list: "allow",
+              },
+    };
   return undefined;
 }
 export function permissionsForHarness(
@@ -72,7 +106,7 @@ export function permissionsForAccess(
   config: Pick<ExecutionConfig, "harness" | "access" | "permissions">,
   access: ExecutionConfig["access"],
 ): NativePermissions | undefined {
-  const p = config.permissions;
+  const p = config.permissions as BuiltinNativePermissions | undefined;
   if (access !== "read-only" || !p) return p;
   if (p.harness === "codex")
     return {
@@ -85,6 +119,8 @@ export function permissionsForAccess(
   if (p.harness === "deepseek-harness") return { ...p, sandbox: "read-only" };
   if (p.harness === "claude-code" && p.mode === "bypassPermissions")
     return { ...p, mode: "default" };
+  if (p.harness === "opencode" && permissionMode(config) === "full-access")
+    return permissionsForMode({ ...config, access }, "manual");
   if (p.harness === "pi")
     return {
       ...p,

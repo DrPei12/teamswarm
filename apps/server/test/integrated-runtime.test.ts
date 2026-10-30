@@ -146,7 +146,8 @@ test("idle exchange helpers use the permitted workspace without borrowing anothe
     assert.equal(helper.status, "queued");
     assert.equal(helper.workspaceMode, "shared");
     assert.equal(helper.workspace, f.workspace);
-    assert.equal(existsSync(f.teams.dataDir + "-workspaces"), false);
+    assert.ok(existsSync(f.peer.workspaceRoot!));
+    assert.notEqual(helper.workspace, f.peer.workspaceRoot);
     const helperAttempt = f.store.start(helper, {
       ...f.peer.config,
       access: "read-only",

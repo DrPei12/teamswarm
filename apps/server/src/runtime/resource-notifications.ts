@@ -10,12 +10,22 @@ type Episode = {
   startedAt: string;
   works: { id: string; title: string; teamId: string }[];
   chinese: boolean;
+  endedAt?: string;
 };
 const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
 
 /** Persist notices with the queue. Resource pressure never needs a model call to notify the user. */
 export class ResourceNotifications {
   private firstSeen = new Map<string, number>();
+  private report(episode: Episode, content: string) {
+    const receipt = `resource-wait:${episode.id}`;
+    this.store.appendAssistant(episode.run, content, receipt);
+    this.store.db
+      .prepare(
+        "UPDATE messages SET content=? WHERE conversation_id=? AND client_request_id=?",
+      )
+      .run(content, episode.run.conversationId, `runtime:${receipt}`);
+  }
   constructor(private store: RuntimeStore) {
     store.db.exec(
       "CREATE TABLE IF NOT EXISTS runtime_resource_notices (conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE, data TEXT NOT NULL)",
@@ -41,9 +51,15 @@ export class ResourceNotifications {
             "SELECT data FROM runtime_resource_notices WHERE conversation_id=?",
           )
           .get(conversationId);
-        const previous: Episode | undefined = row
+        let previous: Episode | undefined = row
           ? JSON.parse(String(row.data))
           : undefined;
+        if (
+          previous?.endedAt &&
+          Date.now() - Date.parse(previous.endedAt) > 60000
+        )
+          previous = undefined;
+        const newWait = !previous || !!previous.endedAt;
         // A first sample is normal startup. A failed measurement is a user-visible wait.
         if (!this.firstSeen.has(conversationId))
           this.firstSeen.set(conversationId, Date.now());
@@ -73,6 +89,12 @@ export class ResourceNotifications {
           works: [],
           chinese: /[\u3400-\u9fff]/.test(String(user?.content ?? "")),
         };
+        if (episode.endedAt) {
+          episode.startedAt = new Date().toISOString();
+          episode.works = [];
+          episode.run = run;
+          delete episode.endedAt;
+        }
         for (const { work } of items)
           if (!episode.works.some((w) => w.id === work.id))
             episode.works.push({
@@ -85,17 +107,9 @@ export class ResourceNotifications {
             "INSERT INTO runtime_resource_notices VALUES(?,?) ON CONFLICT(conversation_id) DO UPDATE SET data=excluded.data",
           )
           .run(conversationId, JSON.stringify(episode));
-        if (!previous) {
-          const first = items[0].decision,
-            names = episode.works
-              .slice(0, 3)
-              .map((w) => w.title)
-              .join("、");
-          const reserve = Math.max(
-            512 * 1024 ** 2,
-            snapshot.system.totalPhysical * 0.1,
-            (snapshot.policy.reserveMemoryMiB ?? 0) * 1024 ** 2,
-          );
+        if (newWait) {
+          const first = items[0].decision;
+          const reserve = (snapshot.policy.reserveMemoryMiB ?? 0) * 1024 ** 2;
           const reason =
             first.reason === "cpu"
               ? episode.chinese
@@ -110,12 +124,12 @@ export class ResourceNotifications {
                     ? "暂时无法取得新的设备资源数据。"
                     : "Fresh device resource measurements are temporarily unavailable."
                   : episode.chinese
-                    ? `设备可用内存 ${gib(snapshot.system.availablePhysical)}，为系统和其他应用预留 ${gib(reserve)}。`
-                    : `Available memory is ${gib(snapshot.system.availablePhysical)}; ${gib(reserve)} is reserved for the system and other apps.`;
+                    ? `设备可用内存 ${gib(snapshot.system.availablePhysical)}，启动预计需要 ${gib(first.cost.physical)}。${reserve ? `用户设置预留 ${gib(reserve)}。` : ""}`
+                    : `Available memory is ${gib(snapshot.system.availablePhysical)}; starting requires an estimated ${gib(first.cost.physical)}.${reserve ? ` User reserve: ${gib(reserve)}.` : ""}`;
           const text = episode.chinese
-            ? `资源提醒：${reason}\n\n${names}${episode.works.length > 3 ? ` 等 ${episode.works.length} 项任务` : ""}正在等待资源。正在执行的工作继续进行。你可以要求调整内存预留或任务安排；没有新的指示时，将暂缓启动这些任务，资源恢复后自动继续并通知你。`
-            : `Resource notice: ${reason}\n\nWaiting for resources: ${names}${episode.works.length > 3 ? ` and ${episode.works.length - 3} more` : ""}. Running work continues. You can change the memory reserve or task plan. Without new instructions, these tasks stay queued and resume automatically when resources recover; a follow-up notice will confirm this.`;
-          this.store.appendAssistant(run, text, `resource-wait:${episode.id}`);
+            ? `等待资源：${reason}`
+            : `Waiting for resources: ${reason}`;
+          this.report(episode, text);
           this.store.event(run.teamId, "runtime.resource_notice", {
             state: "waiting",
             conversationId,
@@ -129,6 +143,7 @@ export class ResourceNotifications {
         .all()) {
         if (groups.has(String(row.conversation_id))) continue;
         const episode: Episode = JSON.parse(String(row.data));
+        if (episode.endedAt) continue;
         const works = episode.works.flatMap((w) => {
           try {
             return [this.store.get<Work>("works", w.teamId, w.id)];
@@ -178,16 +193,13 @@ export class ResourceNotifications {
             ? ` ${failed.length} 项任务启动失败，请查看相应任务的错误信息。`
             : ` ${failed.length} tasks failed to start. See their task errors.`
           : "";
-        this.store.appendAssistant(
-          episode.run,
-          text + failure,
-          `resource-resumed:${episode.id}`,
-        );
+        this.report(episode, text + failure);
+        episode.endedAt = new Date().toISOString();
         this.store.db
           .prepare(
-            "DELETE FROM runtime_resource_notices WHERE conversation_id=?",
+            "UPDATE runtime_resource_notices SET data=? WHERE conversation_id=?",
           )
-          .run(row.conversation_id);
+          .run(JSON.stringify(episode), row.conversation_id);
         this.store.event(episode.run.teamId, "runtime.resource_notice", {
           state: "ended",
           conversationId: row.conversation_id,

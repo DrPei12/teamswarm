@@ -457,7 +457,7 @@ test("OpenCode receives the explicit output budget without changing its default"
   const saved = [process.env.TEAM_OPENCODE_BIN, process.env.TEAM_HARNESS_HOME, process.env.TEST_MODEL_KEY];
   try {
     const entry = path.join(root, "fixture.mjs");
-    writeFileSync(entry, `const c=JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);console.log(JSON.stringify({type:'fixture-budget',value:c.provider.teamswarm.models.fixture.limit.output,context:c.provider.teamswarm.models.fixture.limit.context,requestLimit:Number(process.env.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX)}));console.log(JSON.stringify({type:'step_finish',part:{reason:'stop'}}));`);
+    writeFileSync(entry, `import{createInterface}from'node:readline';const c=JSON.parse(process.env.OPENCODE_CONFIG_CONTENT);console.log(JSON.stringify({type:'fixture-budget',value:c.provider.teamswarm.models.fixture.limit.output,context:c.provider.teamswarm.models.fixture.limit.context,requestLimit:Number(process.env.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX)}));createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);const result=m.method==='initialize'?{protocolVersion:1,agentCapabilities:{}}:m.method==='session/new'?{sessionId:'budget'}:{stopReason:'end_turn'};console.log(JSON.stringify({jsonrpc:'2.0',id:m.id,result}));});`);
     process.env.TEAM_OPENCODE_BIN = entry;
     process.env.TEAM_HARNESS_HOME = path.join(root, "native");
     process.env.TEST_MODEL_KEY = "fixture-only";

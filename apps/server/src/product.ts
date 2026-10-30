@@ -1,5 +1,6 @@
 import { permissionCatalog, mergePermissionChoice } from "./runtime/permission-options.js";
 import { nativePermissions } from "./runtime/harness/permissions.js";
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import express, { Router } from "express";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
@@ -78,14 +79,6 @@ const active = new Set([
   "stopping",
   "recovery_required",
 ]);
-export const harnessLabels: Record<string, string> = {
-  codex: "Codex",
-  "claude-code": "Claude Code",
-  grok: "Grok",
-  pi: "pi",
-  "deepseek-harness": "DeepSeek Harness",
-  opencode: "OpenCode",
-};
 const fileInput = z
   .object({
     id: z.string().uuid(),
@@ -394,7 +387,7 @@ export class ProductStore {
         configured: !!settings,
         runtime: {
           harness:
-            harnessLabels[hostConfig?.harness ?? ""] ??
+            harnessManifest(hostConfig?.harness ?? "")?.name ??
             hostConfig?.harness ??
             "Codex",
           model: hostAllocation?.selectionCurrent === false && !hostAllocation.selectionRetained ? "Reselect resource" : hostConfig?.model ?? "",
@@ -783,7 +776,7 @@ export class ProductStore {
             ? latestConversation.status === "interrupted" ? "paused"
               : ["failed", "rejected", "recovery_required"].includes(latestConversation.status) ? "error" : undefined
             : undefined,
-          harness: harnessLabels[config.harness] ?? config.harness,
+          harness: harnessManifest(config.harness)?.name ?? config.harness,
           model: String(
             displayedAttempt?.actual?.model ?? config.model ?? "",
           ),

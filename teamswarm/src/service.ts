@@ -1,3 +1,4 @@
+import { harnessManifests } from "@team/contracts/harness-catalog";
 import {
   PreferencesOutbox,
   mergePatch,
@@ -117,14 +118,6 @@ export async function resolveModelConnection(
   return result.config;
 }
 
-const harnessIds: Record<string, string> = {
-  Codex: "codex",
-  "Claude Code": "claude-code",
-  Grok: "grok",
-  pi: "pi",
-  "DeepSeek Harness": "deepseek-harness",
-  OpenCode: "opencode",
-};
 function diffPreferences(old: Workspace, next: Workspace): PreferencesPatch {
   const patch: PreferencesPatch = {};
   for (const field of [
@@ -891,7 +884,9 @@ class ProductClient {
     config: RuntimeConfig,
     choice?: ModelChoice,
   ) {
-    const harness = harnessIds[config.harness] ?? config.harness;
+    const harness =
+      harnessManifests().find((m) => m.name === config.harness)?.id ??
+      config.harness;
     const model =
       !config.model || config.model === "Default model" ? null : config.model;
     let next = previous;

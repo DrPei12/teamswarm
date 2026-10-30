@@ -5,6 +5,10 @@
   "type": "module",
   "types": "./src/index.d.ts",
   "exports": {
+    "./harness-catalog": {
+      "types": "./src/harness-catalog.d.ts",
+      "default": "./src/harness-catalog.js"
+    },
     "./allocation": {
       "types": "./src/allocation.d.ts"
     },

@@ -35,11 +35,13 @@ import { api, product, resolveModelConnection } from "./service";
 import { useI18n } from "./i18n";
 import { Modal } from "./ui";
 import { isCustomProvider } from "./allocation";
+import { readSubscriptionCatalog } from "./subscriptionCatalog";
 import {
+  useHarnessCatalog,
   supportedEfforts,
   effortLabel,
   type HarnessInspection,
-} from "./harnessCatalog";
+} from "./harnessCatalog.ts";
 
 export function Startup({
   state,
@@ -235,6 +237,9 @@ function ManualExecutionSettings({
     [error, setError] = useState(""),
     [inspection, setInspection] = useState<Inspection | null>(null);
   const [inspectionRevision, refreshInspection] = useState(0);
+  const [sharedInspection, setSharedInspection] = useState<Inspection | null>(
+    null,
+  );
   const [advanced, setAdvanced] = useState(false);
   const modelCatalog = useModelCatalog(
     teamId,
@@ -254,14 +259,23 @@ function ManualExecutionSettings({
     let current = true;
     setChecking(true);
     setError("");
-    void cachedCatalog(`harness:${settings.config.harness}`, () =>
-      api<Inspection>(
-        `/harnesses/${encodeURIComponent(settings.config.harness)}/check`,
-        {},
+    setSharedInspection(null);
+    void Promise.all([
+      cachedCatalog(`harness:${settings.config.harness}`, () =>
+        api<Inspection>(
+          `/harnesses/${encodeURIComponent(settings.config.harness)}/check`,
+          {},
+        ),
       ),
-    )
-      .then((value) => {
-        if (current) setInspection(value);
+      settings.config.chatgptAccountId
+        ? readSubscriptionCatalog(`chatgpt:${settings.config.chatgptAccountId}`)
+        : Promise.resolve(null),
+    ])
+      .then(([value, account]) => {
+        if (current) {
+          setInspection(value);
+          setSharedInspection(account);
+        }
       })
       .catch((e) => {
         if (current) setError(e.message);
@@ -272,11 +286,17 @@ function ManualExecutionSettings({
     return () => {
       current = false;
     };
-  }, [open, settings?.config.harness, inspectionRevision]);
+  }, [
+    open,
+    settings?.config.harness,
+    settings?.config.chatgptAccountId,
+    inspectionRevision,
+  ]);
   // A connection with its own endpoint or credential reference is not the native
   // ChatGPT account the harness check probes. Its credential and reasoning-offer
   // facts must come from that configuration, never from an empty native catalog.
   const configuredProvider = isCustomProvider(settings?.config);
+  const sharedAccount = !!settings?.config.chatgptAccountId;
   const subscriptionHarness =
     settings?.config.harness === "codex" ||
     hasSubscription(settings?.config.harness ?? "");
@@ -284,9 +304,14 @@ function ManualExecutionSettings({
   useEffect(() => {
     setApiMode(configuredProvider);
   }, [open, settings?.config.harness, configuredProvider]);
-  const customProvider = configuredProvider || apiMode || !subscriptionHarness;
-  const subscriptionMode = subscriptionHarness && !customProvider && !apiMode;
-  const efforts = supportedEfforts(inspection, settings?.config.model);
+  const customProvider =
+    !sharedAccount && (configuredProvider || apiMode || !subscriptionHarness);
+  const subscriptionMode =
+    !sharedAccount && subscriptionHarness && !customProvider && !apiMode;
+  const efforts = supportedEfforts(
+    sharedAccount ? sharedInspection : inspection,
+    settings?.config.model,
+  );
   const configuredEffort = settings?.config.effort ?? "";
   const effortChoices = customProvider
     ? configuredEffort
@@ -301,7 +326,9 @@ function ManualExecutionSettings({
   const connectionNeedsAction = Boolean(
     inspection &&
     (inspection.available === false ||
-      (!customProvider && inspection.authenticated === false) ||
+      (sharedAccount
+        ? sharedInspection?.authenticated === false
+        : !customProvider && inspection.authenticated === false) ||
       (customProvider && !settings?.config.credentialEnv)),
   );
   const inspect = () => {
@@ -315,13 +342,7 @@ function ManualExecutionSettings({
   const [login, setLogin] = useState<{ loginId: string; url: string } | null>(
     null,
   );
-  const [catalog, setCatalog] = useState<{ id: string }[]>([]);
-  useEffect(() => {
-    if (open)
-      void api<{ harnesses: { id: string }[] }>("/harnesses")
-        .then((r) => setCatalog(r.harnesses))
-        .catch((e) => setError(e.message));
-  }, [open]);
+  const catalog = useHarnessCatalog((error) => setError(error.message));
   useEffect(() => {
     if (!open || !login || settings?.config.harness !== "codex") return;
     let current = true;
@@ -462,17 +483,9 @@ function ManualExecutionSettings({
                     }
                   }}
                 >
-                  {catalog.map(({ id }) => (
+                  {catalog.map(({ id, name }) => (
                     <option key={id} value={id}>
-                      {(
-                        {
-                          codex: "Codex",
-                          grok: "Grok",
-                          "claude-code": "Claude Code",
-                          "deepseek-harness": "DeepSeek Harness",
-                          opencode: "OpenCode",
-                        } as Record<string, string>
-                      )[id] ?? id}
+                      {name}
                     </option>
                   ))}
                 </FieldSelect>
@@ -517,7 +530,7 @@ function ManualExecutionSettings({
               harness={settings.config.harness}
               onInstalled={inspect}
             />
-            {subscriptionHarness && (
+            {subscriptionHarness && !sharedAccount && (
               <div
                 className="account-mode"
                 role="group"
@@ -584,7 +597,7 @@ function ManualExecutionSettings({
                   )}{" "}
                   {t("Check connection")}
                 </button>
-                {inspection && (
+                {inspection && (!sharedAccount || sharedInspection) && (
                   <span
                     className={
                       connectionNeedsAction
@@ -600,13 +613,17 @@ function ManualExecutionSettings({
                     {t(
                       inspection.available === false
                         ? "Not installed"
-                        : customProvider
-                          ? customCredential
-                            ? "Configured · request not yet verified"
-                            : "Configure the endpoint and credential reference"
-                          : inspection.authenticated === false
-                            ? "Sign in to your harness"
-                            : "Available",
+                        : sharedAccount
+                          ? sharedInspection?.authenticated === true
+                            ? "Connected"
+                            : "Reconnect ChatGPT"
+                          : customProvider
+                            ? customCredential
+                              ? "Configured · request not yet verified"
+                              : "Configure the endpoint and credential reference"
+                            : inspection.authenticated === false
+                              ? "Sign in to your harness"
+                              : "Available",
                     )}
                   </span>
                 )}
@@ -620,6 +637,7 @@ function ManualExecutionSettings({
               </p>
             )}
             {settings.config.harness === "codex" &&
+              !sharedAccount &&
               !customProvider &&
               inspection?.authenticated === false && (
                 <div className="harness-login">
@@ -738,7 +756,7 @@ function ManualExecutionSettings({
                 onChange={(permissions) => config({ permissions })}
               />
             </label>
-            {!subscriptionMode && (
+            {!subscriptionMode && !sharedAccount && (
               <div
                 className="advanced-settings"
                 onInvalidCapture={(event) => {
@@ -900,7 +918,9 @@ export function ExecutionActivity({
         : active.some((w) => w.status === "stopping")
           ? "Stopping…"
           : active.length
-            ? "Working"
+            ? active.every((work) => work.status === "queued")
+              ? "Queued for execution"
+              : "Working"
             : issue
               ? "Needs attention"
               : "";

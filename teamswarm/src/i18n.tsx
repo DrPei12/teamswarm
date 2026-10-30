@@ -23,10 +23,9 @@ export const zhCN: Record<string, string> = {
   "No contributors": "暂无参与成员",
   "Execution permissions": "执行权限",
   "Default execution permissions": "团队默认权限",
-  "Deny extra permissions": "拒绝额外授权",
-  "Harness settings": "Harness 现有权限",
   "Custom permissions": "自定义权限",
-  "Uses this Harness's native settings": "使用此 Harness 的原生设置",
+  "Permission switching is unavailable for this Harness.":
+    "此 Harness 暂不支持权限切换",
   "Permission options unavailable": "权限选项暂不可用",
   "Permissions saved": "权限已保存",
   "Applies to the next execution": "下次执行生效",
@@ -40,7 +39,6 @@ export const zhCN: Record<string, string> = {
   "Execution permissions are not available. Try again.":
     "暂时无法读取执行权限，请重试。",
   "Not selected": "未选择",
-  "Harness default": "Harness 现有权限",
   "Request approval": "请求批准",
   "Automatic review": "自动判断",
   "Full access": "完全访问",
@@ -166,6 +164,10 @@ export const zhCN: Record<string, string> = {
   "No configured models": "暂无已配置的模型",
   "Authorize ChatGPT for TeamSwarm": "需授权 ChatGPT 给 TeamSwarm",
   "Reconnect ChatGPT": "重新连接 ChatGPT",
+  "ChatGPT authorization expired. Reconnect this account.":
+    "ChatGPT 授权已过期，请重新连接此账号。",
+  "ChatGPT authorization is temporarily unavailable. Try again shortly.":
+    "暂时无法访问 ChatGPT 授权服务，请稍后重试。",
   "Sign in to this account": "登录此账号",
   "Native sign-in cannot be shared across Harnesses":
     "此本机登录无法跨 Harness 使用",
@@ -536,6 +538,7 @@ export const zhCN: Record<string, string> = {
   "Sources and history": "来源与历史",
   "Go to source message": "查看来源消息",
   Queued: "等待接收",
+  "Queued for execution": "排队中",
   Receiving: "处理中",
   Received: "已处理",
   Read: "已读",
@@ -727,6 +730,9 @@ export const zhCN: Record<string, string> = {
   "Attach images, files, or videos": "添加图片、文件或视频",
   "Bring along": "额外带入",
   Cancel: "取消",
+  "Stop and reconcile pending work before changing runtime settings.":
+    "有任务正在运行或排队，结束后可调整。",
+  "Runtime settings changed. Reload before saving.": "配置已更新，请重试。",
   "Carry to": "带入节点",
   Chat: "对话",
   "Chat history": "对话历史",

@@ -43,9 +43,12 @@ export function chatGPTPayload(payload: Obj): Obj {
   payload.include = [
     ...new Set([...(payload.include ?? []), "reasoning.encrypted_content"]),
   ];
-  const tools = (payload.tools ?? []).filter((tool: Obj) =>
-    ["function", "custom"].includes(tool.type),
-  );
+  // Responses may infer strict mode when this field is absent. Native Harness
+  // schemas use omitted properties for optional arguments, not required nulls.
+  const tools = (payload.tools ?? [])
+    .filter((tool: Obj) => ["function", "custom"].includes(tool.type))
+    .map((tool: Obj) => tool.type === "function"
+      ? { ...tool, strict: tool.strict ?? false } : tool);
   if (tools.length) {
     payload.input.unshift({
       type: "additional_tools",
@@ -66,6 +69,17 @@ export function requestOptions(
   body: Obj,
   payload: Obj,
 ) {
+  if (source === "responses" && body.tools) {
+    const declarations = new Map(body.tools.map((tool: Obj) => {
+      const definition = tool.function ?? tool;
+      return [definition.name, definition];
+    }));
+    for (const tool of payload.tools ?? []) {
+      const definition = declarations.get(tool.name) as Obj | undefined;
+      if (tool.type === "function" && definition)
+        tool.strict = definition.strict ?? false;
+    }
+  }
   const format =
     body.text?.format ?? body.output_config?.format ?? body.response_format;
   if (format && format.type !== "text") {

@@ -1,10 +1,10 @@
 import { MAX_ACCEPTANCE_CRITERIA } from "./acceptance-evidence.js";
 import { adoptionContextInput, adoptionInput } from "./branch-adoption.js";
 import { z } from "zod";
-import { nativePermissions } from "./harness/permissions.js";
 import { badRequest } from "../errors.js";
 import { definitionInput } from "./project-history.js";
 import { insightInput } from "./collaboration-records.js";
+import { nativePermissions } from "./harness/permissions.js";
 
 export const key = z.string().trim().min(1).max(200);
 export const text = z.string().trim().min(1).max(20000);
@@ -97,12 +97,20 @@ export function parse<T extends z.ZodType>(
   return result.data;
 }
 export const tools = {
+  team_pending_permissions: {
+    description: "Host only. Read pending native Harness permission requests in this conversation. Each request identifies the member, work, native tool call and input. The native tool waits for a one-time reply or task cancellation.",
+    schema: z.object({}).strict(),
+  },
+  team_answer_permission: {
+    description: "Host dialogue only. Relay the user's explicit allow or deny reply for one pending native permission request. Cite the latest user message ID and complete verbatim content. Never grant on behalf of a member or a background follow-up; do not reuse a previous grant.",
+    schema: z.object({ requestId: key, decision: z.enum(["allow", "deny"]), sourceMessageId: key, authorizationQuote: text }).strict(),
+  },
   team_device_resources: {
     description: "Host only. Read fresh device memory, Windows commit headroom, CPU load, process counts, shared reserve policy, per-Harness measured costs and estimated additional starts. This is device-wide across Teams. Forecasts change with load; use them when arranging parallel work.",
     schema: z.object({}).strict(),
   },
   team_set_device_reserve: {
-    description: "Host dialogue only. Apply the user's explicit device memory reserve (MiB, 1024 MiB = 1 GiB), or null for automatic headroom. Optionally set the CPU utilization target. This affects all Teams on this device, including queued work; running work continues. Read team_device_resources for expectedVersion. Cite the latest user message and its complete verbatim content as authorizationQuote. Preserve the user's reserve until they change it. Explain the applied setting in the conversation.",
+    description: "Host dialogue only. Apply the user's explicit device memory reserve (MiB, 1024 MiB = 1 GiB), or null to remove the memory reserve. Optionally set the CPU utilization target. This affects all Teams on this device, including queued work; running work continues. Read team_device_resources for expectedVersion. Cite the latest user message and its complete verbatim content as authorizationQuote. Preserve the user's reserve until they change it. Explain the applied setting in the conversation.",
     schema: z.object({expectedVersion:z.number().int().nonnegative(),reserveMemoryMiB:z.number().int().nonnegative().nullable(),
       cpuTargetPercent:z.number().min(10).max(100).optional(),sourceMessageId:key,authorizationQuote:text}).strict(),
   },
@@ -194,7 +202,11 @@ export const tools = {
         key,
         title: z.string().trim().min(1).max(160).optional(),
         kind: z.enum(["overview", "decision", "experience", "working"]).optional(),
-        topic: z.string().regex(/^[\p{L}\p{N}_/-]+$/u).max(120).optional(),
+        // JSON Schema has no regex flags; model providers do not all accept JS
+        // Unicode property escapes. Keep the exact check at tool execution.
+        topic: z.string().min(1).max(120)
+          .refine(value => /^[\p{L}\p{N}_/-]+$/u.test(value), "Use letters, numbers, underscores, slashes or hyphens.")
+          .describe("Letters and numbers in any language, underscores, slashes or hyphens only.").optional(),
         sourceRefs: z.array(key).max(30).default([]),
         sourcePaths: z.array(z.string().min(1).max(2000)).max(30).default([]),
         expectedSourceRevisions: z.record(key,key).optional().describe("Exact returned revision for each sourceRef."),
@@ -334,6 +346,7 @@ export const tools = {
         resourceId: key.optional(),
         expectedResourceVersion: z.number().int().min(1).optional(),
         access: z.enum(["read-only", "workspace-write"]).optional(),
+        permissions: nativePermissions.optional(),
         selectionReason: z.string().max(1000).optional(),
       })
       .strict(),
@@ -375,7 +388,9 @@ export const tools = {
         responsibilityKey: key.optional(),
         writePaths: z.array(z.string().min(1).max(2000)).max(128).optional(),
         executionRequirements: executionRequirements.optional(),
-        workspaceMode: z.enum(["shared", "isolated"]).default("shared"),
+        permissions: nativePermissions.optional(),
+        workspaceMode: z.enum(["shared", "isolated"]).default("isolated"),
+        publicationMode: z.enum(["automatic", "integration"]).optional().describe("Private copies publish checked files by default. Choose integration to retain a candidate for a separately assigned integration work."),
         integratesWorkIds: z.array(key).max(30).default([]),
       })
       .strict(),
@@ -413,8 +428,12 @@ export const tools = {
     schema: z.object({ artifactId: key }).strict(),
   },
   team_read_file: {
-    description: "Read a project UTF-8 file and its current hash. Read before editing; use offsets for large files. Private/runtime directories are excluded.",
-    schema: z.object({ path: z.string().min(1).max(2000), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(64000).default(20000) }).strict(),
+    description: "Read a UTF-8 file in the assigned workspace and its current hash. Omit offset and limit to read from the beginning. Pagination uses character positions, not line numbers. When truncated is true, read the remaining content before quoting the full file. Private/runtime directories are excluded.",
+    schema: z.object({
+      path: z.string().min(1).max(2000).describe("File path relative to the assigned workspace."),
+      offset: z.number().int().min(0).default(0).describe("Zero-based character offset, not a line number. Omit or use 0 to include the first character."),
+      limit: z.number().int().min(1).max(64000).default(20000).describe("Maximum characters to read, not lines. Omit for 20000 characters. For pagination, advance offset by the length of the returned text."),
+    }).strict(),
   },
   team_list_files: {
     description: "List a project directory without private/runtime directories. Paths are relative to the assigned workspace.",
@@ -481,8 +500,17 @@ export const tools = {
       .strict(),
   },
 };
+/** The full native policy schemas live in the Harness section, not every Host tool declaration. */
+function progressivePermissions(schema: any): any {
+  if (Array.isArray(schema)) return schema.map(progressivePermissions);
+  if (!schema || typeof schema !== "object") return schema;
+  return Object.fromEntries(Object.entries(schema).map(([key, value]) => [key,
+    key === "properties" ? Object.fromEntries(Object.entries(value as object).map(([name, field]) => [name,
+      name === "permissions" ? { type: "object", properties: { harness: { type: "string" } }, required: ["harness"], additionalProperties: true,
+        description: "Harness-native policy. Read harness:<id>/permissions for its exact fields and supported values before selecting. Server validates that native schema." } : progressivePermissions(field)])) : progressivePermissions(value)]));
+}
 export const toolSpecs = Object.entries(tools).map(([name, value]) => ({
   name,
   description: value.description,
-  inputSchema: z.toJSONSchema(value.schema, { io: "input" }) as Record<string, unknown>,
+  inputSchema: progressivePermissions(z.toJSONSchema(value.schema, { io: "input" })) as Record<string, unknown>,
 }));

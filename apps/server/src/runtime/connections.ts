@@ -1,3 +1,4 @@
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import { z } from "zod";
 import { parse as toml } from "smol-toml";
 import { parse as jsonc, type ParseError } from "jsonc-parser";
@@ -28,14 +29,6 @@ export const modelConnection = z
   })
   .strict();
 export type ModelConnection = z.infer<typeof modelConnection>;
-const protocols: Record<string, keyof ModelConnection["endpoints"]> = {
-  codex: "responses",
-  grok: "chat-completions",
-  "claude-code": "anthropic-messages",
-  pi: "chat-completions",
-  "deepseek-harness": "anthropic-messages",
-  opencode: "chat-completions",
-};
 
 export function resolveConnection(
   connection: ModelConnection,
@@ -43,7 +36,7 @@ export function resolveConnection(
   model: string,
   access: "read-only" | "workspace-write",
 ) {
-  const preferred = protocols[harness];
+  const preferred = harnessManifest(harness)?.models.preferredProtocol;
   const wire = preferred
     ? (
         [

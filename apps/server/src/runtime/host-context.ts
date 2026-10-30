@@ -293,6 +293,7 @@ export class HostContext {
       work.memberId,
     );
     const host = member.kind === "host";
+    const boundary = work.kind === "host-followup" || work.kind === "collaboration" ? undefined : run.sourceMessageId;
     const scope = this.catalog.scoped(work.teamId, project.branchId);
     const all = this.materials.all(run, project);
     const prior = this.previousFrame(work.teamId, previous);
@@ -314,14 +315,15 @@ export class HostContext {
       (snapshot?.configIdentity === configIdentity
         ? { contextWindowTokens: snapshot.context?.contextWindowTokens }
         : undefined)) as ContextObservation | undefined;
-    const budget = planContext(attempt.config, {
+    const budgetOptions = {
       observation: context,
       estimatedSessionTokens: prior?.sessionEstimatedTokens,
       overheadTokens,
       nativeCompaction:
         this.catalog.harnesses.get(attempt.config.harness)?.capabilities
           .contextCompaction === true,
-    });
+    };
+    let budget = planContext(attempt.config, budgetOptions);
     const currentCatalog = Object.fromEntries(
       all.map((m) => [m.ref, catalogRevision(m)]),
     );
@@ -355,7 +357,9 @@ export class HostContext {
         : work.kind === "collaboration"
           ? "collaboration"
           : "task",
-      member: { name: member.name, responsibility: member.responsibility },
+      member: { name: member.name, responsibility: member.responsibility, harness: attempt.config.harness,
+        harnessRef: `harness:${attempt.config.harness}`, permissions: attempt.config.permissions ?? null,
+        workspace: this.store.workspace(work) },
       work,
       requirement: this.store.get(
         "requirements",
@@ -377,6 +381,7 @@ export class HostContext {
                 userCapabilities: this.catalog.capabilities.summary(
                   work.teamId,
                 ),
+                harnesses: this.catalog.harnessIndex(work.teamId).map(({id, name, ref, revision}) => ({id, name, ref, revision})),
                 currentHostConnection: {
                   harness: attempt.config.harness,
                   model: attempt.config.model,
@@ -416,13 +421,25 @@ export class HostContext {
           items: [],
         },
       },
-      history: [],
+      history: host && !previous
+        ? this.materials.messages(run, { boundary, limit: 3 }).items
+            .filter(message => message.id !== run.sourceMessageId)
+            .map(message => message.content.length <= 1600 ? message : {
+              ...message, content: excerpt(message.content, work.instructions, 1600),
+              partial: true, characters: message.content.length,
+            })
+        : [],
       historyAccess: {
         conversationId: run.conversationId,
         totalMessages: 0,
         omittedMessages: 0,
       },
-      ...(work.interaction ? { conversationHistory: [] } : {}),
+      ...(work.interaction ? { conversationHistory: !previous
+        ? ((conversationHistory ?? []) as any[]).slice(-2).map(message => message.content.length <= 1600 ? message : {
+            ...message, content: excerpt(message.content, work.instructions, 1600),
+            partial: true, characters: message.content.length,
+          })
+        : [] } : {}),
       retainedInsights: [],
       retainedInsightCount: collaborationInput.retainedInsightCount ?? 0,
       currentOutputs: [],
@@ -433,12 +450,32 @@ export class HostContext {
         ? "Answer the incoming messages and finish the turn. No artifact submission or yield checkpoint is needed. File changes require assigned production work."
         : "Handle useful messages at work boundaries. Preserve responsibility and shared interface agreements. End the turn after delegation or submission; use team_yield only to save unfinished work and wait for a specific event.",
     };
+    // Keep a bounded set of unresolved decisions alongside the latest exchange.
+    // Both must precede optional navigation when a fresh session is reconstructed.
+    if (host) {
+      let noteTokens = 0;
+      for (const { material: m } of this.materials.rank(all.filter(m => m.kind === "note" && !m.stale), work)) {
+        if (seen[m.ref] === m.revision) continue;
+        const tokens = estimateTokens(m.data) + 2;
+        if (noteTokens + tokens > budget.inputTokens * 0.15) continue;
+        input.current.notes.push(m.data);
+        seen[m.ref] = m.revision;
+        noteTokens += tokens;
+      }
+    }
+    // The 60% fresh-input target reserves space for optional context. Required
+    // work/inbox data may use the rest after system, output and tool reserves.
+    const requiredTokens = estimateTokens(input) + 100;
+    if (requiredTokens > budget.inputTokens)
+      budget = planContext(attempt.config, {...budgetOptions, requiredInputTokens: requiredTokens});
     if (estimateTokens(input) > budget.inputTokens)
       throw conflict(
         "context_capacity",
         "The current assignment and incoming messages exceed the available context. Use a model with a larger context window or split the assignment.",
       );
     let used = estimateTokens(input) + 100;
+    const baseTokens = used;
+    const ceiling = (share: number) => baseTokens + Math.max(0, budget.inputTokens - baseTokens) * share;
     const add = (
       target: any[],
       value: unknown,
@@ -450,10 +487,31 @@ export class HostContext {
       used += tokens;
       return true;
     };
+    const addExcerpt = (target: any[], message: any, limit = budget.inputTokens) => {
+      const preview = {...message, content: excerpt(message.content, work.instructions), partial: true, characters: message.content.length};
+      // Fit the actual serialized message, including its identifiers, to the
+      // remaining budget. Originals remain available through historyAccess.
+      let length = preview.content.length;
+      while (length >= 48) {
+        if (add(target, {...preview, content: preview.content.slice(0, length)}, limit)) return true;
+        length = Math.floor(length * 0.75);
+      }
+      return false;
+    };
+    // Put stale-note references ahead of optional navigation: the Host must see
+    // that a previously retained decision needs rechecking before reusing it.
+    const staleNotes = new Set<string>();
+    for (const { material: m } of this.materials.rank(all.filter(m => m.kind === "note" && m.stale), work)) {
+      if (add(input.current.notes, {
+        key: m.data.key, version: m.data.version, contextVersion: m.data.contextVersion,
+        capabilityVersion: m.data.capabilityVersion, requiresRecheck: true, ref: m.ref,
+        sourceMessageIds: m.data.sourceMessageIds, sourceRefs: m.data.sourceRefs,
+      }, ceiling(0.35))) staleNotes.add(m.ref);
+    }
     const changes = [
       ...all
         .filter(
-          (m) => snapshot && snapshot.catalog?.[m.ref] !== catalogRevision(m),
+          (m) => m.kind !== "harness" && snapshot && snapshot.catalog?.[m.ref] !== catalogRevision(m),
         )
         .map((m) => ({
           ref: m.ref,
@@ -462,32 +520,36 @@ export class HostContext {
           change: snapshot.catalog?.[m.ref] ? "updated" : "added",
         })),
       ...Object.keys(snapshot?.catalog ?? {})
-        .filter((ref) => !(ref in currentCatalog))
+        .filter((ref) => !ref.startsWith("harness:") && !(ref in currentCatalog))
         .map((ref) => ({ ref, change: "removed" })),
     ];
     input.navigation.changes.total = changes.length;
     for (const change of changes)
       if (
-        !add(input.navigation.changes.items, change, budget.inputTokens * 0.45)
+        !add(input.navigation.changes.items, change, ceiling(0.45))
       )
         break;
     for (const r of activeRuns)
       add(
         input.current.activeRuns,
         { id: r.id, state: r.state, requirementId: r.requirementId },
-        budget.inputTokens * 0.45,
+        ceiling(0.45),
       );
-    const ranked = this.materials.rank(all, work);
-    const fullCeiling = budget.inputTokens * 0.78;
+    // Harness headers already occupy the allocation index. Expand their sections
+    // on demand instead of evicting project definitions and sourced notes.
+    const ranked = this.materials.rank(all.filter(m => m.kind !== "harness"), work);
+    // Leave room for serialized message identifiers and a readable excerpt,
+    // even when native session overhead leaves a small context allowance.
+    const fullCeiling = ceiling(0.65);
     for (const { material: m, score, related } of ranked) {
       const header = materialHeader(m, work.instructions);
       if (
         (m.kind === "document" && m.data.kind === "goal") ||
         (m.kind === "note" && m.data.kind === "overview" && !m.stale)
       )
-        add(input.navigation.overview, header, budget.inputTokens * 0.5);
+        add(input.navigation.overview, header, ceiling(0.5));
       if (m.kind === "member")
-        add(input.current.members.items, m.data, budget.inputTokens * 0.5);
+        add(input.current.members.items, m.data, ceiling(0.5));
       if (m.kind === "work" && open.some((w) => `work:${w.id}` === m.ref))
         add(
           input.current.works,
@@ -501,7 +563,7 @@ export class HostContext {
             contextRefs: m.data.contextRefs,
             invalidated: !!m.data.invalidatedByNodeId,
           },
-          budget.inputTokens * 0.6,
+          ceiling(0.6),
         );
       if (
         !host &&
@@ -558,7 +620,7 @@ export class HostContext {
             },
             fullCeiling,
           );
-        if (m.kind === "note" && m.stale)
+        if (m.kind === "note" && m.stale && !staleNotes.has(m.ref))
           add(
             input.current.notes,
             {
@@ -585,28 +647,16 @@ export class HostContext {
         .map((m, order) => ({ m, order, score: relevance(m.content, terms) }))
         .sort((a, b) => b.score - a.score || b.order - a.order);
       for (const { m } of messages) {
+        if (input.conversationHistory.some((message: any) => message.id === m.id)) continue;
         if (seen[`correspondence:${m.id}`] === hash(m.content)) continue;
-        if (add(input.conversationHistory, m, budget.inputTokens * 0.9))
+        if (add(input.conversationHistory, m, ceiling(0.9)))
           seen[`correspondence:${m.id}`] = hash(m.content);
-        else
-          add(
-            input.conversationHistory,
-            {
-              ...m,
-              content: excerpt(m.content, work.instructions),
-              partial: true,
-              characters: m.content.length,
-            },
-            budget.inputTokens * 0.9,
-          );
+        else addExcerpt(input.conversationHistory, m, ceiling(0.9));
       }
+      input.conversationHistory.sort((a: any, b: any) => a.createdAt.localeCompare(b.createdAt));
     }
-    const boundary =
-      work.kind === "host-followup" || work.kind === "collaboration"
-        ? undefined
-        : run.sourceMessageId;
     const remaining = Math.max(0, budget.inputTokens - used - 100);
-    const candidateCount = Math.max(1, Math.ceil(remaining / 40));
+    const candidateCount = Math.max(2, Math.ceil(remaining / 40) + 1);
     const related = this.materials.messages(run, {
       query: work.instructions,
       boundary,
@@ -617,7 +667,7 @@ export class HostContext {
       limit: candidateCount,
     });
     input.historyAccess.totalMessages = recent.total;
-    const messageIds = new Set<string>();
+    const messageIds = new Set<string>(input.history.map((message: any) => message.id));
     for (const message of [...related.items, ...recent.items]) {
       if (messageIds.has(message.id)) continue;
       messageIds.add(message.id);
@@ -629,15 +679,12 @@ export class HostContext {
       const ref = `message:${message.id}`;
       if (seen[ref] === hash(message.content)) continue;
       if (add(input.history, message)) seen[ref] = hash(message.content);
-      else
-        add(input.history, {
-          ...message,
-          content: excerpt(message.content, work.instructions),
-          partial: true,
-          characters: message.content.length,
-        });
+      else addExcerpt(input.history, message);
     }
     input.historyAccess.omittedMessages = recent.total - input.history.length;
+    const messageSequence = this.store.db.prepare("SELECT rowid AS n FROM messages WHERE id=?");
+    const historyOrder = new Map<string, number>(input.history.map((message: any) => [message.id, Number(messageSequence.get(message.id)?.n ?? 0)]));
+    input.history.sort((a: any, b: any) => historyOrder.get(a.id)! - historyOrder.get(b.id)!);
     seen[`message:${run.sourceMessageId}`] = hash(
       String((input.requirement as any).content),
     );

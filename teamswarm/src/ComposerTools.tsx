@@ -28,7 +28,12 @@ import type { ExecutionConfig } from "@team/contracts/runtime";
 import { selectedModelChoice, type ModelChoice } from "./modelCatalog";
 import { useModelCatalog } from "./useModelCatalog";
 import { clipboardFiles } from "./AttachmentChip";
-import { harnessId, supportedEfforts, effortLabel } from "./harnessCatalog";
+import {
+  harnessId,
+  supportedEfforts,
+  effortLabel,
+  useHarnessCatalog,
+} from "./harnessCatalog";
 
 export function RuntimeControls({
   team,
@@ -50,7 +55,10 @@ export function RuntimeControls({
   onPermissionChange?: (
     permissions: NonNullable<ExecutionConfig["permissions"]>,
   ) => Promise<unknown>;
-  onChange: (config: RuntimeConfig, choice?: ModelChoice) => void;
+  onChange: (
+    config: RuntimeConfig,
+    choice?: ModelChoice,
+  ) => Promise<unknown> | void;
   onSettings: (tab?: "harnesses" | "connections" | "runtime") => void;
 }) {
   const { t: tr, locale } = useI18n();
@@ -63,12 +71,30 @@ export function RuntimeControls({
   const selected = executionConfig
     ? selectedModelChoice(catalog.models, executionConfig)
     : undefined;
-  const efforts =
-    executionConfig?.baseUrl || executionConfig?.credentialEnv
+  const efforts = executionConfig?.chatgptAccountId
+    ? (selected?.reasoningEfforts ?? [])
+    : executionConfig?.baseUrl || executionConfig?.credentialEnv
       ? []
       : supportedEfforts(catalog.inspection, config.model);
+  const [saveError, setSaveError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const harnesses = useHarnessCatalog((error) => setSaveError(error.message));
+  async function select(next: RuntimeConfig, choice?: ModelChoice) {
+    if (saving) return;
+    setSaving(true);
+    setSaveError("");
+    try {
+      await onChange(next, choice);
+      setEdit(null);
+    } catch (e) {
+      setSaveError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
   const checking = catalog.loading;
   const error =
+    saveError ||
     catalog.error ||
     (!executionConfig?.baseUrl && !executionConfig?.credentialEnv
       ? (catalog.inspection?.error ?? "")
@@ -84,7 +110,7 @@ export function RuntimeControls({
           <ModelPicker
             key="model"
             compact
-            disabled={disabled}
+            disabled={disabled || saving}
             value={config.model === "Default model" ? null : config.model}
             models={catalog.models}
             selectedKey={selected?.key}
@@ -103,7 +129,7 @@ export function RuntimeControls({
               )
             }
             onChange={(model, choice) =>
-              onChange(
+              void select(
                 {
                   ...config,
                   model: model || "",
@@ -158,15 +184,13 @@ export function RuntimeControls({
                   {key === "harness" ? tr("Harness") : tr("Effort")}
                 </div>
                 {key === "harness" && <div className="separator" />}
+                {key === "harness" && saveError && (
+                  <div className="menu-note" role="alert">
+                    {tr(saveError)}
+                  </div>
+                )}
                 {(key === "harness"
-                  ? [
-                      "Codex",
-                      "Claude Code",
-                      "Grok",
-                      "pi",
-                      "DeepSeek Harness",
-                      "OpenCode",
-                    ]
+                  ? harnesses.map((h) => h.name)
                   : ["Default", ...efforts.map((e) => e.reasoningEffort)]
                 ).map((value) => (
                   <button
@@ -180,7 +204,7 @@ export function RuntimeControls({
                         : undefined
                     }
                     onClick={() => {
-                      onChange(
+                      void select(
                         key === "harness"
                           ? {
                               ...config,
@@ -192,7 +216,6 @@ export function RuntimeControls({
                               [key]: value,
                             },
                       );
-                      setEdit(null);
                     }}
                   >
                     <span className="item-label">
@@ -200,7 +223,11 @@ export function RuntimeControls({
                         ? effortLabel(value)
                         : tr(value)}
                     </span>
-                    {config[key] === value && <Check size={13 * ICON_SCALE} />}
+                    {(key === "harness"
+                      ? harnessId(config.harness) === harnessId(value)
+                      : config[key] === value) && (
+                      <Check size={13 * ICON_SCALE} />
+                    )}
                   </button>
                 ))}
                 <div className="separator" />

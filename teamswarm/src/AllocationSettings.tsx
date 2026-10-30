@@ -16,6 +16,7 @@ import type {
   ExecutionResource,
   ResourceSelection,
 } from "@team/contracts/allocation";
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import type { ExecutionConfig, Work } from "@team/contracts/runtime";
 import type { Workspace } from "./store";
 import { ApiError, api, product } from "./service";
@@ -24,10 +25,11 @@ import { ModelPicker } from "./ModelPicker";
 import { HarnessInstallation } from "./HarnessInstallation";
 import { HarnessAccount, hasSubscription } from "./HarnessAccount";
 import {
+  useHarnessCatalog,
   supportedEfforts,
   effortLabel,
   type HarnessInspection,
-} from "./harnessCatalog";
+} from "./harnessCatalog.ts";
 import {
   allocationMessage,
   availabilityFacts,
@@ -44,22 +46,14 @@ import {
   type ServerPackagePreview,
 } from "./allocation";
 
-const harnessOptions = [
-  { id: "codex", label: "Codex" },
-  { id: "claude-code", label: "Claude Code" },
-  { id: "grok", label: "Grok" },
-  { id: "pi", label: "Pi" },
-  { id: "opencode", label: "OpenCode" },
-  { id: "deepseek-harness", label: "DeepSeek Harness" },
-];
-
 const issueLabels: Record<string, string> = {
   incompatible_protocol: "Protocol not supported by this harness",
   unknown_harness: "Unknown harness",
   missing_configuration: "Missing model, endpoint or credential reference",
   unsupported_context_window:
-    "A context window override requires Pi or OpenCode",
-  unsupported_output_budget: "An output token budget requires Pi or OpenCode",
+    "This Harness does not accept a context window override",
+  unsupported_output_budget:
+    "This Harness does not accept an output token budget",
   unsupported_effort: "This harness does not support an explicit effort",
   unsupported_thinking_format: "Thinking format requires Pi chat completions",
 };
@@ -430,6 +424,9 @@ function ResourceForm({
   onSubmit: (input: ResourceInput) => Promise<void>;
 }) {
   const { t } = useI18n();
+  const harnessOptions = useHarnessCatalog((error) =>
+    setSaveError(error.message),
+  );
   const config = resource?.config;
   const [secret, setSecret] = useState("");
   const [saving, setSaving] = useState(false);
@@ -537,7 +534,7 @@ function ResourceForm({
               access,
               protocol: (protocol || null) as ExecutionConfig["protocol"],
               thinkingFormat: thinkingFormat ? "qwen" : null,
-              ...(["pi", "opencode"].includes(harness)
+              ...(harnessManifest(harness)?.models.outputBudget
                 ? {
                     contextWindowTokens: contextWindowTokens.trim()
                       ? Number(contextWindowTokens)
@@ -782,7 +779,7 @@ function ResourceForm({
           </label>
         </>
       )}
-      {["pi", "opencode"].includes(harness) && (
+      {harnessManifest(harness)?.models.outputBudget && (
         <div className="form-pair">
           <label>
             {t("Context window tokens")}

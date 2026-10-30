@@ -675,23 +675,6 @@
 .member-composer-toolbar {
   flex-wrap: wrap;
 }
-.member-composer .work-message-mode {
-  margin: 0;
-  padding: 0;
-  flex-shrink: 0;
-}
-.member-composer .segmented-control {
-  padding: 2px;
-  border-radius: var(--cds-radius-control);
-}
-.member-composer .segmented-control button {
-  min-height: calc(var(--cds-h-control) - 4px);
-  width: auto;
-  height: auto;
-  padding: 2px 8px;
-  border: 0;
-  border-radius: 4px;
-}
 .activity-items {
   border-top: 0;
   border-left: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
@@ -744,12 +727,6 @@
 }
 .segmented-label {
   position: relative;
-}
-.work-message-mode {
-  margin-bottom: 8px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 .project-records > .segmented-control {
   margin-bottom: 16px;

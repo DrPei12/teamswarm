@@ -38,9 +38,15 @@ async function setup(harness = new ContextHarness()) {
   const root = mkdtempSync(path.join(process.cwd(), ".test-context-"));
   const workspace = path.join(root, "project");
   mkdirSync(workspace);
+  const resourceSampling = {
+    sample: async () => ({ totalPhysical: 64 * 1024 ** 3, availablePhysical: 48 * 1024 ** 3,
+      availableCommit: 64 * 1024 ** 3, cpuCores: 8, cpuBusyPercent: 5, systemProcessCount: 100, processes: [] }),
+    availablePhysical: () => 48 * 1024 ** 3,
+  };
   let service = createApp({
     dataDir: path.join(root, "data"),
     harnesses: [harness],
+    resourceSampling,
   });
   let server = service.app.listen(0, "127.0.0.1");
   await new Promise<void>((r) => server.once("listening", r));
@@ -90,7 +96,7 @@ async function setup(harness = new ContextHarness()) {
     for (;;) {
       const w = service.runtime.store.get<Work>("works", team.id, sent.workId);
       if (["submitted", "failed", "interrupted"].includes(w.status)) return w;
-      if (Date.now() - start > 6000) throw new Error("Fixture timeout");
+      if (Date.now() - start > 6000) throw new Error(`Fixture timeout: ${w.status}: ${w.error ?? ""}`);
       await new Promise((r) => setTimeout(r, 10));
     }
   }
@@ -117,6 +123,7 @@ async function setup(harness = new ContextHarness()) {
       service = createApp({
         dataDir: path.join(root, "data"),
         harnesses: [harness],
+        resourceSampling,
       });
       server = service.app.listen(0, "127.0.0.1");
       await new Promise<void>((r) => server.once("listening", r));
@@ -252,6 +259,33 @@ test("resource directory uses CAS, separates model combinations and selects an e
   }
 });
 
+test("a fresh Host includes the latest exchange before optional project context", async () => {
+  const app = await setup();
+  try {
+    app.harness.capabilities.resume = false;
+    app.harness.action = async () => ({ status: "completed", text: "LAST_FILE_CONTENT_93a2" });
+    await app.send("Read the proof file.");
+    const assemble = app.service.runtime.hostContext.assemble.bind(app.service.runtime.hostContext);
+    app.service.runtime.hostContext.assemble = (...args) => {
+      // Match a native Harness with substantial system/tool overhead.
+      args[7] = 16500;
+      return assemble(...args);
+    };
+    app.harness.action = async (request) => {
+      assert.equal(request.sessionId, undefined);
+      const input = JSON.parse(request.input);
+      assert.equal(input.history.at(-1).content, "LAST_FILE_CONTENT_93a2");
+      assert.equal(input.history.at(-1).role, "assistant");
+      assert(input.history.some((m: any) => m.content === "Read the proof file."));
+      return { status: "completed", text: "Continued" };
+    };
+    const work = await app.send("Repeat the full content in your immediately preceding reply.");
+    assert.equal(work.status, "submitted", work.error ?? undefined);
+    const frame = app.service.runtime.hostContext.frame(app.team.id, work.attemptId!);
+    assert(frame.inputTokensEstimate <= frame.budget.inputTokens);
+  } finally { await app.close(); }
+});
+
 test("bounded long history, exact frame identity, searchable originals and recovery notes survive a fresh Host", async () => {
   const app = await setup();
   try {
@@ -295,7 +329,8 @@ test("bounded long history, exact frame identity, searchable originals and recov
       first.attemptId!,
     );
     assert.ok(frame.inputTokensEstimate <= frame.budget.inputTokens);
-    assert.ok(frame.input.history.length > 0);
+    assert.ok(frame.input.history.length > 0, JSON.stringify({budget:frame.budget, tokens:frame.inputTokensEstimate, access:frame.input.historyAccess, index:frame.input.navigation.index.length, notes:frame.input.current.notes.length}));
+    assert.ok(frame.input.history.some((message: any) => message.content.startsWith("Archive 999:")));
     assert.equal(frame.input.turnPurpose, "dialogue");
     assert.equal(frame.input.historyAccess.omittedMessages, frame.input.historyAccess.totalMessages - frame.input.history.length);
     assert.equal(

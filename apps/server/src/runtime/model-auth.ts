@@ -14,6 +14,7 @@ import {
 import path from "node:path";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { protect } from "../product-credentials.js";
+import { signInPresentation, signInResultPage, type SignInPresentation } from "./model-auth-page.js";
 
 const issuer = "https://auth.openai.com";
 const resource = "https://api.openai.com/v1";
@@ -41,6 +42,8 @@ type Login = {
   state: "pending" | "complete" | "failed";
   accountId?: string;
   error?: string;
+  returned?: boolean;
+  listeners: Set<(event: "state" | "return" | "close") => void>;
 };
 type AuthServices = {
   fetch: typeof fetch;
@@ -57,6 +60,22 @@ export class ChatGPTAccounts {
   private closed = false;
   private shutdown = new AbortController();
   private readonly file: string;
+  watch(id: string, listener: (event: "state" | "return" | "close") => void) {
+    const login = this.logins.get(id);
+    if (!login) { listener("close"); return () => {}; }
+    login.listeners.add(listener);
+    listener(login.returned ? "return" : "state");
+    return () => { login.listeners.delete(listener); };
+  }
+  private expire(id: string) {
+    const login = this.logins.get(id);
+    if (!login) return;
+    clearTimeout(login.timer);
+    login.server.close();
+    this.logins.delete(id);
+    for (const listener of login.listeners) listener("close");
+    login.listeners.clear();
+  }
   constructor(
     directory: string,
     private readonly services: AuthServices = {
@@ -128,10 +147,14 @@ export class ChatGPTAccounts {
         ]),
       },
     );
-    if (!response.ok)
-      throw new Error(
-        `ChatGPT authorization failed (${response.status}). Sign in again.`,
-      );
+    if (!response.ok) {
+      const error = await response.json().catch(() => null) as { error?: string | { code?: string } } | null;
+      const code = typeof error?.error === "string" ? error.error : error?.error?.code;
+      const expired = response.status === 401 || code === "invalid_grant";
+      throw new Error(expired
+        ? "ChatGPT authorization expired. Reconnect this account."
+        : `ChatGPT authorization is temporarily unavailable (${response.status}). Try again shortly.`);
+    }
     const value = (await response.json()) as Record<string, any>;
     if (
       typeof value.access_token !== "string" ||
@@ -206,8 +229,9 @@ export class ChatGPTAccounts {
       }
     }
   }
-  async start(accountId?: string) {
+  async start(accountId?: string, returnTo?: SignInPresentation) {
     if (this.closed) throw new Error("Service is closing.");
+    const presentation = signInPresentation(returnTo);
     if (accountId && this.disconnecting.has(accountId))
       throw new Error("ChatGPT is signing out. Try again shortly.");
     if (
@@ -219,6 +243,8 @@ export class ChatGPTAccounts {
       nonce = randomBytes(32).toString("base64url");
     const verifier = randomBytes(32).toString("base64url"),
       id = randomUUID();
+    const receipt = randomBytes(32).toString("base64url");
+    let email: string | undefined;
     let redirect = "",
       consumed = false;
     const server = createServer(async (req, res) => {
@@ -229,6 +255,24 @@ export class ChatGPTAccounts {
         res.writeHead(400).end("Invalid sign-in request.");
         return;
       }
+      const login = this.logins.get(id);
+      if (["/auth/result", "/auth/return"].includes(callback.pathname)) {
+        if (!login || login.state === "pending" || callback.searchParams.get("receipt") !== receipt) {
+          res.writeHead(404).end(); return;
+        }
+        if (callback.pathname === "/auth/return") {
+          if (req.method !== "POST" || req.headers.origin !== new URL(redirect).origin || !presentation?.desktop) {
+            res.writeHead(403).end(); return;
+          }
+          login.returned = true;
+          for (const listener of login.listeners) listener("return");
+          res.writeHead(204, { "cache-control": "no-store" }).end();
+          return;
+        }
+        if (req.method !== "GET") { res.writeHead(405).end(); return; }
+        const page = signInResultPage({ id, receipt, complete: login.state === "complete", email, presentation });
+        res.writeHead(login.state === "complete" ? 200 : 400, page.headers).end(page.html); return;
+      }
       if (req.method !== "GET" || callback.pathname !== "/auth/callback") {
         res.writeHead(404).end();
         return;
@@ -237,7 +281,6 @@ export class ChatGPTAccounts {
         res.writeHead(400).end("Invalid sign-in request.");
         return;
       }
-      const login = this.logins.get(id);
       if (!login) {
         res.writeHead(400).end("Sign-in expired.");
         return;
@@ -272,11 +315,12 @@ export class ChatGPTAccounts {
           throw new Error(
             "The signed-in ChatGPT account differs from the selected account.",
           );
+        const existing = account ?? this.read().accounts.find(a => a.subject === payload.sub);
         const saved = {
-          id: account?.id ?? randomUUID(),
+          id: existing?.id ?? randomUUID(),
           clientId,
           subject: payload.sub,
-          generation: account?.generation ?? 0,
+          generation: existing?.generation ?? 0,
           email: typeof payload.email === "string" ? payload.email : "ChatGPT",
         };
         if (this.closed) throw new Error("Service is closing.");
@@ -301,24 +345,19 @@ export class ChatGPTAccounts {
         }
         login.state = "complete";
         login.accountId = saved.id;
-        res
-          .writeHead(200, {
-            "content-type": "text/plain; charset=utf-8",
-            "cache-control": "no-store",
-          })
-          .end("已连接 ChatGPT。请返回 TeamSwarm。");
+        email = saved.email;
+        const page = signInResultPage({ id, receipt, complete: true, email, presentation });
+        res.writeHead(200, page.headers).end(page.html);
       } catch (error) {
         login.state = "failed";
         login.error =
           error instanceof Error ? error.message : "ChatGPT sign-in failed.";
-        res
-          .writeHead(400, {
-            "content-type": "text/plain; charset=utf-8",
-            "cache-control": "no-store",
-          })
-          .end("ChatGPT 连接未完成。请返回 TeamSwarm 重试。");
+        const page = signInResultPage({ id, receipt, complete: false, presentation });
+        res.writeHead(400, page.headers).end(page.html);
       } finally {
-        server.close();
+        clearTimeout(login.timer);
+        login.timer = setTimeout(() => this.expire(id), 120000).unref();
+        for (const listener of login.listeners) listener("state");
       }
     });
     await new Promise<void>((resolve, reject) => {
@@ -330,11 +369,8 @@ export class ChatGPTAccounts {
       throw new Error("Service is closing.");
     }
     redirect = `http://127.0.0.1:${(server.address() as { port: number }).port}/auth/callback`;
-    const timer = setTimeout(() => {
-      server.close();
-      this.logins.delete(id);
-    }, 10 * 60_000).unref();
-    this.logins.set(id, { server, timer, state: "pending" });
+    const timer = setTimeout(() => this.expire(id), 10 * 60_000).unref();
+    this.logins.set(id, { server, timer, state: "pending", listeners: new Set() });
     const url = new URL(issuer + "/api/accounts/authorize");
     const values = {
       client_id: account?.clientId ?? "dynamic_agent_client",
@@ -354,7 +390,7 @@ export class ChatGPTAccounts {
     };
     for (const [key, value] of Object.entries(values))
       url.searchParams.set(key, value);
-    return { id, url: url.href };
+    return { id, url: url.href, callbackOrigin: new URL(redirect).origin };
   }
   status(id: string) {
     const login = this.logins.get(id);
@@ -372,6 +408,7 @@ export class ChatGPTAccounts {
       login.state = "failed";
       login.error = "Sign-in cancelled.";
       login.server.close();
+      for (const listener of login.listeners) listener("state");
     }
     return this.status(id);
   }
@@ -457,7 +494,10 @@ export class ChatGPTAccounts {
     if (!response.ok)
       throw new Error(`ChatGPT model list unavailable (${response.status}).`);
     const data = (await response.json()) as {
-      models?: { slug: string; display_name?: string; visibility?: string }[];
+      models?: {
+        slug: string; display_name?: string; visibility?: string;
+        supported_reasoning_levels?: { effort?: unknown; description?: unknown }[];
+      }[];
     };
     if (!Array.isArray(data.models))
       throw new Error(
@@ -477,6 +517,13 @@ export class ChatGPTAccounts {
       .map((m) => ({
         model: m.slug,
         name: typeof m.display_name === "string" ? m.display_name : m.slug,
+        reasoningEfforts: Array.isArray(m.supported_reasoning_levels)
+          ? m.supported_reasoning_levels.flatMap((level) =>
+              level && typeof level.effort === "string" && level.effort.trim()
+                ? [{ reasoningEffort: level.effort,
+                    ...(typeof level.description === "string" ? { description: level.description } : {}) }]
+                : [])
+          : [],
       }));
   }
   async signOut(id: string) {
@@ -539,11 +586,7 @@ export class ChatGPTAccounts {
   async close() {
     this.closed = true;
     this.shutdown.abort();
-    for (const login of this.logins.values()) {
-      clearTimeout(login.timer);
-      login.server.close();
-    }
-    this.logins.clear();
+    for (const id of this.logins.keys()) this.expire(id);
     await Promise.allSettled(this.refreshing.values());
     this.opened.clear();
   }

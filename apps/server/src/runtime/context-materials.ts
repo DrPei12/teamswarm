@@ -14,7 +14,7 @@ import type { ProjectInsight, Run, Work } from "./types.js";
 
 export interface ContextMaterial {
   ref: string;
-  kind: "document" | "note" | "work" | "member" | "insight";
+  kind: "document" | "note" | "work" | "member" | "insight" | "harness";
   topic: string;
   title: string;
   revision: string;
@@ -128,6 +128,17 @@ export class ContextMaterials {
       memberIds: [],
       data: d,
     }));
+    for (const id of this.catalog.harnesses.keys()) {
+      const description = this.catalog.harness(id).description;
+      const memberIds = scope.members.filter(member => member.config.harness === id).map(member => member.id);
+      const links = Object.keys(description.sections).map(section => `${description.ref}/${section}`);
+      items.push({ ref: description.ref, kind: "harness", topic: "harnesses", title: description.name,
+        revision: description.revision, content: description.summary, links, memberIds, data: { id, sections: links } });
+      for (const [section, body] of Object.entries(description.sections))
+        items.push({ ref: `${description.ref}/${section}`, kind: "harness", topic: `harnesses/${id}`,
+          title: `${description.name}: ${section}`, revision: description.revision,
+          content: JSON.stringify(body), links: [description.ref], memberIds, data: { harness: id, section } });
+    }
     const fileDigests = new Map<string, string | null>();
     const capabilityVersion = this.catalog.capabilities.read(
       run.teamId,
@@ -168,6 +179,8 @@ export class ContextMaterials {
                       ?.id !== revision
                   : ref.startsWith("work:")
                     ? String(works.get(ref.slice(5))?.revision) !== revision
+                    : ref.startsWith("harness:")
+                      ? items.find(item => item.ref === ref)?.revision !== revision
                     : false,
             ) ||
             (n.kind === "experience" &&

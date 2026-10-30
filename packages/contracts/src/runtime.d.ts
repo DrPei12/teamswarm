@@ -1,9 +1,10 @@
 import type { AttemptExecutionSnapshot, ResourceSelection } from "./allocation.js";
 
 export type Access = "read-only" | "workspace-write";
-export type NativePermissions =
+export type BuiltinNativePermissions =
   | { harness: "codex"; approvalPolicy: "untrusted" | "never" | "on-request"; sandbox?: Access | "danger-full-access" }
-  | { harness: "claude-code" | "grok"; mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions"; allow?: string[]; deny?: string[] }
+  | { harness: "claude-code"; mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions"; allow?: string[]; deny?: string[] }
+  | { harness: "grok"; mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions"; allow?: string[]; deny?: string[] }
   | { harness: "pi"; tools: ("read" | "grep" | "find" | "ls" | "write" | "edit" | "bash" | "powershell")[] }
   | { harness: "deepseek-harness"; sandbox: Access; approval: "ask" | "never" }
   | { harness: "opencode"; permission: Record<string, "allow" | "ask" | "deny" | Record<string, "allow" | "ask" | "deny">> };
@@ -22,6 +23,7 @@ export interface ExecutionApproval {
   tool: string; details: string; createdAt: string;
   status: "pending" | "accepted" | "declined" | "cancelled";
 }
+export type NativePermissions = { harness: string; [option: string]: unknown };
 export interface ExecutionConfig {
   /** Harness-native semantics; model selection does not replace this policy. */
   permissions?: NativePermissions;
@@ -62,6 +64,8 @@ export interface RuntimeSettings {
 export interface Member {
   permissionOverride?: NativePermissions;
   permissionVersion?: number;
+  /** Allocated when the member is created; native work lives below this directory. */
+  workspaceRoot?: string;
   id: string;
   teamId: string;
   name: string;
@@ -126,6 +130,12 @@ export interface AcceptanceEvidence {
   evidenceType: "review_judgment" | "native_check" | "unresolved";
 }
 export interface Work {
+  permissions?: NativePermissions;
+  /** Publication source; native execution uses the member-owned working copy. */
+  sourceWorkspace?: string;
+  sourceSnapshotId?: string;
+  sourceFileHeads?: Record<string, string>;
+  publication?: { state: "pending" | "published" | "conflict"; artifactIds: string[]; appliedPaths: string[]; error?: string };
   id: string;
   teamId: string;
   runId: string;
@@ -164,6 +174,7 @@ export interface Work {
   kind?: "task" | "collaboration" | "host-followup";
   workspace?: string;
   workspaceMode?: "shared" | "isolated";
+  publicationMode?: "automatic" | "integration";
   baseSnapshotId?: string;
   integratesWorkIds?: string[];
   collaborationExchangeId?: string;
@@ -391,6 +402,9 @@ export interface ToolSpec {
   inputSchema: Record<string, unknown>;
 }
 export interface HarnessRequest {
+  onPermission?: (request: NativePermissionRequest, signal?: AbortSignal) => Promise<"allow" | "deny">;
+  /** Native tools may work in this private copy; publication still checks ownership. */
+  isolatedWorkspace?: boolean;
   /** Execution-only route. Never persist tokens or use this URL as session identity. */
   modelRoute?: { token: string; sourceConfig: ExecutionConfig };
   executionRequirements?: ExecutionRequirements;
@@ -431,6 +445,7 @@ export interface Harness {
   inspect(): Promise<Record<string, unknown>>;
   validateConfig?(config: ExecutionConfig): void;
   preflight?(request: {
+    isolatedWorkspace?: boolean;
     modelCredentialPresent?: boolean;
     workspace: string;
     config: ExecutionConfig;

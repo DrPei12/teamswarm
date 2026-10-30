@@ -47,7 +47,7 @@ try {
   await page.goto(origin + `/#/team/${team.id}/agent`);
   const permissions = () => page.getByRole('button', { name: /^Execution permissions:/ });
   await permissions().click();
-  assert.equal(await page.getByRole('menuitemradio').count(), 4);
+  assert.deepEqual(await page.getByRole('menuitemradio').allTextContents(), ['Request approval', 'Automatic review', 'Full access']);
   assert.equal(await page.getByRole('menuitemradio', {name:'Full access',exact:true}).getAttribute('aria-disabled'), 'true');
   await page.getByRole('menuitemradio', { name: 'Request approval', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.permission-select')?.textContent.includes('Request approval'));
@@ -116,9 +116,10 @@ try {
   await page.locator('.react-flow__node').filter({hasText:'Claude permission member'}).getByRole('button').first().click();
   const memberPermissions = page.getByRole('dialog').getByRole('button',{name:/^Execution permissions:/});
   await memberPermissions.click();
-  await page.getByRole('menuitemradio',{name:'Accept edits',exact:true}).click();
-  await page.waitForFunction(() => [...document.querySelectorAll('.permission-select')].some(el=>el.textContent.includes('Accept edits')));
-  assert.equal(service.runtime.store.get('members',team.id,member.id).config.permissions.mode,'acceptEdits');
+  assert.deepEqual(await page.getByRole('menuitemradio').allTextContents(), ['Request approval', 'Automatic review', 'Full access']);
+  await page.getByRole('menuitemradio',{name:'Automatic review',exact:true}).click();
+  await page.waitForFunction(() => [...document.querySelectorAll('.permission-select')].some(el=>el.textContent.includes('Automatic review')));
+  assert.equal(service.runtime.store.get('members',team.id,member.id).config.permissions.mode,'auto');
   assert.equal(host().permissionOverride.approvalPolicy,'untrusted');
   assert.equal(service.runtime.store.settings(team.id).config.permissions,undefined);
   // The menu geometry stays fixed, and reopening uses the prefetched catalogue.
@@ -156,7 +157,7 @@ try {
   await settingsDialog.waitFor({state:'hidden'});
   assert.equal(await page.getByRole('dialog').count(),0,'Closing direct advanced settings returns to the conversation');
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ passed: true, root, checks: ['Host and member scopes stay separate from team defaults', 'failed save retains selection and retries', 'read-only mode disables wider permissions', 'running attempt remains frozen', 'native request visible and answers delivered', 'member creation inherits team defaults', 'native extension persists', 'stable menu bounds and no repeat catalogue request'] }));
+  console.log(JSON.stringify({ passed: true, root, checks: ['Host and member scopes stay separate from team defaults', 'failed save retains selection and retries', 'read-only mode disables wider permissions', 'running attempt remains frozen', 'native request visible and answers delivered', 'member creation inherits team defaults', 'three shared choices persist the native Harness mode', 'stable menu bounds and no repeat catalogue request'] }));
 } catch (error) {
   await page?.screenshot({ path: path.join(root, 'failure.png') }).catch(() => {});
   console.log(root);

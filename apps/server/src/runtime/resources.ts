@@ -255,33 +255,9 @@ export class RuntimeResources {
   private floors(host: boolean): Cost {
     const policy = this.policy(),
       user = (policy.reserveMemoryMiB ?? 0) * MiB;
-    const hostIds = new Set(
-      this.store.db
-        .prepare(
-          "SELECT DISTINCT json_extract(data,'$.config.harness') harness FROM runtime_members WHERE json_extract(data,'$.kind')='host'",
-        )
-        .all()
-        .map((r) => String(r.harness)),
-    );
-    for (const reservation of this.reservations.values())
-      if (reservation.hostControl) hostIds.add(reservation.harness);
-    const estimates = [...hostIds].map((id) => this.estimate(id, true));
-    const cap = Math.max(192 * MiB, this.sample.totalPhysical * 0.1);
-    const hostCost = {
-      physical: Math.min(
-        cap,
-        Math.max(192 * MiB, ...estimates.map((c) => c.physical)),
-      ),
-      commit: Math.min(
-        cap,
-        Math.max(192 * MiB, ...estimates.map((c) => c.commit)),
-      ),
-    };
     return {
-      physical:
-        Math.max(512 * MiB, this.sample.totalPhysical * 0.1, user) +
-        (host ? 0 : hostCost.physical),
-      commit: Math.max(256 * MiB, user) + (host ? 0 : hostCost.commit),
+      physical: user,
+      commit: user,
       cpu: host ? 0 : Math.min(0.25, (this.sample.cpuCores ?? 1) * 0.05),
     };
   }

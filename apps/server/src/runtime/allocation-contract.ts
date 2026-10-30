@@ -1,10 +1,11 @@
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import { z } from "zod";
 import type { ExecutionConfig } from "@team/contracts/runtime";
 import type { AllocationBoundary, AttemptExecutionSnapshot, CompatibilityIssue,
   EffectiveSelection, ExecutionObservation, PortableAllocationPackage,
   ResourceAvailability, ResourceSelection } from "@team/contracts/allocation";
 import { executionConfig, key } from "./validation.js";
-import { modelRouteIssues } from "./model-routing.js";
+import { executionCompatibility } from "./model-routing.js";
 
 const version = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 export const resourceSelection = z.object({
@@ -15,34 +16,7 @@ export const allocationRequest = z.object({
   expectedRevision: version, selection: resourceSelection,
 }).strict();
 
-const protocols: Record<string, readonly string[]> = {
-  codex: ["responses"], grok: ["chat-completions", "responses", "anthropic-messages"], "claude-code": ["anthropic-messages"],
-  "deepseek-harness": ["anthropic-messages"],
-  pi: ["chat-completions", "responses", "anthropic-messages"],
-  opencode: ["chat-completions", "responses", "anthropic-messages"],
-};
-/** Pure static compatibility only. Does not inspect credentials, install paths or quota.
- * Missing protocol retains the existing adapter default; legacy Codex native login
- * remains valid. Unknown adapters fail closed for the registered Harness contract.
- */
-export function checkExecutionCompatibility(c: ExecutionConfig): CompatibilityIssue[] {
-  const routed=modelRouteIssues(c);if(routed)return routed;
-  const supported = Object.hasOwn(protocols, c.harness) ? protocols[c.harness] : undefined;
-  if (!supported) return ["unknown_harness"];
-  const issues: CompatibilityIssue[] = [];
-  if (c.protocol && !supported.includes(c.protocol)) issues.push("incompatible_protocol");
-  const subscription = ["codex", "claude-code", "grok"].includes(c.harness) && !c.baseUrl && !c.credentialEnv;
-  if (!subscription && (!c.model || !c.baseUrl || !c.credentialEnv))
-    issues.push("missing_configuration");
-  if (c.harness !== "codex" && !(subscription && c.harness === "claude-code") && c.effort != null && !(c.harness === "pi" && (!c.protocol || c.protocol === "chat-completions") && ["minimal", "low", "medium", "high", "xhigh", "max"].includes(c.effort))) issues.push("unsupported_effort");
-  if (c.thinkingFormat && (c.harness !== "pi" || (c.protocol && c.protocol !== "chat-completions")))
-    issues.push("unsupported_thinking_format");
-  if (c.maxOutputTokens != null && !["pi", "opencode"].includes(c.harness))
-    issues.push("unsupported_output_budget");
-  if (c.contextWindowTokens != null && !["pi", "opencode"].includes(c.harness))
-    issues.push("unsupported_context_window");
-  return issues;
-}
+export const checkExecutionCompatibility = executionCompatibility;
 
 export const executionObservation = z.object({
   installed: z.boolean(), credentialPresent: z.boolean(),
@@ -126,7 +100,7 @@ export function migrateLegacyAllocation(input: unknown): AttemptExecutionSnapsho
  * optional-field presence: conservative new sessions are safer than false reuse.
  */
 export function canReuseNativeSession(previous: ExecutionConfig, next: ExecutionConfig): boolean {
-  return previous.harness === next.harness && next.harness !== "deepseek-harness" &&
+  return previous.harness === next.harness && harnessManifest(next.harness)?.session.resume === true &&
     checkExecutionCompatibility(next).length === 0 && JSON.stringify(previous) === JSON.stringify(next);
 }
 

@@ -79,3 +79,58 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
+
+
+test("all shipped permission menu choices pass the shared adapter schema", async () => {
+  const { codexPermissionOptions, claudePermissionOptions, openCodePermissionOptions } = await import("../src/runtime/permission-options.js");
+  const { validateNativePermissions } = await import("../src/runtime/harness/permissions.js");
+  for (const catalog of [codexPermissionOptions, claudePermissionOptions, openCodePermissionOptions]) {
+    assert.deepEqual(catalog.options.slice(0, 3).map(o => o.id), ["manual", "auto", "full-access"]);
+    for (const option of catalog.options) validateNativePermissions({ harness: option.permissions.harness, model: null,
+      provider: null, baseUrl: null, credentialEnv: null, effort: null, access: "workspace-write", permissions: option.permissions });
+  }
+});
+
+test("OpenCode sends its native permission rules and routes the original ACP approval", async () => {
+  const { openCodePermissionOptions } = await import("../src/runtime/permission-options.js");
+  const root = mkdtempSync(path.join(tmpdir(), "teamswarm-approval-opencode-"));
+  const entry = path.join(root, "fixture.js"), log = path.join(root, "wire.jsonl");
+  writeFileSync(path.join(root, "package.json"), '{"type":"commonjs"}');
+  const keys = ["TEAM_OPENCODE_BIN", "TEAM_HARNESS_HOME", "TEST_APPROVAL_KEY"];
+  const previous = keys.map(k => process.env[k]);
+  process.env.TEAM_OPENCODE_BIN = entry; process.env.TEAM_HARNESS_HOME = root; process.env.TEST_APPROVAL_KEY = "fixture";
+  writeFileSync(entry, `
+const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(log)},JSON.stringify({config:JSON.parse(process.env.OPENCODE_CONFIG_CONTENT)})+'\\n');
+const send=m=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n');let promptId;
+require('node:readline').createInterface({input:process.stdin}).on('line',line=>{
+ const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(r)+'\\n');
+ if(r.method==='initialize')send({id:r.id,result:{protocolVersion:1,agentCapabilities:{loadSession:true}}});
+ if(r.method==='session/new')send({id:r.id,result:{sessionId:'approval-session'}});
+ if(r.method==='session/prompt'){promptId=r.id;send({id:800,method:'session/request_permission',params:{sessionId:r.params.sessionId,toolCall:{toolCallId:'native-edit',title:'Edit draft.md',rawInput:{path:'draft.md'}},options:[{kind:'allow_once',optionId:'once'}]}});}
+ if(r.id===800)send({id:promptId,result:{stopReason:'end_turn'}});
+});`);
+  const harness = new NativeHarness("opencode");
+  try {
+    for (const option of openCodePermissionOptions.options) {
+      const request: HarnessRequest = {
+        workspace: root, config: { harness: "opencode", model: "fixture", provider: "fixture", baseUrl: "https://fixture.invalid/v1", credentialEnv: "TEST_APPROVAL_KEY", effort: null, access: "workspace-write", permissions: option.permissions },
+        instructions: "Isolated fixture", input: "Isolated fixture", tools: [], onSession() {}, onTurn() {}, onEvent() {}, onTool: async () => ({}),
+        onPermission: async input => { assert.equal(input.nativeId, "native-edit"); return "allow"; },
+      };
+      assert.equal((await harness.execute(request)).status, "completed");
+      const wire = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      const permissions = wire.findLast(r => r.config).config.permission;
+      assert.equal(permissions["*"], option.id === "manual" ? "ask" : "allow");
+      assert.equal(permissions.edit, undefined, "Do not overwrite an inherited ask rule with allow");
+      assert.equal(permissions.doom_loop, option.id === "auto" ? "ask" : undefined);
+      assert.equal(permissions.external_directory, "deny");
+      assert.deepEqual(wire.findLast(r => r.id === 800).result.outcome, { outcome: "selected", optionId: "once" });
+    }
+    const { openCodePermissions } = await import("../src/runtime/permission-options.js");
+    const readonly = openCodePermissions({ harness: "opencode", access: "read-only", permissions: openCodePermissionOptions.options[1].permissions } as any, false);
+    assert.equal(readonly.edit, "deny"); assert.equal(readonly.bash, "deny");
+  } finally {
+    await harness.close(); keys.forEach((k, i) => { if (previous[i] === undefined) delete process.env[k]; else process.env[k] = previous[i]; });
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});

@@ -1,5 +1,5 @@
-import { validateNativePermissions } from "./permissions.js";
-import { claudePermissionOptions } from "../permission-options.js";
+import { claudePermissionOptions, openCodePermissionOptions, openCodePermissions, withDefaultPermissions } from "../permission-options.js";
+import { conversationInput } from "./conversation-input.js";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnOwned, confirmOwnedExit } from "./owned-process.js";
 import { randomUUID } from "node:crypto";
@@ -23,7 +23,11 @@ import { redact } from "../redact.js";
 import { sessionStoreScope } from "./session-scope.js";
 import { NativeUsage } from "./native-usage.js";
 import { contextObservation } from "../context-budget.js";
-import { preflight, type PreflightInput } from "./preflight.js";
+import { preflight, inspectExecution, type PreflightInput } from "./preflight.js";
+import { prepareExecutionEnvironment } from "./execution-environment.js";
+import { validateNativePermissions, policyFor } from "./permissions.js";
+import { CommandObservations } from "./command-observations.js";
+import { OpenCodeAcp } from "./opencode-acp.js";
 import { grokModelConfig, isolateGrokEnvironment } from "./grok-config.js";
 import { accountHome, subscriptionEnvironment, subscriptionInspection, subscriptionAccounts, subscriptionScope, claudeSubscriptionFlags } from "./subscriptions.js";
 import { rebootConfirmsTermination, systemBootTime } from "./native-recovery.js";
@@ -43,11 +47,12 @@ type Active = {
   done: Promise<HarnessResult>;
   stopping: boolean;
   termination?: Promise<boolean>;
+  acp?: OpenCodeAcp;
 };
 
 /** Native loops stay in their own executable/SDK. No model-loop emulation here. */
 export class NativeHarness implements Harness {
-  permissionOptions() { return this.id === "claude-code" ? claudePermissionOptions : { defaultId: "", options: [] }; }
+  permissionOptions() { return this.id === "claude-code" ? claudePermissionOptions : this.id === "opencode" ? openCodePermissionOptions : { defaultId: "", options: [] }; }
   readonly capabilities;
   get sessionScope(): string {
     return sessionStoreScope(nativeHome(this.id)) + (this.id === "claude-code" || this.id === "grok" ? ":" + subscriptionScope(this.id) : "") + (this.id === "grok" ? ":acp-profile-v1" : "");
@@ -70,7 +75,7 @@ export class NativeHarness implements Harness {
       contextCompactionEvents: id !== "opencode",
       customModel: true,
       customProvider: true,
-      nativeChecks: false,
+      nativeChecks: true,
       reasoningEffort: false,
       protocol:
         id === "pi" || id === "opencode" || id === "grok"
@@ -104,7 +109,7 @@ export class NativeHarness implements Harness {
   }
   validateConfig(config: ExecutionConfig) {
     validateNativePermissions(config);
-    if (config.permissions && this.id !== "claude-code")
+    if (config.permissions && !["claude-code", "opencode"].includes(this.id))
       throw new Error("This Harness does not support configurable approval modes yet.");
     const entry = nativeEntry(this.id);
     if (config.contextWindowTokens != null && !["pi", "opencode"].includes(this.id))
@@ -143,11 +148,32 @@ export class NativeHarness implements Harness {
   }
   async preflight(request: PreflightInput) {
     this.validateConfig(request.config);
+    validateNativePermissions(request.config);
+    if (Object.values(request.requirements).some(Boolean)) {
+      try {
+        if (!request.isolatedWorkspace) throw new Error("native_workspace_required: assign an isolated member working directory for native commands.");
+        const piPolicy = policyFor(request.config, "pi");
+        const policy = request.config.permissions;
+        if (piPolicy && !piPolicy.tools.some(tool => ["bash", "powershell"].includes(tool)))
+          throw new Error("native_command_disabled: the selected Pi tool registry has no shell tool.");
+        if ((policy?.harness === "claude-code" || policy?.harness === "grok") && policy.mode === "plan")
+          throw new Error("native_command_disabled: the selected native plan mode does not permit execution.");
+        if (policyFor(request.config, "opencode")?.permission.bash === "deny")
+          throw new Error("native_command_disabled: the selected OpenCode policy denies Bash.");
+        const identity = inspectExecution(request, nativeEntry(this.id));
+        const environment = prepareExecutionEnvironment(request.scratchDirectory, request.requirements);
+        return { passed: true, mode: "native-member-workspace", identity, environment, modelRequests: 0,
+          nativeRuntime: this.id, isolation: this.capabilities.isolation };
+      } catch (error) { return { passed: false, error: (error as Error).message, modelRequests: 0 }; }
+    }
     return preflight(request, nativeEntry(this.id), false);
   }
   async execute(request: HarnessRequest): Promise<HarnessResult> {
+    request.config = withDefaultPermissions(request.config);
     const c = request.workspaceBoundary ? { ...request.config, access: "read-only" as const } : request.config;
     this.validateConfig(c);
+    validateNativePermissions(c);
+    const nativeCommands = !request.workspaceBoundary && (c.access === "workspace-write" || Boolean(request.isolatedWorkspace && request.executionRequirements?.nativeCommands));
     const subscription = (this.id === "claude-code" || this.id === "grok") && !c.baseUrl && !c.credentialEnv;
     if (!subscription && (!c.model || !c.baseUrl || !c.credentialEnv))
       throw new Error(
@@ -180,6 +206,11 @@ export class NativeHarness implements Harness {
       throw new Error("Native session history is unavailable.");
     writeFileSync(bindingPath, binding, { mode: 0o600 });
     const env = subscription ? subscriptionEnvironment(this.id as "claude-code" | "grok") : childEnvironment(request);
+    if (request.executionEnvironment) {
+      env.TMP = request.executionEnvironment.directory;
+      env.TEMP = request.executionEnvironment.directory;
+      env.TMPDIR = request.executionEnvironment.directory;
+    }
     const bridge = await toolBridge(request);
     let command = /\.[cm]?js$/.test(entry) ? process.execPath : entry;
     let args = command === process.execPath ? [entry] : [];
@@ -190,10 +221,12 @@ export class NativeHarness implements Harness {
       workspace: request.workspace,
       config: c,
       instructions: request.instructions,
-      input: request.input,
+      input: conversationInput(request.input),
       tools: request.tools,
       bridge: bridge.url,
       resume: Boolean(request.sessionId),
+      nativeCommands,
+      permissionUrl: bridge.permissionUrl,
     };
     try {
       if (this.id === "pi" || this.id === "grok") {
@@ -209,6 +242,7 @@ export class NativeHarness implements Harness {
           new URL(this.id === "grok" ? "./grok-worker.js" : "./pi-worker.js", import.meta.url),
         );
         args = [
+          ...(!existsSync(compiled) ? ["--import", import.meta.resolve("tsx")] : []),
           existsSync(compiled)
             ? compiled
             : fileURLToPath(new URL(this.id === "grok" ? "./grok-worker.ts" : "./pi-worker.ts", import.meta.url)),
@@ -234,7 +268,7 @@ export class NativeHarness implements Harness {
         });
         const nativeTools =
           c.access === "read-only"
-            ? "Read,Glob,Grep"
+            ? "Read,Glob,Grep" + (nativeCommands ? ",Bash" : "")
             : "Read,Glob,Grep,Write,Edit,Bash";
         args.push(
           ...(subscription ? claudeSubscriptionFlags : ["--bare"]),
@@ -246,14 +280,13 @@ export class NativeHarness implements Harness {
           ...(c.model ? ["--model", c.model] : []),
           ...(subscription && c.effort ? ["--effort", c.effort] : []),
           "--permission-mode",
-          c.permissions?.harness === "claude-code" ? c.permissions.mode : "dontAsk",
-          ...(c.permissions ? ["--permission-prompt-tool", "stdio"] : []),
+          c.permissions?.harness === "claude-code" ? policyFor(c, "claude-code")!.mode : "dontAsk",
           "--tools",
           nativeTools,
           "--allowedTools",
           (c.permissions ? "Read,Glob,Grep" : nativeTools) + ",mcp__teamswarm__*" +
-            (c.permissions?.harness === "claude-code" && c.access === "workspace-write" && c.permissions.allow?.length ? "," + c.permissions.allow.join(",") : ""),
-          ...(c.permissions?.harness === "claude-code" && c.permissions.deny?.length ? ["--disallowedTools", c.permissions.deny.join(",")] : []),
+            (c.permissions?.harness === "claude-code" && c.access === "workspace-write" && policyFor(c, "claude-code")!.allow?.length ? "," + policyFor(c, "claude-code")!.allow!.join(",") : ""),
+          ...(c.permissions?.harness === "claude-code" && policyFor(c, "claude-code")!.deny?.length ? ["--disallowedTools", policyFor(c, "claude-code")!.deny!.join(",")] : []),
           "--mcp-config",
           mcp,
           "--strict-mcp-config",
@@ -261,12 +294,13 @@ export class NativeHarness implements Harness {
           request.instructions,
           "--input-format",
           "stream-json",
+          ...(c.permissions?.harness === "claude-code" && policyFor(c, "claude-code")!.mode !== "dontAsk" ? ["--permission-prompt-tool", "stdio"] : []),
           ...(request.sessionId ? ["--resume", id] : ["--session-id", id]),
         );
         stdin =
           JSON.stringify({
             type: "user",
-            message: { role: "user", content: request.input },
+            message: { role: "user", content: conversationInput(request.input) },
           }) + "\n";
       } else if (this.id === "opencode") {
         env.XDG_CONFIG_HOME = path.join(home, "config");
@@ -279,6 +313,8 @@ export class NativeHarness implements Harness {
         env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           share: "disabled",
+          model: `teamswarm/${c.model}`,
+          default_agent: "teamswarm",
           autoupdate: false,
           provider: {
             teamswarm: {
@@ -305,17 +341,7 @@ export class NativeHarness implements Harness {
               },
             },
           },
-          permission: {
-            "*": "deny",
-            read: "allow",
-            glob: "allow",
-            grep: "allow",
-            list: "allow",
-            edit: c.access === "read-only" ? "deny" : "allow",
-            bash: c.access === "read-only" ? "deny" : "allow",
-            "teamswarm_*": "allow",
-            external_directory: "deny",
-          },
+          permission: openCodePermissions(c, nativeCommands),
           mcp: {
             teamswarm: { type: "remote", url: bridge.url, enabled: true },
           },
@@ -327,30 +353,17 @@ export class NativeHarness implements Harness {
             },
           },
         });
-        const nativeSessionPath = path.join(home, "native-session.json");
-        args.push(
-          "run",
-          "--pure",
-          "--format",
-          "json",
-          "--model",
-          `teamswarm/${c.model}`,
-          "--agent",
-          "teamswarm",
-          ...(request.sessionId
-            ? ["--session", JSON.parse(readFileSync(nativeSessionPath, "utf8"))]
-            : []),
-        );
-        stdin = request.input;
+        args.push("acp", "--pure", "--cwd", request.workspace);
       } else {
         env.DSH_HOME = home;
         env.DEEPSEEK_API_KEY = env[c.credentialEnv!];
         env.DEEPSEEK_BASE_URL = c.baseUrl!;
         env.DSH_PRIMARY_RUNTIME = "";
-        env.DSH_PERMISSION_MODE = c.access;
+        env.DSH_PERMISSION_MODE = c.permissions?.harness === "deepseek-harness" ? policyFor(c, "deepseek-harness")!.sandbox : c.access;
         env.DSH_MAX_TOKENS_AS_SUCCESS = "false";
         // JSON is a YAML subset. No raw credential is written into the native patch.
         const patch = [
+          { id: "approval", config: { policy: c.permissions?.harness === "deepseek-harness" ? policyFor(c, "deepseek-harness")!.approval : "never" } },
           {
             id: "llm-deepseek",
             config: {
@@ -372,7 +385,7 @@ export class NativeHarness implements Harness {
             "tool-workflow",
             "tool-plugin-manager",
             ...(request.workspaceBoundary ? ["tool-fs"] : []),
-            ...(request.workspaceBoundary || process.env.TEAM_DSH_DISABLE_SHELL === "1"
+            ...(!nativeCommands || process.env.TEAM_DSH_DISABLE_SHELL === "1"
               ? ["tool-bash", "tool-pwsh", "tool-jobs"]
               : []),
           ].map((id) => ({ id, disabled: true })),
@@ -389,6 +402,7 @@ export class NativeHarness implements Harness {
           },
           {
             insert: [
+              { id: "teamswarm-native-observer", name: fileURLToPath(new URL(existsSync(fileURLToPath(new URL("./dsh-observer.js", import.meta.url))) ? "./dsh-observer.js" : "./dsh-observer.ts", import.meta.url)), config: { permissionUrl: bridge.permissionUrl } },
               {
                 id: "teamswarm-mcp",
                 name: "@deepseek-ai/dsh-mcp-client",
@@ -421,6 +435,9 @@ export class NativeHarness implements Harness {
         harness: this.id,
         protocol: c.protocol ?? this.capabilities.protocol,
         configured: true,
+        nativePermissions: c.permissions ?? null,
+        nativeCommands,
+        workspace: request.workspace,
         ...(request.workspaceBoundary ? { workspaceBoundary: request.workspaceBoundary, nativeSourceAccess: "read-only" } : {}),
         ...(this.id === "deepseek-harness" && process.env.TEAM_DSH_DISABLE_SHELL === "1" ? { shellTools: "disabled" } : {}),
         turnIdentity: "adapter control token; native identifiers are separate events",
@@ -468,6 +485,9 @@ export class NativeHarness implements Harness {
     let dshRunning = false;
     let shutdownAcknowledged = false;
     const usageTotal = new NativeUsage();
+    let acp: OpenCodeAcp | undefined;
+    const permissionAbort = new AbortController();
+    let eventSequence = 0;
     const done = new Promise<HarnessResult>((resolve) => {
       const lines = createInterface({
         input: child.stdout,
@@ -476,7 +496,14 @@ export class NativeHarness implements Harness {
       const emit = (type: string, data: Record<string, unknown>) => {
         if (observationFailure) return;
         try {
-          request.onEvent({ type, data: redact(data, c.credentialEnv) });
+          let safe = redact(data, c.credentialEnv);
+          const serialized = JSON.stringify(safe);
+          if (Buffer.byteLength(serialized) > 256 * 1024) {
+            const directory = path.join(home, turnId, "events"); mkdirSync(directory, { recursive: true, mode: 0o700 });
+            const eventPath = path.join(directory, `${++eventSequence}.json`); writeFileSync(eventPath, serialized, { mode: 0o600 });
+            safe = { harness: this.id, eventPath, bytes: Buffer.byteLength(serialized), preview: serialized.slice(0, 8192) };
+          }
+          request.onEvent({ type, data: safe });
         } catch {
           observationFailure = "Runtime could not persist native observations.";
           child.stdin.end();
@@ -495,6 +522,16 @@ export class NativeHarness implements Harness {
         const observation = contextObservation(this.id, u);
         if (observation) emit("context.usage", { ...observation });
       };
+      const commands = new CommandObservations(this.id, path.join(home, turnId, "commands"), emit);
+      if (this.id === "opencode") acp = new OpenCodeAcp(child, request, bridge.url, path.join(home, "native-session.json"),
+        (event: any) => {
+          const safe = redact(event, c.credentialEnv); emit("native.event", { harness: this.id, event: safe }); commands.observe(safe);
+          if (event.type === "session") emit("session.native", { harness: this.id, nativeSessionId: event.id });
+          const e = event.event;
+          if (e?.sessionUpdate === "agent_message_chunk" && e.content?.type === "text") emit("transcript.delta", { id: `${turnId}:opencode`, kind: "message", delta: e.content.text });
+        },
+        result => { terminal = result; const active = this.active.get(id); if (active) active.termination ??= terminateNative(child); },
+        { prompt: conversationInput(request.input) });
       lines.on("line", (line) => {
         let event: any;
         try {
@@ -506,6 +543,8 @@ export class NativeHarness implements Harness {
         try {
           event = redact(event, c.credentialEnv);
           emit("native.event", { harness: this.id, event });
+          if (this.id === "opencode") { acp!.receive(event); return; }
+          commands.observe(event);
           if (this.id === "pi" || this.id === "grok") {
             if (event.type === "pi.event" && event.event.type === "compaction_end" && event.event.result && !event.event.aborted)
               emit("context.compacted", {});
@@ -538,22 +577,14 @@ export class NativeHarness implements Harness {
             }
             if (event.type === "result") terminal = event;
           } else if (this.id === "claude-code") {
-            if (event.type === "control_request") {
-              const approval = event.request;
-              const answer = async () => {
-                const allowed = approval?.subtype === "can_use_tool" && c.access === "workspace-write" &&
-                  !request.workspaceBoundary && !!c.permissions && (await request.onPermission?.({
-                    nativeId: String(event.request_id), tool: String(approval.tool_name), input: approval.input ?? {},
-                  })) === "allow";
-                if (!child.stdin.destroyed && !child.stdin.writableEnded)
-                  child.stdin.write(JSON.stringify({ type: "control_response", response: {
-                    subtype: "success", request_id: event.request_id,
-                    response: allowed ? { behavior: "allow", updatedInput: approval.input } : { behavior: "deny", message: "Operation was not approved." },
-                  } }) + "\n");
-              };
-              void answer().catch(() => {
-                if (!child.stdin.destroyed && !child.stdin.writableEnded) child.stdin.write(JSON.stringify({ type: "control_response", response: { subtype: "error", request_id: event.request_id, error: "Approval request failed." } }) + "\n");
-              });
+            if (event.type === "control_request" && event.request?.subtype === "can_use_tool") {
+              const r = event.request;
+              void (async () => {
+                let decision = "deny";
+                try { decision = c.access === "workspace-write" && !request.workspaceBoundary ? await request.onPermission?.({ nativeId: r.tool_use_id ?? event.request_id, tool: r.tool_name, input: r.input, reason: r.decision_reason }, permissionAbort.signal) ?? "deny" : "deny"; } catch {}
+                if (!child.stdin.destroyed) child.stdin.write(JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: event.request_id,
+                  response: decision === "allow" && !permissionAbort.signal.aborted ? { behavior: "allow", updatedInput: r.input } : { behavior: "deny", message: "Permission was denied or the task ended." } } }) + "\n");
+              })();
             }
             if (event.type === "system" && event.subtype === "compact_boundary") emit("context.compacted", {});
             if (event.type === "system" && event.subtype === "init") {
@@ -582,30 +613,6 @@ export class NativeHarness implements Harness {
               };
               child.stdin.end();
             }
-          } else if (this.id === "opencode") {
-            if (event.sessionID) {
-              nativeSession = event.sessionID;
-              writeFileSync(
-                path.join(home, "native-session.json"),
-                JSON.stringify(nativeSession),
-                { mode: 0o600 },
-              );
-            }
-            if (event.type === "text") text += event.part?.text ?? "";
-            if (event.type === "error")
-              terminal = {
-                status: "failed",
-                text,
-                error: JSON.stringify(event.error),
-              };
-            if (event.type === "step_finish") {
-              usage(event.part?.tokens ?? {});
-              context(event.part?.tokens ?? {});
-              if (["stop", "end_turn"].includes(event.part?.reason))
-                terminal = { status: "completed", text };
-              else if (event.part?.reason === "length")
-                terminal = { status: "failed", text, error: "OpenCode reached the model output limit before completing the turn." };
-            }
           } else {
             if (event.id === 99 && !event.error && event.result)
               shutdownAcknowledged = true;
@@ -625,7 +632,7 @@ export class NativeHarness implements Harness {
                     method: "session/prompt",
                     params: {
                       sessionId: id,
-                      contentBlocks: [{ type: "text", text: request.input }],
+                      contentBlocks: [{ type: "text", text: conversationInput(request.input) }],
                     },
                   }) + "\n",
                 );
@@ -721,6 +728,8 @@ export class NativeHarness implements Harness {
       const finish = async (code: number | null) => {
         if (settled) return;
         settled = true;
+        permissionAbort.abort(); acp?.close();
+        try { commands.close(Boolean(this.active.get(id)?.stopping)); } catch { observationFailure = "Native command completion could not be persisted."; }
         clearTimeout(drainTimer);
         lines.close();
         await Promise.all(
@@ -788,7 +797,7 @@ export class NativeHarness implements Harness {
         }, 2000);
       });
     });
-    this.active.set(id, { resourceId, child, done, stopping: false });
+    this.active.set(id, { resourceId, child, done, stopping: false, acp });
     try {
       request.onEvent({ type: "resource.acquired", data: { id: resourceId, pid: child.pid, scope: "attempt" } });
       receipt();
@@ -817,6 +826,7 @@ export class NativeHarness implements Harness {
           },
         }) + "\n",
       );
+    else if (this.id === "opencode") void acp!.start();
     else if (this.id === "claude-code") child.stdin.write(stdin);
     else if (this.id !== "pi" && this.id !== "grok") child.stdin.end(stdin);
     return done;
@@ -828,6 +838,7 @@ export class NativeHarness implements Harness {
         "Native session is not active; reconcile before retrying.",
       );
     active.stopping = true;
+    if (active.acp) active.acp.cancel();
     if (this.id === "pi" || this.id === "grok") active.child.stdin.write("abort\n");
     else if (this.id === "claude-code")
       active.child.stdin.write(

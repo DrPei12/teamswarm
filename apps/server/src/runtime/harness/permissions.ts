@@ -1,35 +1,43 @@
 import { z } from "zod";
-import type { ExecutionConfig } from "../types.js";
+import type { ExecutionConfig, BuiltinNativePermissions } from "@team/contracts/runtime";
+import { harnessManifest } from "@team/contracts/harness-catalog";
+import { validatePolicy } from "./manifest.js";
 
-const rules = z.array(z.string().trim().min(1).max(2000)).max(100).optional();
-const mode = z.enum(["default", "acceptEdits", "plan", "dontAsk", "auto", "bypassPermissions"]);
-const action = z.enum(["allow", "ask", "deny"]);
-export const nativePermissions = z.discriminatedUnion("harness", [
-  z.object({ harness: z.literal("codex"), approvalPolicy: z.enum(["untrusted", "never", "on-request"]), sandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]).optional() }).strict(),
-  z.object({ harness: z.literal("claude-code"), mode, allow: rules, deny: rules }).strict(),
-  z.object({ harness: z.literal("grok"), mode, allow: rules, deny: rules }).strict(),
-  z.object({ harness: z.literal("pi"), tools: z.array(z.enum(["read", "grep", "find", "ls", "write", "edit", "bash", "powershell"])).max(8) }).strict(),
-  z.object({ harness: z.literal("deepseek-harness"), sandbox: z.enum(["read-only", "workspace-write"]), approval: z.enum(["ask", "never"]) }).strict(),
-  z.object({ harness: z.literal("opencode"), permission: z.record(z.string().min(1).max(200), z.union([action, z.record(z.string().min(1).max(2000), action)])) }).strict(),
-]);
+export const nativePermissions = z.object({ harness: z.string().min(1).max(64) }).catchall(z.unknown()).superRefine((policy, ctx) => {
+  const error = validatePolicy(policy);
+  if (error) ctx.addIssue({ code: "custom", message: error });
+});
+/** Typed native adapters retain their own option vocabulary. */
+export function policyFor<T extends BuiltinNativePermissions["harness"]>(config: ExecutionConfig, id: T): Extract<BuiltinNativePermissions, { harness: T }> | undefined {
+  return config.permissions?.harness === id ? config.permissions as Extract<BuiltinNativePermissions, { harness: T }> : undefined;
+}
+
 export function validateNativePermissions(config: ExecutionConfig) {
-  const p = config.permissions;
-  if (!p) return;
-  nativePermissions.parse(p);
-  if (p.harness !== config.harness) throw new Error("Permission policy belongs to a different Harness.");
+  if (!config.permissions) return;
+  nativePermissions.parse(config.permissions);
+  if (config.permissions.harness !== config.harness) throw new Error("Permission policy belongs to a different Harness. Select that Harness's native policy.");
   if (config.access === "read-only") {
-    if ((p.harness === "codex" || p.harness === "deepseek-harness") && p.sandbox && p.sandbox !== "read-only")
-      throw new Error("The native sandbox exceeds the member's read-only access.");
-    if (p.harness === "pi" && p.tools.some(tool => ["write", "edit"].includes(tool)))
-      throw new Error("Read-only Pi members cannot enable native edit tools.");
+    const rules = harnessManifest(config.harness)?.permissions.readOnly;
+    for (const [key, value] of Object.entries(rules?.set ?? {})) {
+      if (config.permissions[key] !== undefined && config.permissions[key] !== value) throw new Error("The native sandbox exceeds read-only access.");
+    }
+    for (const [key, excluded] of Object.entries(rules?.exclude ?? {})) {
+      const values = config.permissions[key];
+      if (Array.isArray(values) && values.some(v => excluded.includes(v))) throw new Error("Read-only members cannot enable native edit tools.");
+    }
   }
 }
 
-/** A read-only assignment narrows native grants without changing the saved resource. */
-export function readOnlyExecution(config: ExecutionConfig): ExecutionConfig {
-  const p = config.permissions;
-  const permissions = p?.harness === "codex" || p?.harness === "deepseek-harness"
-    ? { ...p, sandbox: "read-only" as const }
-    : p?.harness === "pi" ? { ...p, tools: p.tools.filter(t => !["write", "edit"].includes(t)) } : p;
-  return { ...config, access: "read-only", ...(permissions ? { permissions } : {}) };
+/** Temporary dialogue/review roles narrow the chosen native policy, never the saved member policy. */
+export function readOnlyPermissions(config: ExecutionConfig): ExecutionConfig {
+  if (!config.permissions) return { ...config, access: "read-only" };
+  const rules = harnessManifest(config.harness)?.permissions.readOnly;
+  const permissions = { ...config.permissions, ...rules?.set };
+  for (const [key, excluded] of Object.entries(rules?.exclude ?? {})) {
+    const values = permissions[key];
+    if (Array.isArray(values)) permissions[key] = values.filter(v => !excluded.includes(v));
+  }
+  return { ...config, access: "read-only", permissions };
 }
+
+export const readOnlyExecution = readOnlyPermissions;

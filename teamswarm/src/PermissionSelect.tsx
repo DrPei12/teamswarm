@@ -57,6 +57,7 @@ export function PermissionSelect({
     onOpenChange?.(value);
   };
   const choices = catalog.options?.options ?? [];
+  const unavailable = !!catalog.options && !choices.length;
   const current = config.permissions;
   const selected = current
     ? choices.find(
@@ -75,7 +76,12 @@ export function PermissionSelect({
       )
     : choices.find((option) => option.id === catalog.options?.defaultId);
   const label =
-    selected?.label ?? (current ? "Custom permissions" : "Harness settings");
+    selected?.label ??
+    (unavailable
+      ? "Execution permissions"
+      : current
+        ? "Custom permissions"
+        : "Execution permissions");
   async function save(policy: NativePermissions) {
     if (lock.current) return;
     lock.current = true;
@@ -106,7 +112,7 @@ export function PermissionSelect({
     <span className={`permission-control ${compact ? "compact" : ""}`}>
       <DropdownMenu.Root
         modal={false}
-        open={controlledOpen ?? localOpen}
+        open={!unavailable && (controlledOpen ?? localOpen)}
         onOpenChange={setOpen}
       >
         <DropdownMenu.Trigger asChild>
@@ -115,14 +121,22 @@ export function PermissionSelect({
             className={`${compact ? "runtime-choice" : "field-select"} permission-select`}
             aria-label={`${t("Execution permissions")}: ${t(label)}`}
             aria-busy={saving || undefined}
+            title={
+              unavailable
+                ? t("Permission switching is unavailable for this Harness.")
+                : undefined
+            }
             disabled={
-              disabled || saving || (!catalog.options && !catalog.error)
+              disabled ||
+              saving ||
+              unavailable ||
+              (!catalog.options && !catalog.error)
             }
             data-full-access={selected?.id === "full-access" || undefined}
           >
             <Shield size={14} aria-hidden="true" />
             <span>{t(label)}</span>
-            <ChevronDown size={11} aria-hidden="true" />
+            {!unavailable && <ChevronDown size={11} aria-hidden="true" />}
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
@@ -173,15 +187,6 @@ export function PermissionSelect({
                 </span>
               ))}
             </DropdownMenu.RadioGroup>
-            {!choices.length && !catalog.error && (
-              <div className="menu-note">
-                {t(
-                  catalog.options
-                    ? "Uses this Harness's native settings"
-                    : "Permission options unavailable",
-                )}
-              </div>
-            )}
             {(error || catalog.error) && (
               <div className="permission-error" role="alert">
                 <span>{t(error || catalog.error)}</span>

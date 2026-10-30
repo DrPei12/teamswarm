@@ -67,28 +67,11 @@
 .thread-menu-scroll:first-child svg {
   transform: rotate(180deg);
 }
-.work-message-mode label {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12px;
-}
-.work-message-mode small {
-  display: block;
-  margin-top: 6px;
-  opacity: 0.65;
-  font-size: 11px;
-  line-height: 1.5;
-}
 .work-thread-picker small {
   color: var(--secondary);
   font-size: 11px;
   line-height: 18px;
 }
-.work-message-mode {
-  padding: 5px 0 10px;
-}
-.work-message-mode select,
 .project-records select,
 .record-editor input,
 .record-editor textarea {
