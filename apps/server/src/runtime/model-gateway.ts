@@ -97,7 +97,7 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
-/** One loopback listener per service. Each attempt gets a revocable route, not a proxy process. */
+/** One loopback listener per service. Routes are active only during their attempt. */
 export class ModelGateway {
   readonly accounts: ChatGPTAccounts;
   private server?: Server;
@@ -150,6 +150,11 @@ export class ModelGateway {
     return {
       config: nativeConfig(config, `${base}/${id}/v1`),
       token: route.token,
+      acquire: () => {
+        if (this.closed) throw new Error("Model connection service is closing.");
+        if (this.routes.has(id)) throw new Error("Native model session is busy.");
+        this.routes.set(id, route);
+      },
       session: (sessionId: string, workspace: string) => {
         if (route.sessionId !== sessionId) {
           route.metadata = new ModelMetadata(this.directory, [
@@ -558,6 +563,14 @@ export class ModelGateway {
   }
   wrap(harness: Harness): Harness {
     const gateway = this;
+    // A warm Codex thread retains its provider URL when resumed. Keep that
+    // thread's transport identity, but revoke access between attempts. Other
+    // native adapters start a worker per turn and accept a fresh route normally.
+    const sessions = new Map<string, {
+      binding: string;
+      resourceId?: unknown;
+      lease: Awaited<ReturnType<ModelGateway["lease"]>>;
+    }>();
     // Delegate optional hooks with their original receiver; retain native process ownership.
     return new Proxy(harness, {
       get(target, key) {
@@ -605,7 +618,14 @@ export class ModelGateway {
           return async (request: HarnessRequest) => {
             if (!needsModelRoute(request.config))
               return target.execute(request);
-            const lease = await gateway.lease(request.config);
+            const reusable = target.id === "codex" && !request.verificationDirectory;
+            const binding = JSON.stringify([request.workspace, request.config]);
+            const previous = reusable && request.sessionId ? sessions.get(request.sessionId) : undefined;
+            if (previous && previous.binding !== binding)
+              throw new Error("Session configuration or workspace changed.");
+            const lease = previous?.lease ?? await gateway.lease(request.config);
+            if (previous) lease.acquire();
+            let resourceId: unknown;
             if (request.sessionId)
               lease.session(request.sessionId, request.workspace);
             const config = ["claude-code", "deepseek-harness"].includes(
@@ -629,9 +649,19 @@ export class ModelGateway {
                     token: lease.token,
                     sourceConfig: request.config,
                   },
-                  onEvent: (event) => request.onEvent(redact(event)),
+                  onEvent: (event) => {
+                    if (event.type === "resource.acquired") resourceId = event.data.id;
+                    if (["resource.released", "resource.unconfirmed"].includes(event.type))
+                      for (const [id, cached] of sessions)
+                        if (cached.resourceId === event.data.id) sessions.delete(id);
+                    request.onEvent(redact(event));
+                  },
                   onSession: (id, actual) => {
                     lease.session(id, request.workspace);
+                    if (reusable) {
+                      if (request.sessionId && request.sessionId !== id) sessions.delete(request.sessionId);
+                      sessions.set(id, {binding, resourceId, lease});
+                    }
                     request.onSession(id, actual ? redact(actual) : actual);
                   },
                 }),
@@ -640,6 +670,9 @@ export class ModelGateway {
               lease.release();
             }
           };
+        if (key === "close") return async () => {
+          try { await target.close(); } finally { sessions.clear(); }
+        };
         const value = Reflect.get(target, key, target);
         return typeof value === "function" ? value.bind(target) : value;
       },

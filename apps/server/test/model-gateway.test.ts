@@ -9,6 +9,7 @@ import { NativeHarness } from "../src/runtime/harness/native.js";
 import { resolveConnection } from "../src/runtime/connections.js";
 import { decodeRequest, encodeResponse, chatGPTPayload, requestOptions } from "../src/runtime/model-wire.js";
 import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
+import type { Harness, HarnessRequest } from "../src/runtime/types.js";
 
 function respond(res:ServerResponse, model:string, value:string|{name:string;arguments:Record<string,unknown>}, complete=true, metadata=false){
   res.writeHead(200,{"content-type":"text/event-stream"});
@@ -56,6 +57,46 @@ test("Responses connection is selectable independently for all six Harnesses",()
   for(const harness of ["codex","claude-code","pi","grok","deepseek-harness","opencode"]){
     assert.equal(resolveConnection({name:"models",endpoints:{responses:"https://example.com/v1"},credentialEnv:"MODEL_KEY",models:["gpt-test"]},harness,"gpt-test","read-only").config.protocol,"responses");
   }
+});
+
+test("warm native sessions reuse their own model transport only while an attempt is active",async()=>{
+  const f=await setup((body,res)=>respond(res,body.model,"native reply"));
+  const originalFetch=globalThis.fetch;
+  globalThis.fetch=(input,init)=>originalFetch(String(input)==="https://api.openai.com/v1/responses"?f.config.baseUrl+"/responses":input,init);
+  f.gateway.accounts.accessToken=async()=>"fixture-key";
+  const transports=new Map<string,{url:string;token:string}>();
+  let observer:HarnessRequest["onEvent"]|undefined;
+  const call=({url,token}:{url:string;token:string})=>fetch(url+"/responses",{method:"POST",headers:{authorization:"Bearer "+token,"content-type":"application/json"},body:JSON.stringify({model:"gpt-test",input:[{role:"user",content:"Continue"}],stream:false})});
+  const native={id:"codex",execute:async(r:HarnessRequest)=>{
+    observer=r.onEvent;
+    r.onEvent({type:"resource.acquired",data:{id:"warm-process",scope:"harness"}});
+    const session=r.sessionId??"session-a";
+    // The native process keeps the first provider address for a loaded thread.
+    if(!transports.has(session))transports.set(session,{url:r.config.baseUrl!,token:r.modelRoute!.token});
+    r.onSession(session);
+    const response=await call(transports.get(session)!);
+    assert.equal(response.status,200);await response.text();
+    return {status:"completed",text:"native reply"};
+  },close:async()=>{observer?.({type:"resource.released",data:{id:"warm-process",scope:"harness"}});transports.clear();}} as unknown as Harness;
+  const harness=f.gateway.wrap(native);
+  const request:HarnessRequest={workspace:f.directory,config:{...f.config,harness:"codex",baseUrl:null,credentialEnv:null,chatgptAccountId:"11111111-1111-4111-8111-111111111111"},instructions:"Fixture",input:"Fixture",tools:[],onSession:()=>{},onTurn:()=>{},onEvent:()=>{},onTool:async()=>{throw Error("No Team tools expected");}};
+  try{
+    await harness.execute(request);
+    const first=transports.get("session-a")!;
+    assert.equal((await call(first)).status,403);
+    await harness.execute({...request,sessionId:"session-a"});
+    assert.deepEqual(transports.get("session-a"),first);
+    assert.equal((await call(first)).status,403);
+    await harness.execute({...request,sessionId:"session-b"});
+    assert.notEqual(transports.get("session-b")!.url,first.url);
+    await assert.rejects(harness.execute({...request,sessionId:"session-a",workspace:path.join(f.directory,"other")}),/configuration or workspace changed/);
+    await harness.close();
+    await harness.execute({...request,sessionId:"session-a"});
+    assert.notEqual(transports.get("session-a")!.url,first.url);
+    assert.equal((await call(first)).status,403);
+    assert.deepEqual(f.gateway.state(),{routes:0,requests:0});
+    assert.equal(f.requests.length,4);
+  }finally{globalThis.fetch=originalFetch;await harness.close();await f.close();}
 });
 
 test("Grok subscription route normalizes metadata events and round-trips native tool results",async()=>{
