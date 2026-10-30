@@ -4,7 +4,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ModelGateway } from "../src/runtime/model-gateway.js";
-import { executionConfig } from "../src/runtime/validation.js";
+import { executionConfig, toolSpecs, tools as teamTools } from "../src/runtime/validation.js";
 import { NativeHarness } from "../src/runtime/harness/native.js";
 import { resolveConnection } from "../src/runtime/connections.js";
 import { decodeRequest, encodeResponse, chatGPTPayload, requestOptions } from "../src/runtime/model-wire.js";
@@ -93,6 +93,44 @@ test("ChatGPT requests use the public stateless protocol and supported tool decl
   assert.equal(payload.input[1].role,"developer");assert.equal(payload.tools,undefined);
   assert.deepEqual(payload.tool_choice,{type:"function",name:"Read"});assert.ok(payload.include.includes("reasoning.encrypted_content"));
 });
+test("Claude keeps its native tools and Team schemas through the shared ChatGPT route",async()=>{
+  const topic = teamTools.team_host_note.schema.shape.topic;
+  for (const value of ["阅读/章节_2", "résumé/٢", "project-notes"]) assert.equal(topic.parse(value), value);
+  for (const value of ["", "has spaces", "<script>", "notes😀", "a".repeat(121)]) assert.equal(topic.safeParse(value).success, false);
+  const nativeTools = [
+    {name:"Read",input_schema:{type:"object",properties:{file_path:{type:"string"}},required:["file_path"]}},
+    ...toolSpecs.map(t=>({name:`mcp__teamswarm__${t.name}`,description:t.description,input_schema:t.inputSchema})),
+  ];
+  const f=await setup((body,res)=>{
+    const declarations=body.input.find((v:any)=>v.type==="additional_tools").tools;
+    assert.deepEqual(declarations.map((t:any)=>t.name),nativeTools.map(t=>t.name));
+    const schema=declarations.find((t:any)=>t.name==="mcp__teamswarm__team_host_note").parameters.properties.topic;
+    assert.equal(schema.type,"string");assert.equal(schema.maxLength,120);
+    assert.equal(schema.pattern,undefined);assert.match(schema.description,/Letters and numbers/);
+    if(body.input.some((v:any)=>v.type==="function_call_output")) respond(res,body.model,"native read result received");
+    else respond(res,body.model,{name:"Read",arguments:{file_path:"task.txt"}});
+  });
+  const originalFetch=globalThis.fetch;
+  globalThis.fetch=(input,init)=>originalFetch(String(input)==="https://api.openai.com/v1/responses"?f.config.baseUrl+"/responses":input,init);
+  f.gateway.accounts.accessToken=async()=>"fixture-key";
+  try{
+    const lease=await f.gateway.lease({...f.config,baseUrl:null,credentialEnv:null,chatgptAccountId:"11111111-1111-4111-8111-111111111111"});
+    assert.equal(lease.config.harness,"claude-code");assert.equal(lease.config.protocol,"anthropic-messages");
+    const messages:any[]=[{role:"user",content:"Read task.txt with your native Read tool"}];
+    const call=async()=>{
+      const response=await fetch(lease.config.baseUrl+"/messages",{method:"POST",headers:{"x-api-key":lease.token,"content-type":"application/json"},body:JSON.stringify({model:"gpt-test",max_tokens:1000,messages,tools:nativeTools})});
+      assert.equal(response.status,200);return await response.json() as any;
+    };
+    const first=await call();assert.equal(first.stop_reason,"tool_use");assert.equal(first.content[0].name,"Read");
+    assert.deepEqual(first.content[0].input,{file_path:"task.txt"});
+    messages.push({role:"assistant",content:first.content},{role:"user",content:[{type:"tool_result",tool_use_id:first.content[0].id,content:"NATIVE_READ_42"}]});
+    const second=await call();assert.equal(second.content[0].text,"native read result received");
+    const result=f.requests[1].input.find((v:any)=>v.type==="function_call_output");
+    assert.equal(result.call_id,"call_fixture");assert.equal(result.output,"NATIVE_READ_42");
+    lease.release();assert.deepEqual(f.gateway.state(),{routes:0,requests:0});
+  }finally{globalThis.fetch=originalFetch;await f.close();}
+});
+
 test("structured response requests retain schemas across protocols",()=>{
   const schema={type:"object",properties:{answer:{type:"string"}},required:["answer"],additionalProperties:false};
   const payload:any={};requestOptions("responses",{output_config:{format:{type:"json_schema",schema}}},payload);

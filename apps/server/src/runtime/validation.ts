@@ -202,7 +202,11 @@ export const tools = {
         key,
         title: z.string().trim().min(1).max(160).optional(),
         kind: z.enum(["overview", "decision", "experience", "working"]).optional(),
-        topic: z.string().regex(/^[\p{L}\p{N}_/-]+$/u).max(120).optional(),
+        // JSON Schema has no regex flags; model providers do not all accept JS
+        // Unicode property escapes. Keep the exact check at tool execution.
+        topic: z.string().min(1).max(120)
+          .refine(value => /^[\p{L}\p{N}_/-]+$/u.test(value), "Use letters, numbers, underscores, slashes or hyphens.")
+          .describe("Letters and numbers in any language, underscores, slashes or hyphens only.").optional(),
         sourceRefs: z.array(key).max(30).default([]),
         sourcePaths: z.array(z.string().min(1).max(2000)).max(30).default([]),
         expectedSourceRevisions: z.record(key,key).optional().describe("Exact returned revision for each sourceRef."),
