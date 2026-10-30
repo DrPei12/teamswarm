@@ -428,8 +428,12 @@ export const tools = {
     schema: z.object({ artifactId: key }).strict(),
   },
   team_read_file: {
-    description: "Read a project UTF-8 file and its current hash. Read before editing; use offsets for large files. Private/runtime directories are excluded.",
-    schema: z.object({ path: z.string().min(1).max(2000), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(64000).default(20000) }).strict(),
+    description: "Read a UTF-8 file in the assigned workspace and its current hash. Omit offset and limit to read from the beginning. Pagination uses character positions, not line numbers. When truncated is true, read the remaining content before quoting the full file. Private/runtime directories are excluded.",
+    schema: z.object({
+      path: z.string().min(1).max(2000).describe("File path relative to the assigned workspace."),
+      offset: z.number().int().min(0).default(0).describe("Zero-based character offset, not a line number. Omit or use 0 to include the first character."),
+      limit: z.number().int().min(1).max(64000).default(20000).describe("Maximum characters to read, not lines. Omit for 20000 characters. For pagination, advance offset by the length of the returned text."),
+    }).strict(),
   },
   team_list_files: {
     description: "List a project directory without private/runtime directories. Paths are relative to the assigned workspace.",
