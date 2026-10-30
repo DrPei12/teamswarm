@@ -6,7 +6,9 @@ TeamSwarm 面向需要跨成员、会话和多轮修改推进代码与文本项�
 
 [English](README.md) · [安装](#install) · [第一个项目](#first-project) · [Harness 与模型](#harnesses-and-models) · [数据与恢复](#data-and-recovery)
 
-[观看产品宣传片 · 36 秒，4K / 120 fps](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-ZH.mp4)
+[![观看 TeamSwarm 宣传片 — 36 秒，4K / 120 fps](.github/media/teamswarm-film-cover-zh.jpg)](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-ZH.mp4)
+
+[▶ 观看宣传片](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-ZH.mp4) · 36 秒 · 4K / 120 fps · [English version](README.md)
 
 - **保持项目决定一致。** 维护带来源的当前项目定义。明确决定采用讨论分支后，将内容融入主线，并在历史中查看文档变化。
 - **接续同一项工作。** 在原工作线程修改成果，跨会话保留要求、文件归属与历史版本。
