@@ -142,12 +142,18 @@ test("closing during listener startup rejects the login and closes the listener"
   try{const pending=auth.start();await auth.close();await assert.rejects(pending,/closing/);}finally{await auth.close();rmSync(root,{recursive:true,force:true});}
 });
 
-test("ChatGPT model choices use visible slugs and display names from the account catalog",async()=>{
+test("ChatGPT model choices retain account reasoning levels independently of Harness inspection",async()=>{
   const root=mkdtempSync(path.join(process.cwd(),".test-chatgpt-models-")),services=fixtureServices();
   const original=services.fetch;
-  services.fetch=async(url,init)=>String(url).endsWith("/models")?Response.json({models:[{slug:"gpt-fixture",display_name:"Fixture GPT",visibility:"list"},{slug:"hidden",visibility:"hide"},{slug:"gpt-fixture",visibility:"list"}]}):original(url,init);
+  services.fetch=async(url,init)=>String(url).endsWith("/models")?Response.json({models:[
+    {slug:"gpt-fixture",display_name:"Fixture GPT",visibility:"list",supported_reasoning_levels:[{effort:"low",description:"Light reasoning"},{effort:"high"},null,{effort:7},{effort:""}]},
+    {slug:"plain-model",visibility:"list"},{slug:"hidden",visibility:"hide"},{slug:"gpt-fixture",visibility:"list"},
+  ]}):original(url,init);
   const auth=new ChatGPTAccounts(root,services);
-  try{const start=await callback(auth,"fixture");assert.equal((await fetch(start.target)).status,200);assert.deepEqual(await auth.models(auth.list()[0].id),[{model:"gpt-fixture",name:"Fixture GPT"}]);}
+  try{const start=await callback(auth,"fixture");assert.equal((await fetch(start.target)).status,200);assert.deepEqual(await auth.models(auth.list()[0].id),[
+    {model:"gpt-fixture",name:"Fixture GPT",reasoningEfforts:[{reasoningEffort:"low",description:"Light reasoning"},{reasoningEffort:"high"}]},
+    {model:"plain-model",name:"plain-model",reasoningEfforts:[]},
+  ]);}
   finally{await auth.close();rmSync(root,{recursive:true,force:true});}
 });
 

@@ -494,7 +494,10 @@ export class ChatGPTAccounts {
     if (!response.ok)
       throw new Error(`ChatGPT model list unavailable (${response.status}).`);
     const data = (await response.json()) as {
-      models?: { slug: string; display_name?: string; visibility?: string }[];
+      models?: {
+        slug: string; display_name?: string; visibility?: string;
+        supported_reasoning_levels?: { effort?: unknown; description?: unknown }[];
+      }[];
     };
     if (!Array.isArray(data.models))
       throw new Error(
@@ -514,6 +517,13 @@ export class ChatGPTAccounts {
       .map((m) => ({
         model: m.slug,
         name: typeof m.display_name === "string" ? m.display_name : m.slug,
+        reasoningEfforts: Array.isArray(m.supported_reasoning_levels)
+          ? m.supported_reasoning_levels.flatMap((level) =>
+              level && typeof level.effort === "string" && level.effort.trim()
+                ? [{ reasoningEffort: level.effort,
+                    ...(typeof level.description === "string" ? { description: level.description } : {}) }]
+                : [])
+          : [],
       }));
   }
   async signOut(id: string) {
