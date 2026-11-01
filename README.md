@@ -25,9 +25,11 @@ Download the Windows x64 installer and `SHA256SUMS.txt` from the same [GitHub Re
 
 | Platform | Format | Availability |
 |---|---|---|
-| Windows x64 | NSIS `.exe` | Release download; installation and upgrade verified |
+| Windows x64 | NSIS `.exe` | Release installer; validation scope below |
 | Linux x64 | AppImage, DEB | Source build; native installation and runtime verification pending |
 | macOS Apple Silicon | DMG, ZIP | Source build; native installation and runtime verification pending |
+
+**Windows validation for 0.6.0:** Source checks, production builds and desktop packaging passed. Installation, upgrade and uninstall lifecycle validation remains pending.
 
 The Windows installer is unsigned and Windows displays an unknown publisher. Compare its hash with the release checksum file:
 
@@ -137,7 +139,7 @@ For environment credentials, set a variable such as `DEEPSEEK_API_KEY` before st
 
 In **Resources and allocation**, work-specific resources take precedence over member defaults. Each attempt captures its actual configuration; edits affect subsequent work. Resource export/import carries configuration and secret references. Configure the referenced credentials on the destination device.
 
-**File access** controls read-only or project-write access; **Execution permissions** controls native tool approvals. Codex and Claude Code offer **Request approval**, **Automatic review** and **Full access**; Claude Code also offers **Accept edits**. Settings retain each Harness's native permission structure. Pending requests appear in the Host and relevant member conversation, where users can allow once or decline. Read-only work retains its boundaries, existing resources retain their permissions, and other Harnesses keep their existing native policies.
+**File access** controls read-only or project-write access; **Execution permissions** controls native tool approvals. Codex and Claude Code offer **Request approval**, **Automatic review** and **Full access**. Settings retain each Harness's native permission structure. Pending requests appear in the Host and relevant member conversation, where users can allow once or decline. Read-only work retains its boundaries, existing resources retain their permissions, and other Harnesses keep their existing native policies.
 
 Pi and OpenCode accept **Maximum output tokens** (`maxOutputTokens`, default 8192) and **Context window tokens** (`contextWindowTokens`, default 131072). API connections using protocol translation also accept an output limit. ChatGPT plan connections use the service's output limits and reject a custom output-limit override. Context-window overrides remain specific to Pi and OpenCode. Input, reasoning and output share the model's context capacity; the output limit includes reasoning tokens. Length-limited failures remain visible for recovery.
 

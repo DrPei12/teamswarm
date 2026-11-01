@@ -25,9 +25,11 @@ TeamSwarm 面向本地单用户场景。Harness 使用你配置的账号或 API 
 
 | 平台 | 格式 | 可用范围 |
 |---|---|---|
-| Windows x64 | NSIS `.exe` | Release 下载包，已验证安装与升级 |
+| Windows x64 | NSIS `.exe` | Release 安装包；验证范围见下文 |
 | Linux x64 | AppImage、DEB | 源码构建，原生安装与运行待验证 |
 | macOS Apple Silicon | DMG、ZIP | 源码构建，原生安装与运行待验证 |
+
+**0.6.0 Windows 验证范围：** 源码检查、生产构建和桌面打包检查已通过；安装、升级与卸载的生命周期验收待完成。
 
 Windows 安装器未签名，系统会显示未知发布者。将文件哈希与同版校验文件比较：
 
@@ -134,7 +136,7 @@ ChatGPT 连接采用 [Sign in with ChatGPT](https://developers.openai.com/siwc/t
 
 “执行资源与分配”中的任务资源优先于成员默认。每次执行保存实际配置，编辑影响后续工作。资源导入导出携带配置与密钥引用，目标设备需要单独配置对应凭据。
 
-“文件访问”管理只读或项目读写范围；“执行权限”管理原生工具的批准方式。Codex 与 Claude Code 提供“请求批准”“自动判断”“完全访问”，Claude Code 另有“接受编辑”。配置按 Harness 的原生权限结构保存；待批准操作显示在 Host 和对应成员会话中，可允许一次或拒绝。只读任务继续使用其原有边界，已有资源保留原权限，其他 Harness 沿用各自现有的权限策略。
+“文件访问”管理只读或项目读写范围；“执行权限”管理原生工具的批准方式。Codex 与 Claude Code 提供“请求批准”“自动判断”“完全访问”。配置按 Harness 的原生权限结构保存；待批准操作显示在 Host 和对应成员会话中，可允许一次或拒绝。只读任务继续使用其原有边界，已有资源保留原权限，其他 Harness 沿用各自现有的权限策略。
 
 Pi 和 OpenCode 支持“最大输出 token 数”（`maxOutputTokens`，默认 8192）和“上下文 token 数”（`contextWindowTokens`，默认 131072）。采用协议转换的 API 连接也支持输出限制。ChatGPT 套餐连接采用服务自身的输出限制，自定义输出上限会被拒绝；上下文容量覆盖仍限 Pi 和 OpenCode。输入、推理和输出共享上下文容量，输出限制包含推理 tokens。达到长度限制的失败保留供恢复处理。
 
