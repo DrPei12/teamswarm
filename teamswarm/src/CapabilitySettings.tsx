@@ -251,7 +251,7 @@ export function CapabilitySettings({
                             aria-label={t("Allow {name}", { name: h.name })}
                           >
                             <span className="cap-harness-check" aria-hidden>
-                              {selected && <Check size={13} />}
+                              {selected && <Check size={16} />}
                             </span>
                             <span className="cap-harness-copy">
                               <strong>{h.name}</strong>
@@ -282,7 +282,7 @@ export function CapabilitySettings({
                                 ? "Manage installation"
                                 : "Install on device",
                             )}
-                            <ChevronDown size={12} />
+                            <ChevronDown size={16} />
                           </button>
                         </div>
                         <Disclosure open={manage === h.id}>

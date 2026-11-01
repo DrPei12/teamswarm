@@ -430,10 +430,30 @@ try {
         radius: getComputedStyle(element).borderRadius,
       };
     });
-  assert.equal(metrics.size, "15px");
-  assert.equal(metrics.line, "20px");
-  assert.equal(metrics.radius, "20px");
-  assert(Math.abs(metrics.height - 140) <= 2, JSON.stringify(metrics));
+  assert.equal(metrics.size, "16px");
+  assert.equal(metrics.line, "24px");
+  assert.equal(metrics.radius, "18px");
+  assert(Math.abs(metrics.height - 158) <= 2, JSON.stringify(metrics));
+  const bundledFonts = await page.evaluate(async () => {
+    const loaded = await Promise.all([
+      document.fonts.load('400 16px "Noto Sans SC Variable"', "中文字体检查"),
+      document.fonts.load('600 16px "Noto Sans SC Variable"', "中文字体检查"),
+      document.fonts.load('400 16px "Source Serif 4 Variable"', "Reading"),
+      document.fonts.load(
+        'italic 400 16px "Source Serif 4 Variable"',
+        "Reading",
+      ),
+    ]);
+    return loaded.map(
+      (faces) =>
+        faces.length > 0 && faces.every((face) => face.status === "loaded"),
+    );
+  });
+  assert.deepEqual(
+    bundledFonts,
+    [true, true, true, true],
+    "Bundled Chinese weights and reading fonts must load",
+  );
   await page.screenshot({ path: path.join(root, "composer-1230.png") });
   for (const width of [1024, 760, 390]) {
     await page.setViewportSize({ width, height: 858 });

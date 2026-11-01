@@ -988,7 +988,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 )}
                 <button
                   type="button"
-                  className="execution-settings-trigger"
+                  className="icon-button execution-settings-trigger"
                   onClick={() => {
                     setExecutionTab("harnesses");
                     setExecutionSettings(true);

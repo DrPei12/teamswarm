@@ -161,7 +161,7 @@ export function RuntimeControls({
                     ? effortLabel(config[key])
                     : tr(config[key])}
                 </span>
-                <ChevronDown size={10 * ICON_SCALE} />
+                <ChevronDown size={14 * ICON_SCALE} />
               </button>
             </Popover.Trigger>
             <Popover.Portal>
@@ -226,7 +226,7 @@ export function RuntimeControls({
                     {(key === "harness"
                       ? harnessId(config.harness) === harnessId(value)
                       : config[key] === value) && (
-                      <Check size={13 * ICON_SCALE} />
+                      <Check size={16 * ICON_SCALE} />
                     )}
                   </button>
                 ))}

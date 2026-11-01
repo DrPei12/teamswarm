@@ -1,23 +1,23 @@
 /* Adapted from Caho1/open-claude-ui c1f923a (MIT): cds-theme.css and
    docs/v2/03 compact density. See licenses/open-claude-ui-MIT.txt. */
 :root {
-  --cds-surface-0: #f9f9f7;
-  --cds-surface-1: #fcfcfb;
+  --cds-surface-0: #f2f1ed;
+  --cds-surface-1: #faf9f6;
   --cds-surface-2: #ffffff;
   --cds-surface-3: #ffffff;
   --cds-clay: #d97757;
   --cds-clay-hover: #cc5a36;
   --cds-brand: #c6613f;
-  --cds-border: rgb(21 21 21 / 10%);
-  --cds-border-strong: rgb(21 21 21 / 20%);
+  --cds-border: rgb(21 21 21 / 16%);
+  --cds-border-strong: rgb(21 21 21 / 30%);
   --cds-hairline: 1px;
   --cds-radius-control: 6px;
   --cds-radius-panel: 10px;
   --cds-radius-dialog: 16px;
   --cds-radius-bubble: 18px;
-  --cds-radius-composer: 20px;
-  --composer-font-size: 15px;
-  --composer-line-height: 20px;
+  --cds-radius-composer: 18px;
+  --composer-font-size: 16px;
+  --composer-line-height: 24px;
   --cds-h-control: 24px;
   --cds-h-control-nested: 18px;
   --cds-icon: 16px;
@@ -54,7 +54,8 @@
     0 0 0 1px var(--cds-border), 0 8px 24px rgb(0 0 0 / 10%),
     0 2px 6px rgb(0 0 0 / 5%);
   --cds-shadow-composer:
-    0 4px 20px rgb(0 0 0 / 3.5%), inset 0 0 0 1px var(--cds-border);
+    0 2px 5px rgb(0 0 0 / 3%), 0 8px 24px rgb(0 0 0 / 3%),
+    inset 0 0 0 1px var(--cds-border);
   --cds-shadow-composer-focus:
     0 4px 24px rgb(0 0 0 / 6%), inset 0 0 0 1px var(--cds-border-strong);
   --shell: var(--cds-surface-0);
@@ -62,8 +63,8 @@
   --surface-bottom: var(--cds-surface-1);
   --panel: var(--cds-surface-2);
   --text: #151515;
-  --secondary: #525252;
-  --subtle: #73736c;
+  --secondary: #50504b;
+  --subtle: #696963;
   --hover: rgb(21 21 21 / 5%);
   --active: rgb(21 21 21 / 10%);
   --line: var(--cds-border);
@@ -91,8 +92,8 @@
   --cds-surface-1: #151515;
   --cds-surface-2: #1a1a19;
   --cds-surface-3: #20201f;
-  --cds-border: rgb(255 255 255 / 9%);
-  --cds-border-strong: rgb(255 255 255 / 18%);
+  --cds-border: rgb(255 255 255 / 15%);
+  --cds-border-strong: rgb(255 255 255 / 27%);
   --cds-shadow-popover:
     inset 0 0 0 1px var(--cds-border), 0 8px 28px rgb(0 0 0 / 35%);
   --cds-shadow-composer:

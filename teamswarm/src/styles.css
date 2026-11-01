@@ -4,38 +4,12 @@
   font-weight: 100 900;
   font-display: swap;
 }
-@font-face {
-  font-family: "Anthropic Sans";
-  src: local("Anthropic Sans");
-  font-weight: 300 800;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Anthropic Sans";
-  src: local("Anthropic Sans Italic");
-  font-weight: 300 800;
-  font-style: italic;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Anthropic Serif";
-  src: local("Anthropic Serif");
-  font-weight: 300 800;
-  font-display: swap;
-}
-@font-face {
-  font-family: "Anthropic Serif";
-  src: local("Anthropic Serif Italic");
-  font-weight: 300 800;
-  font-style: italic;
-  font-display: swap;
-}
 :root {
   --font-scale: 1;
   --icon-scale: 1;
   --font-ui:
-    "Anthropic Sans", "Inter Variable", "Noto Sans SC", ui-sans-serif,
-    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "PingFang TC",
+    "Inter Variable", "Noto Sans SC Variable", ui-sans-serif, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", "PingFang SC", "PingFang TC",
     "Hiragino Sans", "Apple SD Gothic Neo", "Kohinoor Devanagari",
     "Kohinoor Bangla", "Kohinoor Telugu", "Tamil Sangam MN",
     "Kohinoor Gujarati", "Malayalam Sangam MN", "Nirmala UI",
@@ -47,26 +21,28 @@
     "Noto Sans Thai UI", "Noto Sans Thai", Kefa, Ebrima, "Noto Sans Ethiopic",
     "Abyssinica SIL", sans-serif;
   --font-conversation:
-    "Anthropic Serif", "Noto Sans SC", ui-serif, Georgia, "Times New Roman",
-    "Kohinoor Devanagari", "Kohinoor Bangla", "Kohinoor Telugu",
-    "Tamil Sangam MN", "Kohinoor Gujarati", "Malayalam Sangam MN", "Nirmala UI",
-    "Noto Sans Devanagari UI", "Noto Sans Devanagari", "Noto Sans Bengali UI",
-    "Noto Sans Bengali", "Noto Sans Telugu UI", "Noto Sans Telugu",
-    "Noto Sans Tamil UI", "Noto Sans Tamil", "Noto Sans Gujarati UI",
-    "Noto Sans Gujarati", "Noto Sans Kannada UI", "Noto Sans Kannada",
-    "Noto Sans Malayalam UI", "Noto Sans Malayalam", Thonburi, "Leelawadee UI",
-    "Noto Sans Thai UI", "Noto Sans Thai", Kefa, Ebrima, "Noto Sans Ethiopic",
-    "Abyssinica SIL", serif;
+    "Source Serif 4 Variable", "Noto Sans SC Variable", ui-serif, Georgia,
+    "Times New Roman", "Kohinoor Devanagari", "Kohinoor Bangla",
+    "Kohinoor Telugu", "Tamil Sangam MN", "Kohinoor Gujarati",
+    "Malayalam Sangam MN", "Nirmala UI", "Noto Sans Devanagari UI",
+    "Noto Sans Devanagari", "Noto Sans Bengali UI", "Noto Sans Bengali",
+    "Noto Sans Telugu UI", "Noto Sans Telugu", "Noto Sans Tamil UI",
+    "Noto Sans Tamil", "Noto Sans Gujarati UI", "Noto Sans Gujarati",
+    "Noto Sans Kannada UI", "Noto Sans Kannada", "Noto Sans Malayalam UI",
+    "Noto Sans Malayalam", Thonburi, "Leelawadee UI", "Noto Sans Thai UI",
+    "Noto Sans Thai", Kefa, Ebrima, "Noto Sans Ethiopic", "Abyssinica SIL",
+    serif;
   --font-mono:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     "Courier New", "Noto Sans SC", monospace;
-  --font-caption-size: 12px;
+  --font-caption-size: 13px;
   font-family: var(--font-ui);
+  font-optical-sizing: auto;
   font-feature-settings: "dlig" 0;
   color: var(--text);
   background: var(--shell);
   font-synthesis: none;
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(14px * var(--font-scale));
 }
 * {
   box-sizing: border-box;
@@ -153,7 +129,9 @@ kbd {
 }
 svg {
   display: block;
-  stroke-width: 1.65;
+}
+.lucide {
+  stroke-width: 2;
 }
 .source-icon {
   display: inline-flex;

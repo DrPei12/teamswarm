@@ -1,27 +1,34 @@
 .modal.capability-modal {
-  width: min(900px, calc(100vw - 48px));
-  height: min(760px, calc(100dvh - 64px));
-  max-height: min(860px, calc(100dvh - 64px));
+  inset: 0;
+  margin: auto;
+  transform: none;
+  width: min(800px, calc(100vw - 48px));
+  height: min(680px, calc(100dvh - 64px));
+  max-height: calc(100dvh - 64px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  animation: appear 160ms ease-out;
+}
+.modal.capability-modal[data-state="closed"] {
+  animation: veil-out 120ms ease-in;
 }
 .capability-modal > .modal-header,
 .capability-modal > .cap-footer {
   flex-shrink: 0;
 }
 .capability-modal > .modal-header {
-  padding: 22px 28px 16px;
+  padding: 22px 24px 16px;
 }
 .capability-modal > .modal-header h2 {
-  font-size: 18px;
-  line-height: 26px;
+  font-size: 20px;
+  line-height: 28px;
   font-weight: 600;
 }
 .cap-tabs {
   display: flex;
-  gap: 25px;
-  padding: 0 28px;
+  gap: 24px;
+  padding: 0 24px;
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
@@ -31,15 +38,16 @@
   border: 0;
   border-bottom: 2px solid transparent;
   color: var(--secondary);
-  font-size: 13px;
+  font-size: 14px;
 }
 .cap-tabs button[aria-selected="true"] {
   color: var(--text);
+  font-weight: 600;
   border-bottom-color: var(--accent-solid);
 }
 .cap-body {
   overflow: auto;
-  padding: 24px 28px 28px;
+  padding: 20px 24px 24px;
   min-height: 0;
   flex: 1;
   scrollbar-gutter: stable;
@@ -48,13 +56,13 @@
   margin-bottom: 16px;
 }
 .cap-intro h3 {
-  font-size: 14px;
+  font-size: 15px;
   line-height: 22px;
   font-weight: 550;
   margin: 0;
 }
 .cap-intro p {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--secondary);
   line-height: 1.65;
   margin: 0;
@@ -79,11 +87,14 @@
 .cap-harness + .cap-harness {
   border-top: 1px solid var(--line);
 }
+.cap-harness.selected {
+  background: var(--accent-wash);
+}
 .cap-harness-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 64px;
+  min-height: 68px;
   padding-right: 16px;
 }
 .cap-harness-select {
@@ -106,19 +117,19 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 .cap-harness-select strong {
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 500;
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
 }
 .cap-harness-check {
-  flex: 0 0 18px;
+  flex: 0 0 20px;
   border: 1px solid var(--cds-border-strong);
   border-radius: 5px;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   display: grid;
   place-items: center;
   color: var(--panel);
@@ -128,8 +139,8 @@
   border-color: var(--accent-solid);
 }
 .cap-install-status {
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--secondary);
   display: flex;
   align-items: center;
@@ -149,11 +160,11 @@
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
-  padding: 6px 8px;
-  background: transparent;
-  border: 0;
+  padding: 6px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
   border-radius: var(--cds-radius-control);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 20px;
   color: var(--secondary);
 }
@@ -171,7 +182,7 @@
   display: flex;
   align-items: flex-start;
   gap: 9px;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.7;
   color: var(--secondary);
   margin: 22px 0 0;
@@ -184,7 +195,7 @@
   margin-top: 3px;
 }
 .cap-footer {
-  padding: 15px 28px;
+  padding: 14px 24px;
   border-top: 1px solid var(--line);
   display: flex;
   align-items: center;
@@ -196,15 +207,19 @@
 .cap-footer > div {
   flex: 1;
   color: var(--secondary);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
 }
 .cap-footer button {
   white-space: nowrap;
+  min-height: 38px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 500;
 }
 .cap-footer .primary-button:disabled {
   background: var(--hover);
-  color: var(--subtle);
+  color: var(--secondary);
   cursor: default;
 }
 .cap-success {
@@ -259,18 +274,18 @@
   overflow-wrap: anywhere;
 }
 .cap-connection-header h4 {
-  font-size: 14px;
+  font-size: 15px;
   margin: 0 0 2px;
-  font-weight: 550;
-  line-height: 20px;
+  font-weight: 600;
+  line-height: 22px;
 }
 .cap-connection-header span {
-  font-size: 12px;
+  font-size: 13px;
   line-height: 18px;
   color: var(--secondary);
 }
 .cap-connection-header button {
-  font-size: 12px;
+  font-size: 13px;
 }
 .cap-model-chips {
   display: flex;
@@ -294,7 +309,7 @@
   border: 1px solid var(--line);
   background: var(--surface-top);
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 13px;
   padding: 5px 8px;
   overflow-wrap: anywhere;
 }
@@ -313,7 +328,7 @@
   align-items: center;
   justify-content: flex-end;
   gap: 16px;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 18px;
   color: var(--secondary);
   margin-left: 44px;
@@ -343,7 +358,7 @@
   color: var(--secondary);
 }
 .cap-empty p {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--secondary);
 }
 .cap-priority {
@@ -352,7 +367,7 @@
   border: 0;
 }
 .cap-priority legend {
-  font-size: 13px;
+  font-size: 14px;
   margin-bottom: 12px;
   font-weight: 500;
 }
@@ -387,12 +402,12 @@
   margin: 0;
 }
 .cap-priority strong {
-  font-size: 14px;
+  font-size: 15px;
   line-height: 20px;
   font-weight: 500;
 }
 .cap-priority span {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--secondary);
   line-height: 18px;
 }
@@ -411,11 +426,11 @@
   gap: 3px;
 }
 .cap-preference-toggle strong {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 500;
 }
 .cap-preference-toggle small {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--secondary);
   line-height: 18px;
 }
@@ -428,7 +443,7 @@
   flex-direction: column;
   gap: 8px;
   margin-top: 18px;
-  font-size: 13px;
+  font-size: 14px;
 }
 .cap-freeform textarea,
 .cap-field input,
@@ -461,16 +476,16 @@
   flex: 1;
 }
 .cap-current strong {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
 }
 .cap-current p {
   margin: 5px 0 0;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--secondary);
 }
 .cap-current button {
-  font-size: 12px;
+  font-size: 13px;
 }
 .cap-editor-heading {
   flex-shrink: 0;
@@ -521,7 +536,7 @@
   color: var(--secondary);
   padding: 10px 14px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 14px;
 }
 .cap-connection-type button[aria-pressed="true"],
 .cap-account-options button[aria-pressed="true"] {
@@ -533,7 +548,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  font-size: 13px;
+  font-size: 14px;
 }
 .cap-field > span {
   display: flex;
@@ -542,13 +557,13 @@
 }
 .cap-field small {
   color: var(--secondary);
-  font-size: 11px;
+  font-size: 12px;
 }
 .cap-disclosure-trigger {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 12px;
+  font-size: 13px;
   background: none;
   border: 0;
   padding: 0;
@@ -565,7 +580,7 @@
   border-radius: 10px;
 }
 .cap-api-options p {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--secondary);
   margin: 0;
   line-height: 1.6;
@@ -580,7 +595,7 @@
   justify-content: space-between;
 }
 .cap-model-section h4 {
-  font-size: 13px;
+  font-size: 14px;
   margin: 0;
   font-weight: 500;
 }
@@ -615,7 +630,7 @@
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
 }
 .cap-model-select-all,
 .cap-model-row {
@@ -623,7 +638,7 @@
   align-items: center;
   gap: 10px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 14px;
 }
 .cap-model-select-all input,
 .cap-model-row input {
@@ -634,7 +649,7 @@
   accent-color: var(--accent-solid);
 }
 .cap-model-count {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--secondary);
   font-variant-numeric: tabular-nums;
 }
@@ -666,28 +681,28 @@
   overflow-wrap: anywhere;
 }
 .cap-model-row strong {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   line-height: 18px;
 }
 .cap-model-row small {
-  font-size: 12px;
+  font-size: 13px;
   line-height: 17px;
   color: var(--secondary);
 }
 .cap-model-list-empty {
   padding: 30px 14px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--secondary);
   text-align: center;
 }
 .cap-model-error {
   padding: 0 0 10px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--danger);
 }
 .cap-model-section p {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--secondary);
 }
 .cap-model-section .model-picker-trigger {
@@ -702,7 +717,7 @@
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  font-size: 12px;
+  font-size: 13px;
 }
 .cap-codex-account > span {
   flex: 1;

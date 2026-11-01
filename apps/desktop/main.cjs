@@ -380,11 +380,11 @@ async function createWindow() {
     minHeight: 650,
     show: false,
     title: "TeamSwarm",
-    backgroundColor: windowState.dark ? "#151514" : "#f5f5f3",
+    backgroundColor: windowState.dark ? "#151515" : "#faf9f6",
     titleBarStyle: process.platform === "darwin" ? "default" : "hidden",
     titleBarOverlay: process.platform === "darwin" ? undefined : {
-      color: windowState.dark ? "#1b1b19" : "#fcfcfb",
-      symbolColor: windowState.dark ? "#e8ecf4" : "#616d80",
+      color: windowState.dark ? "#151515" : "#faf9f6",
+      symbolColor: windowState.dark ? "#f5f5f5" : "#50504b",
       height: 40,
     },
     icon: app.isPackaged
@@ -536,8 +536,8 @@ ipcMain.on("theme", (event, dark) => {
   if (!trustedIPC(event) || typeof dark !== "boolean") return;
   windowState.dark = dark;
   if (process.platform !== "darwin") mainWindow.setTitleBarOverlay({
-    color: dark ? "#1b1b19" : "#fcfcfb",
-    symbolColor: dark ? "#e8ecf4" : "#616d80",
+    color: dark ? "#151515" : "#faf9f6",
+    symbolColor: dark ? "#f5f5f5" : "#50504b",
     height: 40,
   });
   deferSave();

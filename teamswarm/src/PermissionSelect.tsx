@@ -136,7 +136,7 @@ export function PermissionSelect({
           >
             <Shield size={14} aria-hidden="true" />
             <span>{t(label)}</span>
-            {!unavailable && <ChevronDown size={11} aria-hidden="true" />}
+            {!unavailable && <ChevronDown size={14} aria-hidden="true" />}
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>

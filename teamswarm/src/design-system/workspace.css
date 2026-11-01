@@ -132,7 +132,7 @@
 }
 .recent-chats .nav-row {
   padding-left: 10px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--secondary);
 }
 .recent-chats .nav-row > span {
@@ -150,7 +150,7 @@
 }
 .sidebar-bottom > span {
   color: var(--subtle);
-  font-size: 12px;
+  font-size: 13px;
   flex: 1;
 }
 .help-button {
@@ -184,6 +184,7 @@
   height: 56px;
   flex-basis: 56px;
   padding: 0 20px;
+  gap: 4px;
   border-bottom: var(--cds-hairline) solid var(--line);
 }
 .navigation-toggle {
@@ -191,15 +192,15 @@
   margin-right: 4px;
 }
 .chat-switch {
-  font-size: 13px;
-  font-weight: 550;
+  font-size: 14px;
+  font-weight: 600;
 }
 .chat-switch > .host-heading-mark {
   display: none;
 }
 .topbar .icon-button {
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
 }
 .statusbar {
   height: 28px;
@@ -218,10 +219,10 @@
   scrollbar-gutter: stable;
 }
 .composer-position {
-  width: min(780px, calc(100% - 64px));
+  width: min(760px, calc(100% - 64px));
 }
 .has-chat .messages {
-  width: min(780px, calc(100% - 64px));
+  width: min(760px, calc(100% - 64px));
   padding-top: 32px;
 }
 .has-chat .composer-position {
@@ -238,7 +239,7 @@
   outline: none;
   border-radius: var(--cds-radius-composer);
   background: var(--cds-surface-2);
-  padding: 18px 16px 14px;
+  padding: 20px 18px 14px;
   box-shadow: var(--cds-shadow-composer);
   transition:
     box-shadow var(--cds-dur-base) var(--cds-ease),
@@ -267,9 +268,12 @@
 .composer-surface textarea::placeholder {
   color: var(--subtle);
 }
+.composer-position .composer-surface textarea {
+  min-height: 48px;
+}
 .composer-chin {
-  --cds-h-control: 32px;
-  --cmp-chin-row-h: 32px;
+  --cds-h-control: 36px;
+  --cmp-chin-row-h: 36px;
   --cmp-chin-touch-grow: calc(
     (var(--cds-h-control) - var(--cmp-chin-row-h)) / 2
   );
@@ -289,7 +293,7 @@
   align-items: center;
   flex-wrap: wrap;
   min-height: var(--cmp-chin-row-h);
-  gap: var(--cds-gap-xs);
+  gap: var(--cds-gap-sm);
   padding: 0;
   margin: 0;
 }
@@ -349,9 +353,10 @@
 }
 .runtime-choice {
   min-height: var(--cds-h-control);
-  padding: 2px 5px;
+  padding: 4px 8px;
   border-radius: var(--cds-radius-control);
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 20px;
 }
 .runtime-controls {
   flex-wrap: wrap;
@@ -365,10 +370,11 @@
   color: var(--text);
 }
 .composer-chin .model-picker-trigger.compact {
-  font-weight: 400;
+  font-size: 14px;
+  font-weight: 500;
 }
 .composer-chin .effort-choice {
-  color: var(--subtle);
+  color: var(--secondary);
 }
 .message {
   padding-bottom: 28px;
@@ -444,23 +450,23 @@
   text-align: center;
 }
 .welcome > .swarm-mark {
-  width: 42px;
-  height: 42px;
+  width: 40px;
+  height: 40px;
   color: var(--accent);
   margin: 0 auto 16px;
 }
 .welcome h2 {
-  font-size: clamp(24px, 2.5vw, 32px);
-  font-weight: 500;
-  letter-spacing: -0.8px;
+  font-size: clamp(24px, 2.5vw, 30px);
+  font-weight: 600;
+  letter-spacing: -0.4px;
   line-height: 1.4;
   text-wrap: balance;
 }
 .welcome p {
-  margin-top: 12px;
+  margin-top: 10px;
   color: var(--secondary);
-  font-size: 13px;
-  line-height: 21px;
+  font-size: 14px;
+  line-height: 22px;
 }
 .welcome-actions {
   display: flex;
@@ -473,11 +479,12 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--secondary);
   border-radius: 8px;
   padding: 8px 12px;
-  background: var(--hover);
+  background: var(--panel);
+  box-shadow: inset 0 0 0 1px var(--line);
   transition: background 120ms ease;
 }
 .welcome-actions button:hover {
