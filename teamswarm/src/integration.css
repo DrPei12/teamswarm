@@ -1208,6 +1208,7 @@
   align-items: center;
   gap: 8px;
   width: 100%;
+  min-height: 40px;
   text-align: left;
   border: 0;
   background: none;
@@ -1215,6 +1216,7 @@
   padding: 9px 10px;
   border-radius: 6px;
   font: inherit;
+  line-height: 20px;
 }
 .model-picker-option:hover,
 .model-picker-option:focus-visible {
@@ -1228,7 +1230,7 @@
 }
 .model-picker-option small {
   color: var(--subtle);
-  font-size: 11px;
+  font-size: 12px;
 }
 .model-picker-option span small {
   display: block;

@@ -318,7 +318,9 @@ try {
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.getByRole("button", { name: "Choose model", exact: true }).click();
   await page.getByRole("button", { name: /^OpenAI 3$/ }).click();
-  await page.getByRole("button", { name: /GPT Catalog Reasoning/ }).waitFor();
+  await page
+    .getByRole("button", { name: "GPT Catalog Reasoning", exact: true })
+    .waitFor();
   // Revocation and a completed sign-in update the mounted composer without reload.
   const openConnection = async () => {
     await page

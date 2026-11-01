@@ -72,6 +72,11 @@ export function ModelPicker({
     ).values(),
   ];
   const groups = [...new Set(catalog.map(modelProvider))].sort();
+  const labelCounts = new Map<string, number>();
+  for (const model of catalog) {
+    const label = `${modelProvider(model)}:${model.name || model.model}`;
+    labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+  }
   const filtered = catalog.filter(
     (model) =>
       (!provider || modelProvider(model) === provider) &&
@@ -279,7 +284,9 @@ export function ModelPicker({
                         title={
                           model.unavailable
                             ? t(model.unavailable)
-                            : model.detail
+                            : [model.model, model.detail]
+                                .filter(Boolean)
+                                .join(" · ")
                         }
                         aria-pressed={
                           selectedKey
@@ -288,14 +295,11 @@ export function ModelPicker({
                         }
                       >
                         <span>
-                          {model.name || model.model}
-                          {(!provider || model.name !== model.model) && (
-                            <small>
-                              {!provider ? `${t(modelProvider(model))} · ` : ""}
-                              {model.model}
-                            </small>
-                          )}
-                          {model.detail && <small>{model.detail}</small>}
+                          {(labelCounts.get(
+                            `${modelProvider(model)}:${model.name || model.model}`,
+                          ) ?? 0) > 1 && model.detail
+                            ? `${model.name || model.model} · ${model.detail}`
+                            : model.name || model.model}
                           {model.unavailable && (
                             <small>{t(model.unavailable)}</small>
                           )}

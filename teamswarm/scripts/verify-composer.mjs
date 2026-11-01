@@ -215,7 +215,7 @@ try {
   const saved = await Promise.all([
     save(),
     page
-      .getByRole("button", { name: /qwen-plus secondary connection/ })
+      .getByRole("button", { name: /qwen-plus · secondary connection/ })
       .click(),
   ]);
   assert.equal(saved[0].status(), 200, await saved[0].text());
@@ -254,13 +254,13 @@ try {
   await page.getByRole("button", { name: /^Qwen 2$/ }).click();
   assert.equal(
     await page
-      .getByRole("button", { name: /qwen-plus secondary connection/ })
+      .getByRole("button", { name: /qwen-plus · secondary connection/ })
       .getAttribute("aria-pressed"),
     "true",
   );
   assert.equal(
     await page
-      .getByRole("button", { name: /qwen-plus primary connection/ })
+      .getByRole("button", { name: /qwen-plus · primary connection/ })
       .getAttribute("aria-pressed"),
     "false",
   );
