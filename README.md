@@ -25,11 +25,9 @@ Download the Windows x64 installer and `SHA256SUMS.txt` from the same [GitHub Re
 
 | Platform | Format | Availability |
 |---|---|---|
-| Windows x64 | NSIS `.exe` | Release installer; validation scope below |
-| Linux x64 | AppImage, DEB | Source build; native installation and runtime verification pending |
-| macOS Apple Silicon | DMG, ZIP | Source build; native installation and runtime verification pending |
-
-**Windows validation for 0.6.0:** Source checks, production builds and desktop packaging passed. Installation, upgrade and uninstall lifecycle validation remains pending.
+| Windows x64 | NSIS `.exe` | Release download |
+| Linux x64 | AppImage, DEB | Build from source |
+| macOS Apple Silicon | DMG, ZIP | Build from source |
 
 The Windows installer is unsigned and Windows displays an unknown publisher. Compare its hash with the release checksum file:
 
@@ -101,7 +99,7 @@ Ask in the conversation to “reserve 8 GiB for other apps” or “restore auto
 
 When resources delay tasks, the conversation shows the reason, affected tasks and default action. Running work continues. Users can change the reserve or task plan; without new instructions, tasks stay queued and resume when resources recover. A follow-up notice confirms actual execution. Notices are grouped during one continuous wait, with queue and notification state preserved across service restarts. One Host control turn remains available within actual device headroom so users can reduce an oversized reserve.
 
-Windows provides process-level sampling and owned process-group totals. Other systems currently use device memory and CPU samples with conservative startup estimates; process-level cost learning requires a sampler for that platform.
+Windows uses process-level sampling and process-group totals. Other systems use device memory and CPU samples with startup cost estimates.
 
 <a id="harnesses-and-models"></a>
 ## Harnesses and models
@@ -119,7 +117,7 @@ A harness runs an agent's tools and execution loop. A model connection supplies 
 
 Integration versions are pinned in [config/harnesses.json](config/harnesses.json). Harnesses own their tools, permissions and sessions; independent connections supply models. A connection can be assigned to any of the six harnesses. The local service translates Responses, Chat Completions and Anthropic Messages when their protocols differ.
 
-In Team capabilities, enable harnesses and add model connections separately. Select **ChatGPT → Continue with ChatGPT**, authorize on the official page, load the account's model catalog and choose models for the Host to allocate. Claude Code can use that ChatGPT connection while running its own commands, handling tool results and continuing its native session. **ChatGPT (Codex)** retains the original Codex account path.
+In Team capabilities, enable harnesses and add model connections separately. Select **ChatGPT → Continue with ChatGPT**, authorize on the official page, load the account's model catalog and choose models for the Host to allocate. Claude Code can use that ChatGPT connection while running its own commands, handling tool results and continuing its native session. **ChatGPT (Codex)** uses native Codex account authorization.
 
 ChatGPT connections use independent [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) authorization, account-specific models and authorized plan usage. Windows encrypts renewable credentials with the operating system. Refresh, sign-out and reauthorization are serialized per account. Pending sign-ins can be cancelled and restarted. Sign-out stops local use and requests remote revocation; the interface provides recovery instructions if remote revocation fails.
 
@@ -133,7 +131,7 @@ For an API connection:
 
 For example, a DeepSeek connection uses `https://api.deepseek.com` and Chat Completions. Pi can consume it natively, while Claude Code can use protocol translation. Use a model from the provider's current account model list.
 
-Translation supports text, embedded images, function tools, tool results, streaming and JSON Schema output. Each execution receives a separate route and temporary credential, revoked when execution ends. One service shares one loopback listener, admitting up to 32 simultaneous model requests and 8 per execution route; excess requests receive a busy response. Input is limited to 8 MiB and output to 16 MiB. Native-session model metadata is retained up to 16 MiB; reaching that limit requires a new session and preserves existing records. Provider-hosted tools and exact cross-protocol token counting require separate support; unsupported requests return specific errors.
+Translation supports text, embedded images, function tools, tool results, streaming and JSON Schema output. Each execution receives a separate route and temporary credential, revoked when execution ends. One service shares one loopback listener, admitting up to 32 simultaneous model requests and 8 per execution route; excess requests receive a busy response. Input is limited to 8 MiB and output to 16 MiB. Native-session model metadata is retained up to 16 MiB; reaching that limit requires a new session and preserves existing records. Unsupported requests return specific errors.
 
 For environment credentials, set a variable such as `DEEPSEEK_API_KEY` before starting the service and enter only its name in the resource. `TEAM_CREDENTIAL_FILES` accepts a JSON map of environment-variable names to absolute, one-line secret files.
 
@@ -143,7 +141,7 @@ In **Resources and allocation**, work-specific resources take precedence over me
 
 Pi and OpenCode accept **Maximum output tokens** (`maxOutputTokens`, default 8192) and **Context window tokens** (`contextWindowTokens`, default 131072). API connections using protocol translation also accept an output limit. ChatGPT plan connections use the service's output limits and reject a custom output-limit override. Context-window overrides remain specific to Pi and OpenCode. Input, reasoning and output share the model's context capacity; the output limit includes reasoning tokens. Length-limited failures remain visible for recovery.
 
-For Pi Chat Completions, **Effort** accepts `minimal`, `low`, `medium`, `high`, `xhigh` or `max` when supported by the provider. Translated Responses or Chat Completions connections accept their model's supported effort values independently of the Harness. Leave effort blank for provider defaults. Pi loads applicable project instructions through its native context loader, without enabling extension code through that loader.
+For Pi Chat Completions, **Effort** accepts `minimal`, `low`, `medium`, `high`, `xhigh` or `max` when supported by the provider. Translated Responses or Chat Completions connections accept their model's supported effort values independently of the Harness. Leave effort blank for provider defaults. Pi loads applicable project instructions from the task workspace.
 
 <a id="work-and-results"></a>
 ## Work and results
@@ -152,7 +150,7 @@ Give the Host a goal, relevant files and completion conditions. Members own expl
 
 The Host and members start with a project overview, current responsibilities and a searchable material index. They retrieve task-related definitions, decisions and original messages as needed; handoffs carry references to the relevant material and its dependencies. Long documents and source lists support version-bound pagination. Project notes retain their original sources and flag changed definitions, work or files for rechecking.
 
-Context selection uses the model's configured or observed capacity, recent native token usage and task relevance. It reserves space for replies and tools, preserves native compaction, and rebuilds a session from saved project material when necessary. Unknown capacity and usage use explicit estimates. Legacy message-count, byte and turn-count limits no longer control Host context selection or session reuse.
+Context selection uses the model's configured or observed capacity, recent native token usage and task relevance. It reserves space for replies and tools, preserves native compaction, and rebuilds a session from saved project material when necessary. Unknown capacity and usage use explicit estimates.
 
 Select a work thread before asking a member a question. Read-only questions inspect existing work; **Continue modifying** creates a subsequent execution with the original verification requirements. Pause or stop conflicting work and wait for its actual state to settle before editing the same files.
 
@@ -162,13 +160,13 @@ Each acceptance criterion records whether it needs semantic inspection or observ
 
 To adopt a discussion branch, state the decision and scope to the Host in that branch. The Host compares the source, branch base and current mainline, then updates the selected project documents. Open the adoption node in history to inspect the decision, sources, ideas and document differences. Request code implementation separately when needed.
 
-Progress updates and completed deliverables have separate entries. Saved artifact versions remain downloadable even when a full workspace snapshot is unavailable. Restoring a file version creates a new current version; active writers, unsaved local edits or a changed current version must be resolved first. Creating a workspace branch from history requires a saved file snapshot. External actions retain their own state.
+Progress updates and completed deliverables have separate entries. Saved artifact versions can be downloaded. Restoring a file version creates a new current version; active writers, unsaved local edits or a changed current version must be resolved first. Creating a workspace branch from history requires a saved file snapshot.
 
 The right file panel browses project files and opens multiple tabs for Markdown, images, PDF, Word, Excel and PowerPoint. Edit code, text, and text or cells in modern Office files; fit previews to the panel or adjust zoom. Unsaved edits remain in local drafts, and saving checks the original file version. Finish or stop active member writes in that workspace before saving.
 
 Manually created history checkpoints have a context menu for deletion while the original history and existing branches remain traceable. Member conversations share the Host composer's Harness, model and effort controls; changes apply to subsequent executions.
 
-Delete an idle member from its card's context menu or conversation header, or ask Host to use `team_remove_member`. Conversations, work and results remain in history. Finish pending work, review, exchanges and messages first. Removed members no longer receive work or messages. The standalone Web service and desktop client serve the same current frontend build.
+Delete an idle member from its card's context menu or conversation header, or ask Host to use `team_remove_member`. Conversations, work and results remain in history. Finish pending work, review, exchanges and messages first. Removed members no longer receive work or messages.
 
 <a id="data-and-recovery"></a>
 ## Data and recovery
