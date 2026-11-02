@@ -165,7 +165,7 @@ export const tools = {
     schema: z.object({ resourceId: key, expectedResourceVersion: z.number().int().positive() }).strict(),
   },
   team_select_resource: {
-    description: "Host only. Select a saved resource for an idle member, nonexecuting unfinished work, or your own FUTURE turns in this branch. Read exact resource version and target allocationRevision/work revision from team_directory_detail/team_read_work. For target=host omit targetId and use the Host's branch allocationRevision. Task choice overrides member default. Running Attempts never change. A configuration change starts a new native session with retained Team context. No credential, endpoint, access or account permission is granted by selecting a resource.",
+    description: "Host only. Select a saved resource for a member's FUTURE Attempts, nonexecuting unfinished work, or your own FUTURE turns in this branch. Member defaults may change while running; active Attempts keep their frozen configuration. Read exact resource version and target allocationRevision/work revision from team_directory_detail/team_read_work. For target=host omit targetId and use the Host's branch allocationRevision. Task choice overrides member default. Running Attempts never change. A configuration change starts a new native session with retained Team context. No credential, endpoint, access or account permission is granted by selecting a resource.",
     schema: z.object({ target: z.enum(["host", "member", "work"]), targetId: key.optional(), expectedRevision: z.number().int().positive(), resourceId: key, expectedResourceVersion: z.number().int().positive(), reason: text }).strict(),
   },
   team_derive_resource: {
