@@ -6,6 +6,14 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+function diagnoseServiceError(error, origin) {
+  const code = typeof error?.code === "string" && /^[A-Z_]{1,60}$/.test(error.code) ? error.code : null;
+  const frames = String(error?.stack ?? "").split("\n").slice(1)
+    .filter(line => line.includes(root) || line.includes("node:"))
+    .map(line => line.replaceAll(root, "<product>")).slice(0, 8);
+  process.send?.({ type: "service-error", origin, code, frames }, () => {});
+}
+process.on("uncaughtExceptionMonitor", diagnoseServiceError);
 const dev = process.argv.includes("--dev");
 const dataDir = dataDirectory();
 process.env.TEAM_HARNESS_HOME ??= path.join(dataDir, "harnesses");
@@ -65,6 +73,7 @@ const server = service.app.listen(port, "127.0.0.1", () => {
   }
 });
 server.on("error", (error) => {
+  diagnoseServiceError(error, "listen");
   console.error(error.message);
   void service.close().finally(() => process.exit(1));
 });

@@ -3,6 +3,7 @@ import { execFile, spawn, type SpawnOptionsWithoutStdio, type ChildProcessWithou
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { once } from "node:events";
 
 // A small bridge to Windows Job Objects. It forwards the existing protocol pipes.
 // Filesystem/network permissions remain the responsibility of the native harness.
@@ -79,12 +80,23 @@ class OwnedProcess {
 
 let bridge: Promise<string> | undefined;
 const groups = new WeakMap<ChildProcessWithoutNullStreams, { cleanup?: Promise<boolean> }>();
-async function stopProcessGroup(pid: number): Promise<boolean> {
+export async function stopProcessGroup(pid: number): Promise<boolean> {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
   try { process.kill(-pid, "SIGKILL"); }
-  catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return true;
+    if (code !== "EPERM") return false;
+  }
   for (let i = 0; i < 40; i++) {
     try { process.kill(-pid, 0); }
-    catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ESRCH") return true;
+      // Darwin can report EPERM while only unreaped zombies remain in a group.
+      // Keep waiting for ESRCH; a permission error alone never confirms exit.
+      if (code !== "EPERM") return false;
+    }
     await new Promise(r => setTimeout(r, 50));
   }
   return false;
@@ -129,12 +141,14 @@ export async function spawnOwned(command: string, args: string[], options: Spawn
     // Terminating the helper closes the last Job handle and terminates descendants.
     const child = spawn(await windowsBridge(), ["run", String(process.pid), command, ...args], { ...options, windowsHide: true, stdio: "pipe" });
     groups.set(child, {});
+    await once(child, "spawn");
     return child;
   }
   const child = spawn(command, args, { ...options, detached: true, stdio: "pipe" });
   const group: { cleanup?: Promise<boolean> } = {};
   groups.set(child, group);
   child.once("exit", () => { if (child.pid) group.cleanup ??= stopProcessGroup(child.pid); });
+  await once(child, "spawn");
   return child;
 }
 
