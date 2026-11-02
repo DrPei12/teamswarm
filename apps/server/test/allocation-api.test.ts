@@ -553,11 +553,13 @@ test("the engine freezes the resource snapshot at Attempt start and keeps histor
     assert.equal(reread.workId, work.id);
     assert.equal(reread.memberId, member.id);
 
-    // Stop the runner before releasing the deferred execution to avoid new work.
-    (runtime as any).closing = true;
+    // Enter normal shutdown before releasing the fixture; close() must still
+    // drain callbacks and unsubscribe the scheduler before the database closes.
+    const shutdown = runtime.close();
     release!();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await shutdown;
   } finally {
+    release?.();
     await runtime.close();
     teams.close();
     const resolved = path.resolve(directory);
@@ -1124,9 +1126,9 @@ test("deleteResource is blocked only by live references and keeps terminal histo
     assert.equal(keptAttempt.allocation?.config.access, "workspace-write");
     assert.equal(keptAttempt.status, "accepted");
 
-    (runtime as any).closing = true;
+    const shutdown = runtime.close();
     release?.();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await shutdown;
   } finally {
     await runtime.close();
     teams.close();

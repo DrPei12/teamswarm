@@ -6,6 +6,7 @@ import { RuntimeStore, activeStates, hash } from "./store.js";
 import { ProjectHistory } from "./project-history.js";
 import { executionConfig, key } from "./validation.js";
 import { executionObservation } from "./resource-planning.js";
+import { attemptExecution, executionConfiguration, executionStatusGuidance, isCurrentAttempt } from "./execution-status.js";
 import { CapabilityStore } from "./capabilities.js";
 import { harnessDescription } from "./harness/description.js";
 import type {
@@ -178,7 +179,7 @@ export class TeamCatalog {
       observation: row ? JSON.parse(String(row.data)) : null,
       availability: row ? "last_observation" : "not_checked",
       guidance:
-        "Use observed capabilities and task requirements. Installation does not prove provider access, quota or task quality.",
+        "Capabilities describe native Harness connections. Shared model connections can apply effort through the model gateway. Read currentExecution and modelRequest for the active turn; nextExecution is a future default. Use observed capabilities and task requirements. Installation does not prove provider access, quota or task quality.",
     };
   }
   harnessIndex(teamId: string) {
@@ -235,6 +236,8 @@ export class TeamCatalog {
     input: z.infer<typeof directoryQuery>,
   ) {
     const scope = this.scoped(teamId, branchId);
+    const executionScope = { works: scope.works,
+      attempts: input.kind === "members" ? this.store.list<Attempt>("attempts", teamId) : [] };
     let items: unknown[];
     if (input.kind === "harnesses")
       items = [...this.harnesses.keys()].map((id) => {
@@ -286,6 +289,7 @@ export class TeamCatalog {
           kind: m.kind,
           responsibility: m.responsibility.slice(0, 160),
           ...this.memberExecution(teamId, branchId, m),
+          ...this.memberExecutionStatus(teamId, branchId, m, executionScope),
           activeCount: works.length,
           workIds: works.slice(-5).map((w) => w.id),
           busy: works.some((w) => activeStates.has(w.status)),
@@ -294,6 +298,7 @@ export class TeamCatalog {
       });
     items = items.filter((item) => matches(item, input.query));
     return {
+      ...(input.kind === "members" ? { executionGuidance: executionStatusGuidance } : {}),
       ...(input.kind === "resources" || input.kind === "models" ? { catalogue: {
         scope: "configured_enabled_choices" as const,
         capabilityVersion: this.capabilities.read(teamId).version,
@@ -306,6 +311,23 @@ export class TeamCatalog {
         input.offset + input.limit < items.length
           ? input.offset + input.limit
           : null,
+    };
+  }
+  memberExecutionStatus(teamId: string, branchId: string, member: Member,
+    snapshot?: { works: Work[]; attempts: Attempt[] }) {
+    const scope = snapshot ?? { works: this.scoped(teamId, branchId).works,
+      attempts: this.store.list<Attempt>("attempts", teamId) };
+    const workIds = new Set(scope.works.filter(w => w.memberId === member.id).map(w => w.id));
+    const attempts = scope.attempts.filter(a => workIds.has(a.workId));
+    const current = attempts.find(isCurrentAttempt);
+    const last = attempts.filter(a => !isCurrentAttempt(a)).at(-1);
+    const next = this.memberExecution(teamId, branchId, member);
+    return {
+      currentExecution: current ? attemptExecution(current) : null,
+      lastExecution: last ? attemptExecution(last) : null,
+      nextExecution: { ...executionConfiguration(next.config), scope: "member_default" as const,
+        allocationRevision: next.allocationRevision, selection: next.selection,
+        available: next.selectionCurrent || next.selectionRetained },
     };
   }
   memberExecution(teamId: string, branchId: string, member: Member) {
@@ -406,6 +428,7 @@ export class TeamCatalog {
     return {
       member,
       allocation: this.memberExecution(teamId, branchId, member),
+      ...this.memberExecutionStatus(teamId, branchId, member),
       recentWorks: works.slice(-10).map((w) => ({
         id: w.id,
         title: w.title,
@@ -421,6 +444,7 @@ export class TeamCatalog {
         workId: a.workId,
         sessionId: a.sessionId,
         status: a.status,
+        execution: attemptExecution(a),
         contextCurrent:
           (a.acknowledgedContextVersion ?? a.contextVersion) === version,
         sameConfig: JSON.stringify(a.config) === JSON.stringify(member.config),
@@ -428,7 +452,7 @@ export class TeamCatalog {
           this.harnesses.get(a.config.harness)?.capabilities.resume === true,
       })),
       guidance:
-        "Recent work is evidence of participation, not guaranteed retained understanding. Resume requires compatible configuration, definition, tools and session state.",
+        executionStatusGuidance + " Recent work is evidence of participation, not guaranteed retained understanding. Resume requires compatible configuration, definition, tools and session state.",
     };
   }
 }

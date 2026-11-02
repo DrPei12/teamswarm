@@ -66,6 +66,85 @@ async function setup() {
 }
 const call = (r: HarnessRequest, name: string, args: unknown) => r.onTool(name, withJudgmentEvidence(name, args), randomUUID());
 
+test("Host and workers expose frozen current executions separately from future defaults and request receipts", async () => {
+  const app = await setup();
+  const releases: (() => void)[] = [];
+  let first: Promise<Work> | undefined;
+  try {
+    const runtime = app.service.runtime, store = runtime.store;
+    const endpoint = `/product/teams/${app.team.id}/branches/${app.branch.id}/host/runtime`;
+    const initial = (await app.request("/product")).body.executions[app.team.id].host;
+    assert.equal((await app.request(endpoint, { expectedVersion: initial.configurationVersion,
+      config: { ...initial.config, model: "host-model", effort: "high" } }, "PUT")).status, 200);
+    app.codex.action = () => new Promise(resolve => releases.push(() => resolve({ status: "completed", text: "Controlled execution completed" })));
+    first = app.send("Inspect current model, Harness and effort.");
+    await until(() => releases.length === 1);
+    const hostRequest = app.codex.requests[0];
+    const input = JSON.parse(hostRequest.input);
+    const own = store.get<Work>("works", app.team.id, input.work.id);
+    assert.equal(input.member.model, "host-model");
+    assert.equal(input.member.effort, "high");
+    assert.equal(input.execution.currentExecution.effort, "high");
+    assert.equal(input.execution.currentExecution.modelRequest, null, "No wire receipt is invented before dispatch");
+    store.publishRequirement(own, "Inspect execution state", []);
+    const run = store.get<any>("runs", app.team.id, own.runId);
+    const worker = store.createMember(app.team.id, "Worker", "Read state", executionConfig.parse({ harness: "codex", model: "worker-current", effort: "low", access: "read-only" }), app.branch.id);
+    const work = store.createWork(run, worker.id, "Read state", "Read state", ["State reported"], [], []);
+    await until(() => releases.length === 2);
+    const workerInput = JSON.parse(app.codex.requests[1].input);
+    assert.equal(workerInput.member.effort, "low");
+    assert.equal(workerInput.execution.currentExecution.model, "worker-current");
+    const host = (await app.request("/product")).body.executions[app.team.id].host;
+    assert.equal((await app.request(endpoint, { expectedVersion: host.configurationVersion,
+      config: { ...host.config, model: "host-next", effort: "low" } }, "PUT")).status, 200);
+    assert.equal((await app.request(`/product/teams/${app.team.id}/members/${worker.id}/runtime`, {
+      expectedVersion: 1, config: { ...worker.config, model: "worker-next", effort: "medium" },
+    }, "PUT")).status, 200);
+    // This synthetic event exercises persistence, while model-gateway tests
+    // compare the real serialized HTTP request against these receipts.
+    const receipt = { id: randomUUID(), at: new Date().toISOString(), source: "model_gateway",
+      harness: "codex", nativeProtocol: "responses", protocol: "responses", model: "host-model",
+      effort: "high", effortParameter: "reasoning.effort", status: "accepted", httpStatus: 200 };
+    hostRequest.onEvent({ type: "model.request", data: receipt });
+    const state: any = await call(hostRequest, "team_state", {});
+    assert.equal(state.self.currentExecution.model, "host-model");
+    assert.equal(state.self.currentExecution.effort, "high");
+    assert.deepEqual(state.self.currentExecution.modelRequest, receipt);
+    assert.equal(state.self.nextExecution.model, "host-next");
+    assert.equal(state.self.nextExecution.effort, "low");
+    const observed = state.members.find((m: any) => m.id === worker.id);
+    assert.equal(observed.currentExecution.model, "worker-current");
+    assert.equal(observed.currentExecution.effort, "low");
+    assert.equal(observed.nextExecution.model, "worker-next");
+    assert.equal(observed.nextExecution.effort, "medium");
+    assert.equal(state.works.find((w: any) => w.id === work.id).execution.effort, "low");
+    const directory: any = await call(hostRequest, "team_directory", { kind: "members" });
+    const entry = directory.items.find((m: any) => m.id === worker.id);
+    assert.deepEqual(entry.currentExecution, observed.currentExecution);
+    assert.deepEqual(entry.nextExecution, observed.nextExecution);
+    const detail: any = await call(hostRequest, "team_directory_detail", { kind: "member", id: worker.id });
+    assert.deepEqual(detail.currentExecution, observed.currentExecution);
+    assert.deepEqual(detail.nextExecution, observed.nextExecution);
+    const workDetail: any = await call(hostRequest, "team_read_work", { workId: work.id });
+    assert.deepEqual(workDetail.currentExecution, observed.currentExecution);
+    assert.equal(workDetail.nextExecution.effort, "medium");
+    const workerState: any = await call(app.codex.requests[1], "team_state", {});
+    assert.equal(workerState.self.currentExecution.model, "worker-current");
+    assert.equal(workerState.self.currentExecution.effort, "low");
+    assert.equal(workerState.self.nextExecution.effort, "medium");
+    assert.equal(JSON.stringify(state.self).includes("credentialEnv"), false);
+    run.state = "paused";
+    store.save("runs", run);
+    releases.forEach(release => release());
+    await first;
+    await until(() => !store.list<Attempt>("attempts", app.team.id).some(a => a.status === "running"));
+    const finished = runtime.catalog.memberExecutionStatus(app.team.id, app.branch.id, store.get<Member>("members", app.team.id, worker.id));
+    assert.equal(finished.currentExecution, null);
+    assert.equal(finished.lastExecution?.effort, "low");
+    assert.equal(finished.nextExecution.effort, "medium");
+  } finally { releases.forEach(release => release()); await first?.catch(() => {}); await app.close(); }
+});
+
 test("Host composer saves next-turn configuration while running, with branch isolation and frozen Attempts", async () => {
   const app = await setup();
   let release: (() => void) | undefined;
@@ -166,7 +245,8 @@ test("running members do not block Host or future member-default changes, and ta
     nextWork.selection = { resourceId: low.id, resourceVersion: 1, reason: "Pinned task" };
     assert.equal(resolveExecution(runtime, app.team.id, currentMember, nextWork).config.effort, "low");
     store.setStatus(nextWork, "superseded");
-    (runtime as any).closing = true;
+    run.state = "paused";
+    store.save("runs", run);
     release!();
     await until(() => store.get<Attempt>("attempts", app.team.id, attempt.id).status !== "running");
   } finally { release?.(); await app.close(); }

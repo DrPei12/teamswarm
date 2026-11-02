@@ -257,7 +257,22 @@ export interface ProjectInsight {
   author: "user" | "host" | "member";
   createdAt: string;
 }
+/** Safe projection of the serialized upstream request, never prompts or credentials. */
+export interface ModelRequestReceipt {
+  id: string;
+  at: string;
+  source: "model_gateway";
+  harness: string;
+  nativeProtocol: string;
+  protocol: string;
+  model: string | null;
+  effort: string | null;
+  effortParameter: string | null;
+  status: "prepared" | "accepted" | "rejected";
+  httpStatus?: number;
+}
 export interface Attempt {
+  modelRequest?: ModelRequestReceipt;
   reviewEvidenceContext?: string;
   reviewInstructionsRevision?: number;
   reviewInstructionsAcknowledgedAt?: string;

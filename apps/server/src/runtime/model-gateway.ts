@@ -16,7 +16,7 @@ import { stream as responses } from "@earendil-works/pi-ai/api/openai-responses"
 import { stream as completions } from "@earendil-works/pi-ai/api/openai-completions";
 import { stream as anthropic } from "@earendil-works/pi-ai/api/anthropic-messages";
 import type { ConnectionProtocol } from "@team/contracts/allocation";
-import type { ExecutionConfig, Harness, HarnessRequest } from "./types.js";
+import type { ExecutionConfig, Harness, HarnessRequest, ModelRequestReceipt } from "./types.js";
 import { ChatGPTAccounts } from "./model-auth.js";
 import {
   decodeRequest,
@@ -82,6 +82,7 @@ type Route = {
   active: number;
   metadata: ModelMetadata;
   sessionId?: string;
+  onRequest?: (receipt: ModelRequestReceipt) => void;
 };
 function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -150,6 +151,7 @@ export class ModelGateway {
     return {
       config: nativeConfig(config, `${base}/${id}/v1`),
       token: route.token,
+      observe: (observer: (receipt: ModelRequestReceipt) => void) => { route.onRequest = observer; },
       acquire: () => {
         if (this.closed) throw new Error("Model connection service is closing.");
         if (this.routes.has(id)) throw new Error("Native model session is busy.");
@@ -166,6 +168,7 @@ export class ModelGateway {
         }
       },
       release: () => {
+        route.onRequest = undefined;
         this.routes.delete(id);
         for (const controller of route.controllers) controller.abort();
       },
@@ -274,6 +277,25 @@ export class ModelGateway {
           ? "responses"
           : "chat-completions";
       const source = c.chatgptAccountId ? "responses" : c.protocol!;
+      // Read the final serialized payload at the transport boundary. Never retain
+      // prompts, tools, endpoints, account IDs, headers or credential material.
+      const observeRequest = (payload: any) => {
+        const parameter = source === "responses" ? "reasoning.effort"
+          : source === "chat-completions" ? "reasoning_effort" : "output_config.effort";
+        const effort = source === "responses" ? payload.reasoning?.effort
+          : source === "chat-completions" ? payload.reasoning_effort : payload.output_config?.effort;
+        const receipt: ModelRequestReceipt = {
+          id: randomUUID(), at: new Date().toISOString(), source: "model_gateway",
+          harness: c.harness, nativeProtocol: wire, protocol: source,
+          model: typeof payload.model === "string" ? payload.model : null,
+          effort: typeof effort === "string" ? effort : null,
+          effortParameter: typeof effort === "string" ? parameter : null,
+          status: "prepared",
+        };
+        route!.onRequest?.(receipt);
+        return (response: Response) => route!.onRequest?.({ ...receipt,
+          status: response.ok ? "accepted" : "rejected", httpStatus: response.status });
+      };
       if (match![2] === "messages/count_tokens") {
         // Claude uses this optional endpoint for context budgeting. Do not invent token counts.
         sendError(
@@ -325,6 +347,7 @@ export class ModelGateway {
         if (c.chatgptAccountId) {
           chatGPTPayload(payload);
         }
+        const accepted = observeRequest(payload);
         const upstream = await fetch(url, {
           method: "POST",
           headers: {
@@ -337,6 +360,7 @@ export class ModelGateway {
           signal,
           redirect: "error",
         });
+        accepted(upstream);
         if (!upstream.ok) {
           const data = await errorBody(upstream);
           sendError(
@@ -449,7 +473,9 @@ export class ModelGateway {
         { status: number; body: unknown; requestId: string | null } | undefined;
       let upstreamId: string | null = null;
       options.fetch = async (input: any, init: any) => {
+        const accepted = observeRequest(JSON.parse(init.body));
         const response = await fetch(input, { ...init, redirect: "error" });
+        accepted(response);
         upstreamStatus = response.status;
         upstreamId = response.headers.get("x-request-id");
         if (!response.ok) {
@@ -625,6 +651,7 @@ export class ModelGateway {
               throw new Error("Session configuration or workspace changed.");
             const lease = previous?.lease ?? await gateway.lease(request.config);
             if (previous) lease.acquire();
+            lease.observe(receipt => request.onEvent({ type: "model.request", data: { ...receipt } }));
             let resourceId: unknown;
             if (request.sessionId)
               lease.session(request.sessionId, request.workspace);

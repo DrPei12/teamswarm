@@ -2,6 +2,7 @@ import { ExecutionApprovals } from "./approvals.js";
 import { bindEvidence, evidenceFor, reviewRequirements, reviewEvidenceContext } from "./acceptance-evidence.js";
 import { BranchAdoption } from "./branch-adoption.js";
 import { ModelGateway } from "./model-gateway.js";
+import { attemptExecution, executionConfiguration, isCurrentAttempt } from "./execution-status.js";
 import { z } from "zod";
 import path from "node:path";
 import { delegationIdentity } from "./delegation.js";
@@ -64,8 +65,8 @@ import type {
   TeamExchangeMessage,
 } from "./types.js";
 
-const hostInstructions = `You are the persistent Host of this Team. Respond in the user's language. Use team_state to inspect current facts. Distinguish discussion from delegation. For an actual task, declare acceptanceEvidence for every criterion: native_check for required command execution and review_judgment for semantic inspection. Classify unresolved legacy or continuation criteria with team_set_acceptance_evidence from the original requirements before verification. File-only production may submit with required native checks pending independent review. Establish effective requirements, organize appropriately scoped work, and use team_delegate. You may create independent members as needed with team_add_member. When the user requests removing a member, use team_remove_member after its work and exchanges have finished; its history is retained. You are read-only; members perform implementation. A review member must use read-only access and a different identity from the producer. Work runs asynchronously; after delegation explain the useful reasoning and expected outcome, then finish this asynchronous turn. You will receive another turn when work finishes. Never poll or sleep waiting for other members. Read current state and explain results without claiming unrecorded progress. Choose verification=self-check for small reversible changes such as icons, copy edits, or scoped documents. Those tasks finish after their producer checks them; do not add a reviewer, test files, backup copies, or process reports unless the actual change needs them. Choose independent for complex, high-impact work or when the user requires independent acceptance. Do not downgrade such requirements. Use team_directory to read saved subscription and API resources; team_check_resource refreshes installation, credentials and native model/effort choices without a paid generation request. Use team_derive_resource to save a different model on an existing configured connection, and team_select_resource to change member defaults for future Attempts, nonexecuting tasks, or your future turns in this branch. Member default changes preserve all running Attempts. Read exact versions and revisions before selecting; never invent availability, move credentials, change endpoints, interrupt an active Attempt, or retry a failed resource in a loop. Tell the user what changed and why. ${resourcePlanningGuidance} For production, supply writePaths with the exact relative files or directories ending in / owned by the work. Members receive private working copies by default. Checked results return to the project only when source file versions still match. A publication conflict preserves the candidate and identifies the changed paths; assign integration from current versions when needed. Read harness:<id>/execution and harness:<id>/permissions through team_context_read before choosing native execution and permissions; expand results/isolation/models only as the task needs. Use each Harness's own policy structure, independently of its model connection. Native permission requests appear in this conversation; use team_pending_permissions and relay the user's reply through team_answer_permission. Keep lightweight tasks on file tools with executionRequirements omitted. Request nativeCommands/childProcesses/scratchWrite/loopback only when required; choose a nativeChecks-capable executor for those checks. For follow-ups, set continuationOf to the precise existing production work ID. Preserve useful user ideas and judgments with team_save_insight and the actual sourceMessageId; proposals stay proposed and must not silently become requirements. Read the project overview and team_context_index before asking the user to repeat decisions. Expand task-related definitions with team_context_read, then attach their contextRefs to delegated work. Maintain sourced overview/decision/experience/working notes with team_host_note when useful knowledge changes. Use the same stable topic keys and state project facts directly; do not produce reading reports or process explanations. Do not spawn native subagents. Keep current user requirements above learned methods. Never accept a result only because a member says it is complete. Diagnose rejected work and delegate a bounded repair with current requirements. Respect the run work limit. Product records and tools are authoritative for ownership and acceptance. Tool permission denials are real boundaries.`;
-const memberInstructions = `You are an independent Team member. Complete only the assigned work and respect the configured workspace and permissions. Read assigned immutable input artifacts with team_read_artifact. Use actual tools to perform and check work. In an isolated working copy, use the Harness's native tools and command loop within your assigned permissions; submit only owned writePaths. In an explicitly shared workspace, native project access is read-only; use team_read_file then team_edit_file/team_write_file for owned changes. The platform enforces shared file ownership and current hashes. Do not bypass a native permission denial. Read your Harness's description through team_context_read when its execution or permission behavior matters. For implementation, submit real UTF-8 artifact paths and a factual summary with team_submit_result, including the input versions actually used. If verification=self-check, include selfChecks with one item for every exact acceptance criterion, in order, describing what you actually checked. Retrieve observed command event IDs with team_review_evidence when available; a semantic self-check may have no event IDs and is only your own judgment. Keep stable artifact filenames; TeamSwarm stores version history. For a small change do not create extra tests, backups, or reports unless necessary for correctness. Do not modify files after submitting. For a review assignment, independently inspect every target artifact and check every acceptance criterion, then record your evidenced decision with team_accept_work. Do not spawn subagents. Do not use another attempt's identity, change acceptance criteria, or claim unavailable observations. Pinned acceptanceEvidence is binding: use fresh native_check events for each required execution criterion. If a criterion is unresolved, ask Host to classify it; do not infer or weaken it. Report a blocker instead of manufacturing success.`;
+const hostInstructions = `You are the persistent Host of this Team. Respond in the user's language. Use team_state to inspect current facts. Read execution.currentExecution or team_state self for this turn's Harness/model/effort and modelRequest receipt; nextExecution is a future default. Native Harness flags do not describe gateway effort. Distinguish discussion from delegation. For an actual task, declare acceptanceEvidence for every criterion: native_check for required command execution and review_judgment for semantic inspection. Classify unresolved legacy or continuation criteria with team_set_acceptance_evidence from the original requirements before verification. File-only production may submit with required native checks pending independent review. Establish effective requirements, organize appropriately scoped work, and use team_delegate. You may create independent members as needed with team_add_member. When the user requests removing a member, use team_remove_member after its work and exchanges have finished; its history is retained. You are read-only; members perform implementation. A review member must use read-only access and a different identity from the producer. Work runs asynchronously; after delegation explain the useful reasoning and expected outcome, then finish this asynchronous turn. You will receive another turn when work finishes. Never poll or sleep waiting for other members. Read current state and explain results without claiming unrecorded progress. Choose verification=self-check for small reversible changes such as icons, copy edits, or scoped documents. Those tasks finish after their producer checks them; do not add a reviewer, test files, backup copies, or process reports unless the actual change needs them. Choose independent for complex, high-impact work or when the user requires independent acceptance. Do not downgrade such requirements. Use team_directory to read saved subscription and API resources; team_check_resource refreshes installation, credentials and native model/effort choices without a paid generation request. Use team_derive_resource to save a different model on an existing configured connection, and team_select_resource to change member defaults for future Attempts, nonexecuting tasks, or your future turns in this branch. Member default changes preserve all running Attempts. Read exact versions and revisions before selecting; never invent availability, move credentials, change endpoints, interrupt an active Attempt, or retry a failed resource in a loop. Tell the user what changed and why. ${resourcePlanningGuidance} For production, supply writePaths with the exact relative files or directories ending in / owned by the work. Members receive private working copies by default. Checked results return to the project only when source file versions still match. A publication conflict preserves the candidate and identifies the changed paths; assign integration from current versions when needed. Read harness:<id>/execution and harness:<id>/permissions through team_context_read before choosing native execution and permissions; expand results/isolation/models only as the task needs. Use each Harness's own policy structure, independently of its model connection. Native permission requests appear in this conversation; use team_pending_permissions and relay the user's reply through team_answer_permission. Keep lightweight tasks on file tools with executionRequirements omitted. Request nativeCommands/childProcesses/scratchWrite/loopback only when required; choose a nativeChecks-capable executor for those checks. For follow-ups, set continuationOf to the precise existing production work ID. Preserve useful user ideas and judgments with team_save_insight and the actual sourceMessageId; proposals stay proposed and must not silently become requirements. Read the project overview and team_context_index before asking the user to repeat decisions. Expand task-related definitions with team_context_read, then attach their contextRefs to delegated work. Maintain sourced overview/decision/experience/working notes with team_host_note when useful knowledge changes. Use the same stable topic keys and state project facts directly; do not produce reading reports or process explanations. Do not spawn native subagents. Keep current user requirements above learned methods. Never accept a result only because a member says it is complete. Diagnose rejected work and delegate a bounded repair with current requirements. Respect the run work limit. Product records and tools are authoritative for ownership and acceptance. Tool permission denials are real boundaries.`;
+const memberInstructions = `You are an independent Team member. Complete only the assigned work and respect the configured workspace and permissions. Read assigned immutable input artifacts with team_read_artifact. Use actual tools to perform and check work. In an isolated working copy, use the Harness's native tools and command loop within your assigned permissions; submit only owned writePaths. In an explicitly shared workspace, native project access is read-only; use team_read_file then team_edit_file/team_write_file for owned changes. The platform enforces shared file ownership and current hashes. Do not bypass a native permission denial. Your execution.currentExecution identifies this turn's Harness, model and effort; team_state self refreshes that snapshot and its modelRequest receipt. nextExecution is a future default. Read your Harness's description through team_context_read when its execution or permission behavior matters. For implementation, submit real UTF-8 artifact paths and a factual summary with team_submit_result, including the input versions actually used. If verification=self-check, include selfChecks with one item for every exact acceptance criterion, in order, describing what you actually checked. Retrieve observed command event IDs with team_review_evidence when available; a semantic self-check may have no event IDs and is only your own judgment. Keep stable artifact filenames; TeamSwarm stores version history. For a small change do not create extra tests, backups, or reports unless necessary for correctness. Do not modify files after submitting. For a review assignment, independently inspect every target artifact and check every acceptance criterion, then record your evidenced decision with team_accept_work. Do not spawn subagents. Do not use another attempt's identity, change acceptance criteria, or claim unavailable observations. Pinned acceptanceEvidence is binding: use fresh native_check events for each required execution criterion. If a criterion is unresolved, ask Host to classify it; do not infer or weaken it. Report a blocker instead of manufacturing success.`;
 
 export class TeamRuntime {
   readonly models: ModelGateway;
@@ -240,8 +241,10 @@ export class TeamRuntime {
       limit: number;
       includeClosed: boolean;
     },
+    caller: Attempt,
   ) {
     const state = this.state(teamId, run);
+    const executionScope = { works: state.works, attempts: this.store.list<Attempt>("attempts", teamId) };
     const candidates = state.works.filter(
       (w) =>
         w.kind !== "host-followup" &&
@@ -287,10 +290,15 @@ export class TeamRuntime {
       runtime: state.runtime,
       deviceResources: this.resources.summary(),
       harnesses: state.harnesses,
+      self: {
+        ...this.catalog.memberExecutionStatus(teamId, this.history.forRun(run).id, this.store.get<Member>("members", teamId, caller.memberId), executionScope),
+        currentExecution: attemptExecution(caller),
+      },
       members: state.members.map((m) => {
         const effective = this.catalog.memberExecution(teamId, this.history.forRun(run).id, m);
         return { id: m.id, name: m.name, kind: m.kind, harness: effective.harness,
-          model: effective.model, access: effective.config.access, selection: effective.selection,
+          model: effective.model, effort: effective.effort, access: effective.config.access, selection: effective.selection,
+          ...this.catalog.memberExecutionStatus(teamId, this.history.forRun(run).id, m, executionScope),
           allocationRevision: effective.allocationRevision, selectionCurrent: effective.selectionCurrent };
       }),
       runs: state.runs.map((r) => ({
@@ -325,8 +333,7 @@ export class TeamRuntime {
           executionRequirements: w.executionRequirements,
           acceptanceEvidence: evidenceFor(w),
           execution: w.attemptId ? (() => {
-            const actual = this.store.get<Attempt>("attempts", teamId, w.attemptId!).config;
-            return { harness: actual.harness, model: actual.model, access: actual.access, source: "attempt" };
+            return attemptExecution(this.store.get<Attempt>("attempts", teamId, w.attemptId!));
           })() : undefined,
           artifactIds: w.artifactIds,
           contextCurrent: w.attemptId
@@ -972,7 +979,7 @@ export class TeamRuntime {
             (t.name !== "team_review_evidence" || !!work.reviewOf || work.verification === "self-check")),
       );
       // A native session may only resume with the same actually exposed tools.
-      attempt.toolContractVersion = hash(JSON.stringify({ tools: executionTools, writePaths: writePaths ?? null, workspace, permissions: attempt.config.permissions ?? null, hostMode: member.kind === "host" ? hostMode(work.kind) : null, dialogueContract: 4 }));
+      attempt.toolContractVersion = hash(JSON.stringify({ tools: executionTools, writePaths: writePaths ?? null, workspace, permissions: attempt.config.permissions ?? null, hostMode: member.kind === "host" ? hostMode(work.kind) : null, dialogueContract: 5 }));
       attempt.nativeSessionScope = harness.sessionScope;
       this.store.save("attempts", attempt);
       let previous =
@@ -1141,6 +1148,11 @@ export class TeamRuntime {
           this.resources.observe(work, attempt, event);
           const current = this.store.get<Work>("works", work.teamId, work.id);
           if (current.attemptId !== attempt.id) return;
+          if (event.type === "model.request") {
+            const a = this.store.get<Attempt>("attempts", work.teamId, attempt.id);
+            a.modelRequest = event.data as unknown as NonNullable<Attempt["modelRequest"]>;
+            this.store.save("attempts", a);
+          }
           if (event.type === "context.usage" || event.type === "context.compacted")
             this.hostContext.observe(work.teamId, attempt.id, event.type === "context.compacted" ? { compacted: true } : event.data);
           if (event.type === "usage") {
@@ -2075,7 +2087,7 @@ export class TeamRuntime {
         );
       }
       if (name === "team_state")
-        return this.modelState(teamId, run, input as any);
+        return this.modelState(teamId, run, input as any, this.store.get<Attempt>("attempts", teamId, attemptId));
       if (name === "team_pending_permissions") return this.nativePermissions.list(teamId, run.conversationId);
       if (name === "team_answer_permission") {
         if (member.kind !== "host" || work.kind === "host-followup" || work.kind === "collaboration")
@@ -2135,8 +2147,16 @@ export class TeamRuntime {
             revision: attempt.reviewInstructionsRevision, instructionsSha256: attempt.instructionsSha256,
           }, work, attempt.id);
         }
+        const targetMember = this.store.get<Member>("members", teamId, target.memberId);
+        const targetAttempt = target.attemptId ? this.store.get<Attempt>("attempts", teamId, target.attemptId) : null;
+        const lastAttempt = targetAttempt && !isCurrentAttempt(targetAttempt) ? targetAttempt
+          : this.store.list<Attempt>("attempts", teamId).filter(a => a.workId === target.id && !isCurrentAttempt(a)).at(-1);
+        const next = resolveExecution(this, teamId, targetMember, target);
         return {
           work: target,
+          currentExecution: targetAttempt && isCurrentAttempt(targetAttempt) ? attemptExecution(targetAttempt) : null,
+          lastExecution: lastAttempt ? attemptExecution(lastAttempt) : null,
+          nextExecution: { ...executionConfiguration(next.config), scope: "work", selection: next.selection, conflict: next.conflict },
           acceptances: this.store
             .list<Acceptance>("acceptances", teamId)
             .filter(

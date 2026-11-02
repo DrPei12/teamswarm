@@ -1,4 +1,5 @@
 import { hostMode } from "./host-communication.js";
+import { executionConfiguration } from "./execution-status.js";
 import { conflict, notFound } from "../errors.js";
 import { RuntimeStore, activeStates, hash } from "./store.js";
 import { TeamCatalog } from "./catalog.js";
@@ -350,6 +351,7 @@ export class HostContext {
         !["accepted", "self_checked", "superseded"].includes(w.status),
     );
     const activeRuns = scope.runs.filter((r) => r.state !== "completed");
+    const nextExecution = this.catalog.memberExecution(work.teamId, project.branchId, member);
     const input: any = {
       ...incoming,
       turnPurpose: host
@@ -358,8 +360,13 @@ export class HostContext {
           ? "collaboration"
           : "task",
       member: { name: member.name, responsibility: member.responsibility, harness: attempt.config.harness,
+        model: attempt.config.model, effort: attempt.config.effort,
         harnessRef: `harness:${attempt.config.harness}`, permissions: attempt.config.permissions ?? null,
         workspace: this.store.workspace(work) },
+      execution: {
+        currentExecution: { ...executionConfiguration(attempt.config), attemptId: attempt.id, modelRequest: attempt.modelRequest ?? null },
+        nextExecution: { ...executionConfiguration(nextExecution.config), available: nextExecution.selectionCurrent || nextExecution.selectionRetained },
+      },
       work,
       requirement: this.store.get(
         "requirements",
@@ -385,6 +392,8 @@ export class HostContext {
                 currentHostConnection: {
                   harness: attempt.config.harness,
                   model: attempt.config.model,
+                  effort: attempt.config.effort,
+                  source: "current_attempt",
                   enabledForNewSelections: this.catalog.capabilities.allowed(
                     work.teamId,
                     attempt.config,
@@ -445,7 +454,7 @@ export class HostContext {
       currentOutputs: [],
       currentOutputCount: collaborationInput.currentOutputCount ?? 0,
       detailAccess:
-        "Use team_context_index to expand a topic or find material for a task/member, and team_context_read to read refs or original messages. Follow partial-body cursors. Read related definitions before assigning or changing work. Shared interface changes belong in the project definition; send affected members the relevant refs. Keep an overview and unresolved decisions in sourced notes. Cite original definitions, work or discussion rather than another summary. Write facts directly and omit process narration. Use team_directory for execution resources and team_read_work for complete work/evidence.",
+        "Use team_context_index/team_context_read for task/member materials and original messages; follow partial-body cursors. Read definitions before changing work; publish shared interfaces as definitions and notify affected members with refs. Keep sourced overview/decision notes and cite originals. Use team_directory_detail for execution status and team_read_work for complete evidence.",
       collaboration: work.interaction
         ? "Answer the incoming messages and finish the turn. No artifact submission or yield checkpoint is needed. File changes require assigned production work."
         : "Handle useful messages at work boundaries. Preserve responsibility and shared interface agreements. End the turn after delegation or submission; use team_yield only to save unfinished work and wait for a specific event.",
@@ -508,6 +517,18 @@ export class HostContext {
         sourceMessageIds: m.data.sourceMessageIds, sourceRefs: m.data.sourceRefs,
       }, ceiling(0.35))) staleNotes.add(m.ref);
     }
+    // Changed goals and requirements precede optional navigation and member
+    // headers. Small additions to the required envelope must not evict them.
+    for (const { material: m } of this.materials.rank(all.filter(m =>
+      m.kind === "document" && ["goal", "requirement"].includes(m.data.kind)), work)) {
+      const overview = m.data.kind === "goal" ? materialHeader(m, work.instructions) : null;
+      const cost = estimateTokens(m.data) + 2 + (overview ? estimateTokens(overview) + 2 : 0);
+      if (seen[m.ref] !== m.revision && estimateTokens(m.data) < budget.inputTokens * 0.25 && used + cost <= ceiling(0.65)) {
+        add(input.project.documents, m.data, ceiling(0.65));
+        if (overview) add(input.navigation.overview, overview, ceiling(0.65));
+        seen[m.ref] = m.revision;
+      }
+    }
     const changes = [
       ...all
         .filter(
@@ -542,6 +563,7 @@ export class HostContext {
     // even when native session overhead leaves a small context allowance.
     const fullCeiling = ceiling(0.65);
     for (const { material: m, score, related } of ranked) {
+      if (m.kind === "document" && input.project.documents.some((d: any) => d.id === m.data.id)) continue;
       const header = materialHeader(m, work.instructions);
       if (
         (m.kind === "document" && m.data.kind === "goal") ||

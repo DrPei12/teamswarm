@@ -65,15 +65,29 @@ test("selected model effort reaches Responses through every native Harness proto
   globalThis.fetch=(input,init)=>originalFetch(String(input)==="https://api.openai.com/v1/responses"?f.config.baseUrl+"/responses":input,init);
   f.gateway.accounts.accessToken=async()=>"fixture-key";
   try {
-    for(const harness of ["codex","claude-code","grok","pi","opencode","deepseek-harness"]){
-      const lease=await f.gateway.lease({...f.config,harness,effort:"low",baseUrl:null,credentialEnv:null,chatgptAccountId:"11111111-1111-4111-8111-111111111111"});
+    for(const harness of ["codex","claude-code","grok","pi","opencode","deepseek-harness"]) for (const effort of ["low", "high", null]) {
+      const receipts: any[] = [];
+      const lease=await f.gateway.lease({...f.config,harness,effort,baseUrl:null,credentialEnv:null,chatgptAccountId:"11111111-1111-4111-8111-111111111111"});
+      lease.observe(receipt => receipts.push(receipt));
       const protocol=lease.config.protocol;
       const endpoint=protocol==="responses"?"/responses":protocol==="anthropic-messages"?"/messages":"/chat/completions";
       const body=protocol==="responses"?{model:"gpt-test",input:[{role:"user",content:"Read the message"}],stream:true}
         :{model:"gpt-test",messages:[{role:"user",content:"Read the message"}],max_tokens:128,stream:true};
       const response=await fetch(lease.config.baseUrl+endpoint,{method:"POST",headers:{authorization:"Bearer "+lease.token,"x-api-key":lease.token,"content-type":"application/json"},body:JSON.stringify(body)});
       assert.equal(response.status,200,await response.text());
-      assert.equal(f.requests.at(-1).reasoning.effort,"low",harness);
+      assert.equal(f.requests.at(-1).reasoning?.effort,effort ?? undefined,harness);
+      assert.equal(receipts.length, 2);
+      assert.equal(receipts[0].status, "prepared");
+      assert.equal(receipts[1].status, "accepted");
+      assert.equal(receipts[1].httpStatus, 200);
+      assert.equal(receipts[1].harness, harness);
+      assert.equal(receipts[1].nativeProtocol, protocol);
+      assert.equal(receipts[1].protocol, "responses");
+      assert.equal(receipts[1].model, f.requests.at(-1).model);
+      assert.equal(receipts[1].effort, f.requests.at(-1).reasoning?.effort ?? null);
+      assert.equal(receipts[1].effortParameter, effort ? "reasoning.effort" : null);
+      assert.equal(JSON.stringify(receipts).includes("fixture-key"), false);
+      assert.equal(JSON.stringify(receipts).includes("Read the message"), false);
       lease.release();
     }
   }finally{globalThis.fetch=originalFetch;await f.close();}

@@ -152,7 +152,7 @@ export const tools = {
   },
   team_directory_detail: {
     description:
-      "Read resource configuration and observed history, model combinations, harness capabilities, member responsibility and session compatibility, or a Run's original requirement and Host outcome. No quality ranking or quota is inferred.",
+      "Read resource/model/Harness details or a Run's requirement and outcome. Member details include responsibility, currentExecution, historical lastExecution, future nextExecution, Harness/model/effort, modelRequest and session compatibility. No quality ranking or quota is inferred.",
     schema: z
       .object({
         kind: z.enum(["resource", "model", "member", "harness", "run"]),
@@ -313,7 +313,7 @@ export const tools = {
   },
   team_state: {
     description:
-      "Read a compact authoritative index of members, production/assistance work, exact IDs, status, blockers, verification and exchange headers. Host transcript and historical delivery bodies are omitted. Use team_read_work for full responsibility, exact criteria, self-checks and formal acceptance/rejection evidence; team_project_context for shared definitions. self_checked is producer verification, accepted is independent acceptance, and submitted alone satisfies neither. Queued is not running.",
+      "Read branch-scoped self and members: currentExecution is frozen, nextExecution is a future default, lastExecution is history; each includes Harness/model/effort and modelRequest. Also returns work IDs/status/blockers and exchanges. Use team_read_work for full instructions and acceptance evidence; team_project_context for definitions. Queued is not running; submitted is unverified; self_checked is producer verification; accepted is independent acceptance. Host transcripts and delivery bodies are omitted.",
     schema: z
       .object({
         query: z.string().max(200).default(""),
@@ -325,7 +325,7 @@ export const tools = {
   },
   team_read_work: {
     description:
-      "Read complete instructions, result, exact acceptance criteria, bound requirement and full formal acceptance/rejection evidence for a Work in this branch. A review Work also includes the decisions recorded for its target. Use this when the compact state index is insufficient.",
+      "Read full instructions, result, criteria, requirement and acceptance/rejection evidence, including review-target decisions. currentExecution is frozen, lastExecution is history, nextExecution follows task selection then member default. Includes Harness/model/effort and captured modelRequest. Work must be in this branch.",
     schema: z.object({ workId: key }).strict(),
   },
   team_define_requirements: {
