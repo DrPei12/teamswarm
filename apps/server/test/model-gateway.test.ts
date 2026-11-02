@@ -11,7 +11,7 @@ import { decodeRequest, encodeResponse, chatGPTPayload, requestOptions } from ".
 import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
 import type { Harness, HarnessRequest } from "../src/runtime/types.js";
 
-function respond(res:ServerResponse, model:string, value:string|{name:string;arguments:Record<string,unknown>}, complete=true, metadata=false){
+function respond(res:ServerResponse, model:string, value:string|{name:string;arguments:Record<string,unknown>}, complete=true, metadata=false, finalDelayMs=0){
   res.writeHead(200,{"content-type":"text/event-stream"});
   const id="resp_fixture", itemId=typeof value==="string"?"msg_fixture":"fc_fixture";
   let sequence = 0;
@@ -33,8 +33,11 @@ function respond(res:ServerResponse, model:string, value:string|{name:string;arg
     send("response.function_call_arguments.done",{output_index:0,item_id:itemId,arguments:item.arguments});
   }
   send("response.output_item.done",{output_index:0,item});
+  const finish = () => {
   if(complete)send("response.completed",{response:{id,object:"response",created_at:Math.floor(Date.now()/1000),model,status:"completed",output:[item],error:null,incomplete_details:null,usage:{input_tokens:20,output_tokens:5,total_tokens:25,input_tokens_details:{cached_tokens:0},output_tokens_details:{reasoning_tokens:0}}}});
   res.end();
+  };
+  if(finalDelayMs) setTimeout(finish, finalDelayMs); else finish();
 }
 async function setup(action:(body:any,res:ServerResponse)=>void){
   const directory=mkdtempSync(path.join(process.cwd(),".test-model-route-"));
@@ -432,5 +435,40 @@ for (const id of ["pi", "deepseek-harness", "grok", "opencode", "claude-code"] a
       assert.ok(events.some(e => e.type === "execution.item" && ["cancelled", "failed"].includes(e.data.nativeOutcome)));
       assert.equal(native.resources().length, 0); assert.deepEqual(f.gateway.state(), { routes: 0, requests: 0 });
     } finally { await native.close(); await request.catch(() => {}); if (old === undefined) delete process.env.TEAM_HARNESS_HOME; else process.env.TEAM_HARNESS_HOME = old; await f.close(); }
+  });
+}
+
+for (const id of ["deepseek-harness", "claude-code", "pi"] as const) {
+  test(`installed ${id} streams public progress before completion and reports Team tools`, { skip: process.env.TEAM_NATIVE_PROGRESS_TEST !== "1", timeout: 70000 }, async () => {
+    const marker = "PUBLIC_PROGRESS_42";
+    let upstreamFinished = 0, calls = 0, bridged = 0, firstDelta = 0;
+    const f = await setup((body, res) => {
+      if (++calls > 6) { res.writeHead(500).end("Fixture request limit"); return; }
+      const tool = body.tools?.find((t: any) => /(?:^|__)team_state$/.test(t.name));
+      if (tool && !body.input.some((v: any) => v.type === "function_call_output"))
+        respond(res, body.model, { name: tool.name, arguments: {} });
+      else {
+        res.once("finish", () => { upstreamFinished = Date.now(); });
+        respond(res, body.model, marker, true, false, 1500);
+      }
+    });
+    const old = process.env.TEAM_HARNESS_HOME; process.env.TEAM_HARNESS_HOME = path.join(f.directory, "sessions");
+    const native = new NativeHarness(id), harness = f.gateway.wrap(native), events: any[] = [];
+    try {
+      const result = await harness.execute({ workspace: f.directory, isolatedWorkspace: true,
+        config: { ...f.config, harness: id }, instructions: "Call team_state once, then report the result.", input: "Read the team state and report completion.",
+        tools: toolSpecs.filter(t => t.name === "team_state"), onSession: () => {}, onTurn: () => {},
+        onEvent: e => { events.push(e); if (e.type === "transcript.delta" && !firstDelta) firstDelta = Date.now(); },
+        onTool: async (tool: string) => { assert.equal(tool, "team_state"); bridged++; return { status: "ready" }; } });
+      writeFileSync(path.join(process.cwd(), ".local", `native-progress-${id}.json`), JSON.stringify({ result, firstDelta, upstreamFinished, bridged, events }, null, 2));
+      assert.equal(result.status, "completed", JSON.stringify(result));
+      assert.match(result.text, new RegExp(marker)); assert.equal(bridged, 1);
+      assert.ok(firstDelta > 0 && firstDelta < upstreamFinished, "Public text must arrive before the model stream ends");
+      const tools = events.filter(e => e.type === "transcript.item" && e.data.title === "team_state");
+      assert.ok(tools.some(e => e.data.status === "running"), "Tool start is visible");
+      assert.ok(tools.some(e => e.data.status === "completed"), "Tool result is visible");
+      const messages = events.filter(e => e.type === "transcript.item" && e.data.kind === "message" && e.data.status === "completed");
+      assert.equal(messages.length, 1); assert.equal(messages[0].data.text, marker);
+    } finally { await native.close(); if (old === undefined) delete process.env.TEAM_HARNESS_HOME; else process.env.TEAM_HARNESS_HOME = old; await f.close(); }
   });
 }

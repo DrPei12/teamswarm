@@ -1,3 +1,4 @@
+import { autonomousWorkers } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
@@ -77,6 +78,7 @@ function fixture() {
       now: () => time,
     },
   });
+  autonomousWorkers(service.runtime);
   const team = service.store.createTeam("Device", ""),
     chat = service.store.createConversation(
       team.id,

@@ -19,9 +19,11 @@ export interface PermissionOptions {
   options: { id: string; label: string; group?: "native"; requiresWrite?: boolean; permissions: NativePermissions }[];
 }
 export interface ExecutionApproval {
+  kind?: "member-permissions";
   id: string; teamId: string; memberId: string; workId: string; attemptId: string;
   tool: string; details: string; createdAt: string;
   status: "pending" | "accepted" | "declined" | "cancelled";
+  memberChange?: { name: string; current: string; requested: string; reason: string };
 }
 export type NativePermissions = { harness: string; [option: string]: unknown };
 export interface ExecutionConfig {
@@ -50,7 +52,8 @@ export interface RuntimeSettings {
   config: ExecutionConfig;
   /** Legacy saved value, ignored. Admission follows current device resources. */
   maxConcurrent?: number;
-  maxWorksPerRun: number;
+  /** Legacy saved value, ignored. Work count does not limit conversation or delegation. */
+  maxWorksPerRun?: number;
   maxTurnsPerWork?: number;
   timeoutSeconds: number;
   /** Legacy persisted setting; context selection now uses model-aware token budgets. */
@@ -73,6 +76,8 @@ export interface Member {
   kind: "host" | "member";
   /** Removed from the active roster; history and attribution stay readable. */
   removedAt?: string;
+  /** Roster entry hidden permanently; attribution and work history remain. */
+  purgedAt?: string;
   config: ExecutionConfig;
   createdAt: string;
   branchId?: string;
@@ -131,6 +136,8 @@ export interface AcceptanceEvidence {
   evidenceType: "review_judgment" | "native_check" | "unresolved";
 }
 export interface Work {
+  /** Work-level native grants belong to the member's permission epoch. */
+  permissionVersion?: number;
   permissions?: NativePermissions;
   /** Publication source; native execution uses the member-owned working copy. */
   sourceWorkspace?: string;
@@ -205,6 +212,8 @@ export interface ExecutionRequirements {
   fileLinks?: boolean;
 }
 export interface MemberMessage {
+  /** Notices and replies do not require an acknowledgement loop. Missing is legacy request behavior. */
+  replyExpected?: boolean;
   sourceWorkId?: string;
   targetWorkId?: string;
   threadId?: string;

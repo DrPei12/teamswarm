@@ -1,4 +1,9 @@
 import { PermissionSelect } from "./PermissionSelect";
+import {
+  MemberPermissionPicker,
+  currentMemberPreset,
+} from "./MemberPermissionPicker";
+import type { MemberPermissionPreset } from "@team/contracts/allocation";
 import { hasPendingRuntimeConfiguration } from "./runtimeConfiguration";
 import { isComposing } from "./design-system/motion";
 import {
@@ -42,9 +47,11 @@ export function RuntimeControls({
   runningConfig,
   config: runtimeConfig,
   showContext = true,
+  showPermissions = true,
   disabled = false,
   running = false,
   onPermissionChange,
+  onMemberPermissionPreset,
   onChange,
   onSettings,
 }: {
@@ -53,8 +60,12 @@ export function RuntimeControls({
   runningConfig?: ExecutionConfig;
   config?: RuntimeConfig;
   showContext?: boolean;
+  showPermissions?: boolean;
   disabled?: boolean;
   running?: boolean;
+  onMemberPermissionPreset?: (
+    preset: MemberPermissionPreset,
+  ) => Promise<unknown>;
   onPermissionChange?: (
     permissions: NonNullable<ExecutionConfig["permissions"]>,
   ) => Promise<unknown>;
@@ -271,26 +282,44 @@ export function RuntimeControls({
           </Popover.Root>
         ),
       )}
-      {executionConfig && (
-        <PermissionSelect
-          compact
-          config={executionConfig}
-          disabled={disabled || saving}
-          running={running}
-          open={!disabled && edit === "permissions"}
-          onOpenChange={(open) =>
-            setEdit((current) =>
-              open ? "permissions" : current === "permissions" ? null : current,
-            )
-          }
-          onChange={(permissions) =>
-            onPermissionChange
-              ? onPermissionChange(permissions)
-              : onChange({ ...config, permissions })
-          }
-          onAdvanced={() => onSettings("runtime")}
-        />
-      )}
+      {showPermissions &&
+        executionConfig &&
+        (onMemberPermissionPreset ? (
+          <MemberPermissionPicker
+            compact
+            teamId={team.id}
+            harness={executionConfig.harness}
+            value={currentMemberPreset(executionConfig)}
+            disabled={disabled || saving}
+            running={running}
+            onChange={(preset) =>
+              onMemberPermissionPreset(preset as MemberPermissionPreset)
+            }
+          />
+        ) : (
+          <PermissionSelect
+            compact
+            config={executionConfig}
+            disabled={disabled || saving}
+            running={running}
+            open={!disabled && edit === "permissions"}
+            onOpenChange={(open) =>
+              setEdit((current) =>
+                open
+                  ? "permissions"
+                  : current === "permissions"
+                    ? null
+                    : current,
+              )
+            }
+            onChange={(permissions) =>
+              onPermissionChange
+                ? onPermissionChange(permissions)
+                : onChange({ ...config, permissions })
+            }
+            onAdvanced={() => onSettings("runtime")}
+          />
+        ))}
       {showContext && (
         <Tooltip.Root>
           <Tooltip.Trigger asChild>

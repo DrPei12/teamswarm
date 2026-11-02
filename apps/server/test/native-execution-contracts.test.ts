@@ -1,3 +1,4 @@
+import { autonomousWorkers } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -20,7 +21,8 @@ function fixture() {
   const harnesses: Harness[] = ["codex", "claude-code", "grok", "pi", "deepseek-harness", "opencode"].map(id => ({
     id, capabilities: { nativeChecks: true }, inspect: async () => ({}), execute: async () => { throw Error("No native loop in contract tests"); }, interrupt: async () => {}, close: async () => {},
   }));
-  const runtime = new TeamRuntime(teams, harnesses); (runtime as any).pump = () => {}; clearInterval((runtime as any).timer);
+  const runtime = new TeamRuntime(teams, harnesses);
+  autonomousWorkers(runtime); (runtime as any).pump = () => {}; clearInterval((runtime as any).timer);
   const { store, history } = runtime;
   const team = teams.createTeam("Native contracts", "Independent members"), conversation = teams.createConversation(team.id, "Discussion", null)!;
   const { expectedVersion, ...settings } = runtimeSettings.parse({ workspace, config: { harness: "pi" }, maxWorksPerRun: 100, expectedVersion: 0 });

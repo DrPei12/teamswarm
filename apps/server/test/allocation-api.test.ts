@@ -206,7 +206,7 @@ test("member and task allocation use stable contract codes and never half-write"
       protocol: "chat-completions",
     });
 
-    // Access escalation: a read-only member cannot adopt a workspace-write edge.
+    // A model resource does not expand the member's access.
     const escalated = await api(
       running,
       `/api/teams/${teamId}/members/${reader.id}/allocation`,
@@ -218,11 +218,12 @@ test("member and task allocation use stable contract codes and never half-write"
         }),
       },
     );
-    assert.equal(escalated.status, 409);
-    assert.equal(escalated.body.error.code, "access_escalation");
+    assert.equal(escalated.status, 200);
     const afterFail = running.service.runtime.store.get<Member>("members", teamId, reader.id);
-    assert.equal(afterFail.selection, undefined);
-    assert.equal(afterFail.allocationVersion, undefined);
+    assert.equal(afterFail.selection?.resourceId, writable.id);
+    assert.equal(afterFail.config.access, "read-only");
+    assert.equal(running.service.runtime.catalog.memberExecution(teamId, running.service.runtime.history.ensure(teamId).id, afterFail).config.access, "read-only");
+    assert.equal(afterFail.allocationVersion, 2);
 
     // Stale expectedRevision is a version conflict, not a silent overwrite.
     const staleRev = await api(
@@ -243,13 +244,13 @@ test("member and task allocation use stable contract codes and never half-write"
     const ok = await api(running, `/api/teams/${teamId}/members/${reader.id}/allocation`, {
       method: "PUT",
       ...json({
-        expectedRevision: 1,
+        expectedRevision: 2,
         selection: { resourceId: readonly.id, resourceVersion: 1, reason: "explicit" },
       }),
     });
     assert.equal(ok.status, 200);
     assert.equal(ok.body.selection.resourceId, readonly.id);
-    assert.equal(ok.body.allocationVersion, 2);
+    assert.equal(ok.body.allocationVersion, 3);
 
     // An unknown resource and an incompatible one fail closed.
     const unknown = await api(
@@ -396,7 +397,7 @@ test("member and task allocation use stable contract codes and never half-write"
       {
         method: "PUT",
         ...json({
-          expectedRevision: 2,
+          expectedRevision: 3,
           selection: { resourceId: defaultEdge.id, resourceVersion: 1, reason: "default" },
         }),
       },

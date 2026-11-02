@@ -72,6 +72,7 @@ export type Definition = {
 export type Member = {
   id: string;
   removedAt?: string;
+  purgedAt?: string;
   teamId: string;
   name: string;
   responsibility: string;
@@ -126,7 +127,7 @@ export type Exchange = {
 };
 export type TranscriptItem = {
   id: string;
-  kind: "message" | "reasoning" | "command" | "tool" | "file";
+  kind: "message" | "reasoning" | "command" | "tool" | "file" | "status";
   text: string;
   title?: string;
   status: "running" | "completed" | "failed" | "interrupted";

@@ -86,7 +86,7 @@
   color: var(--subtle);
 }
 .runtime-popover {
-  z-index: 60;
+  z-index: 350;
   min-width: 218px;
   max-width: calc(100vw - 24px);
   background: var(--panel);

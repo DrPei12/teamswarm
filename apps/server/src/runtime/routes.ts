@@ -4,6 +4,8 @@ import { projectFileRoutes } from "../project-files.js";
 import { Router } from "express";
 import path from "node:path";
 import { z } from "zod";
+import { isDeepStrictEqual } from "node:util";
+import { memberPermissionPreset } from "./member-permissions.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { TeamRuntime } from "./engine.js";
 import { HarnessManagement } from "./harness/management.js";
@@ -49,12 +51,14 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
   const router = Router();
   router.get("/teams/:teamId/approvals", (req, res) => {
     const teamId = param(req.params.teamId);
-    res.json([...runtime.approvals.list(teamId, true), ...runtime.nativePermissions.approvals(teamId)]);
+    res.json([...runtime.approvals.list(teamId, true), ...runtime.nativePermissions.approvals(teamId), ...runtime.memberPermissions.list(teamId)]);
   });
   router.post("/teams/:teamId/approvals/:approvalId", (req, res) => {
-    const input = parse(z.object({ accepted: z.boolean() }).strict(), req.body);
+    const input = parse(z.object({ accepted: z.boolean(), language: z.enum(["en", "zh-CN"]).optional() }).strict(), req.body);
     const teamId = param(req.params.teamId), id = param(req.params.approvalId);
-    res.json(runtime.nativePermissions.has(teamId, id)
+    res.json(runtime.memberPermissions.has(teamId,id)
+      ? runtime.memberPermissions.answer(teamId,id,input.accepted,input.language)
+      : runtime.nativePermissions.has(teamId, id)
       ? runtime.nativePermissions.answerFromUI(teamId, id, input.accepted)
       : runtime.approvals.answer(teamId, id, input.accepted));
   });
@@ -689,25 +693,38 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
     );
   });
   router.post("/teams/:teamId/members", (req, res) => {
-    const input = parse(memberInput.extend({ clientRequestId: key }), req.body);
+    const input = parse(memberInput.extend({ clientRequestId: key,
+      permissionPreset: memberPermissionPreset.or(z.literal("team-default")).optional(),
+      expectedPolicyVersion: z.number().int().min(0).optional() }), req.body);
     const teamId = param(req.params.teamId);
-    runtime.validateConfig(input.config);
     res
       .status(201)
       .json(
-        store.once(`member:${teamId}`, input.clientRequestId, input, () =>
-          store.createMember(
+        store.once(`member:${teamId}`, input.clientRequestId, input, () => {
+          if (input.permissionPreset === "team-default" && input.expectedPolicyVersion !== undefined &&
+              runtime.catalog.capabilities.read(teamId).version !== input.expectedPolicyVersion)
+            throw conflict("version_conflict", "Team permission policy changed. Review the current default before creating a member.");
+          const config = input.permissionPreset ? runtime.memberPermissions.configuration(teamId,input.config,input.permissionPreset) : input.config;
+          runtime.validateConfig(config);
+          return store.createMember(
             teamId,
             input.name,
             input.responsibility,
-            input.config,
-          ),
-        ),
+            config,
+          );
+        }),
       );
   });
   router.delete("/teams/:teamId/members/:memberId", (req, res) => {
     const member = store.removeMember(param(req.params.teamId), param(req.params.memberId));
+    runtime.memberPermissions.cancel(member.teamId, member.id);
     res.json({ id: member.id, removedAt: member.removedAt });
+  });
+  router.delete("/teams/:teamId/members/:memberId/entry", (req,res) => {
+    const input = parse(z.object({ expectedRemovedAt: z.string().min(1).max(100) }).strict(), req.body);
+    const member = store.purgeMemberEntry(param(req.params.teamId), param(req.params.memberId), input.expectedRemovedAt);
+    runtime.memberPermissions.cancel(member.teamId, member.id);
+    res.json({ id: member.id, purgedAt: member.purgedAt });
   });
   router.patch("/teams/:teamId/members/:memberId", (req, res) => {
     const teamId = param(req.params.teamId);
@@ -739,7 +756,11 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
         "Finish or stop this member’s current work before changing its configuration.",
       );
     store.transaction(() => {
+      if (member.config.harness !== input.config.harness || member.config.access !== input.config.access || !isDeepStrictEqual(member.config.permissions,input.config.permissions))
+        member.permissionVersion = (member.permissionVersion ?? 1) + 1;
       Object.assign(member, input);
+      delete member.selection;
+      member.allocationVersion = (member.allocationVersion ?? 1) + 1;
       store.save("members", member);
       store.event(teamId, "member.updated", { memberId: member.id });
     });

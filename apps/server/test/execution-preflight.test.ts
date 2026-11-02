@@ -1,3 +1,4 @@
+import { autonomousWorkers } from "./evidence-fixture.js";
 import { judgmentEvidence, withJudgmentEvidence } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -107,6 +108,7 @@ async function setup() {
     dataDir: path.join(root, "data"),
     harnesses: [harness],
   });
+  autonomousWorkers(service.runtime);
   let server = service.app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const api = async (route: string, body?: unknown, method = body ? "POST" : "GET") => {
@@ -203,6 +205,7 @@ async function setup() {
       assert.ok(db.prepare("SELECT 1 FROM runtime_migrations WHERE version = 2").get());
       db.close();
       service = createApp({ dataDir: path.join(root, "data"), harnesses: [harness] });
+      autonomousWorkers(service.runtime);
       server = service.app.listen(0, "127.0.0.1");
       await new Promise<void>((resolve) => server.once("listening", resolve));
     },

@@ -59,6 +59,7 @@ export const capabilitiesInput = z
         priority: z.enum(["balanced", "economy", "quality"]),
         preferSubscription: z.boolean(),
         instructions: z.string().trim().max(3000),
+        workerPolicy: z.enum(["request", "autonomous"]).default("request"),
       })
       .strict(),
   })
@@ -80,7 +81,10 @@ export class CapabilityStore {
     const row = this.store.db
       .prepare("SELECT data FROM runtime_capabilities WHERE team_id=?")
       .get(teamId);
-    if (row) return JSON.parse(String(row.data));
+    if (row) {
+      const saved = JSON.parse(String(row.data));
+      return { ...saved, preferences: { ...saved.preferences, workerPolicy: saved.preferences.workerPolicy ?? "request" } };
+    }
     const resources = this.legacy(teamId);
     const connections = new Map<string, ModelAccess>();
     const nativeDefaults = new Set<string>();
@@ -147,6 +151,7 @@ export class CapabilityStore {
         priority: "balanced",
         preferSubscription: true,
         instructions: "",
+        workerPolicy: "request",
       },
     };
   }

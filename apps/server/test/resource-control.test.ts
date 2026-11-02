@@ -292,7 +292,7 @@ for (const harnessId of ["codex", "pi", "grok"] as const) {
           await call(r, "team_define_requirements", {content: "Three independent read-only analyses", affectedWorkIds: []});
           const before = store.list<Member>("members", app.team.id).length;
           await assert.rejects(call(r, "team_add_member", {name: "Invalid", responsibility: "Read", resourceId: resource.id,
-            expectedResourceVersion: 1, access: "workspace-write"}), (e: any) => e.code === "access_escalation");
+            expectedResourceVersion: 1, permissionPreset: "full-access"}), (e: any) => e.code === "permission_choice");
           assert.equal(store.list<Member>("members", app.team.id).length, before);
           for (let i = 0; i < 3; i++) {
             const member = await call(r, "team_add_member", {name: `Reader ${i}`, responsibility: `Independent part ${i}`,
@@ -455,8 +455,10 @@ test("Host selections enforce branch, member permissions, optimistic versions, b
       const outsider = store.createMember(app.team.id, "Other branch", "Read", ro.config, "different-branch");
       const select = (id: string, resourceId = ro.id, revision = 1) => call(r, "team_select_resource", { target: "member", targetId: id, expectedRevision: revision, resourceId, expectedResourceVersion: 1, reason: "Fixture" });
       await assert.rejects(select(outsider.id), (e: any) => e.code === "branch_scope");
-      await assert.rejects(select(reader.id, rw.id), (e: any) => e.code === "access_escalation");
-      const selected: any = await select(reader.id); assert.equal(selected.allocationRevision, 2);
+      const narrowed: any = await select(reader.id, rw.id);
+      assert.equal(narrowed.allocationRevision, 2);
+      assert.equal(runtime.catalog.memberExecution(app.team.id, app.branch.id, store.get<Member>("members", app.team.id, reader.id)).config.access, "read-only");
+      const selected: any = await select(reader.id, ro.id, 2); assert.equal(selected.allocationRevision, 3);
       await assert.rejects(select(reader.id), (e: any) => e.code === "version_conflict");
       const waiting = store.createWork(run, reader.id, "Waiting", "Read", [], [], []);
       store.setStatus(waiting, "waiting");
@@ -464,8 +466,8 @@ test("Host selections enforce branch, member permissions, optimistic versions, b
       assert.equal(assigned.selection.resourceId, ro.id);
       const queued = store.get<Work>("works", app.team.id, waiting.id); store.setStatus(queued, "queued");
       const attempt = store.start(queued, ro.config);
-      const nextDefault: any = await select(reader.id, ro.id, 2);
-      assert.equal(nextDefault.allocationRevision, 3);
+      const nextDefault: any = await select(reader.id, ro.id, 3);
+      assert.equal(nextDefault.allocationRevision, 4);
       assert.deepEqual(store.get<Attempt>("attempts", app.team.id, attempt.id).config, attempt.config);
       await assert.rejects(runtime.tool(app.team.id, waiting.id, attempt.id, "team_select_resource", { target: "host", expectedRevision: 1, resourceId: ro.id, expectedResourceVersion: 1, reason: "Forbidden member call" }, randomUUID()), (e: any) => e.code === "host_required");
       await assert.rejects(runtime.tool(app.team.id, waiting.id, attempt.id, "team_check_resource", { resourceId: ro.id, expectedResourceVersion: 1 }, randomUUID()), (e: any) => e.code === "host_required");

@@ -115,10 +115,11 @@ export function transcriptItems(
       items.set(id, item);
     } else if (row.type === "transcript.item") {
       const previous = items.get(id);
+      const { replaceText, ...item } = data;
       items.set(id, {
         ...previous,
-        ...data,
-        text: data.text || previous?.text || "",
+        ...item,
+        text: replaceText ? data.text ?? "" : data.text || previous?.text || "",
       });
     } else if (!items.has(id)) {
       const item = codexDisplayItem(

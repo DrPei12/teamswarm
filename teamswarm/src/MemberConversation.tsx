@@ -790,6 +790,16 @@ function ConversationThread({
                     permissions,
                   )
                 }
+                onMemberPermissionPreset={
+                  member.id.startsWith("host:")
+                    ? undefined
+                    : (preset) =>
+                        product.configureMemberPermissionPreset(
+                          member.teamId,
+                          member.id,
+                          preset,
+                        )
+                }
                 disabled={configuring || sending || !executionConfig}
                 onSettings={onSettings}
                 onChange={async (config, choice) => {

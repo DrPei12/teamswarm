@@ -1,3 +1,4 @@
+import { autonomousWorkers } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync } from "node:fs";
@@ -80,6 +81,7 @@ async function fixture() {
     dataDir: path.join(root, "data"),
     harnesses: [harness],
   });
+  autonomousWorkers(service.runtime);
   const server = service.app.listen(0, "127.0.0.1");
   await new Promise<void>((r) => server.once("listening", r));
   const api = async (route: string, body?: unknown) => {
@@ -876,6 +878,7 @@ test("queued correspondence survives a service restart and keeps the same anchor
       dataDir: path.join(f.root, "data"),
       harnesses: [harness],
     });
+      autonomousWorkers(restarted.runtime);
     await until(() => harness.requests.length === 1);
     const input = JSON.parse(harness.requests[0].input);
     assert.equal(input.incomingMessages[0].id, mail.id);
@@ -952,6 +955,7 @@ test("restart settles legacy queued mail without duplicating work or dropping a 
     await f.service.close();
     const harness = new MailHarness();
     reopened = createApp({ dataDir: path.join(f.root, "data"), harnesses: [harness] });
+      autonomousWorkers(reopened.runtime);
     await until(() => harness.requests.length === 1);
     const messages = reopened.runtime.correspondence.list(f.team.id);
     assert.equal(messages.find(m => m.id === old.id)?.status, "failed");

@@ -91,11 +91,28 @@ export function ApprovalRequests({
                   Edit: "Edit file",
                   team_write_file: "Edit file",
                   team_edit_file: "Edit file",
+                  team_set_member_permissions: "Change member permissions",
                 } as Record<string, string>
               )[request.tool] ?? request.tool,
             )}
           </span>
-          <pre>{approvalDetails(request.details)}</pre>
+          {request.memberChange ? (
+            <div className="approval-member-change">
+              <p>
+                {t(request.memberChange.current)} →{" "}
+                {t(request.memberChange.requested)}
+              </p>
+              <p>{request.memberChange.reason}</p>
+              {request.details && <pre>{approvalDetails(request.details)}</pre>}
+              <small>
+                {t(
+                  "Applies to future executions. Running turns keep their permissions.",
+                )}
+              </small>
+            </div>
+          ) : (
+            <pre>{approvalDetails(request.details)}</pre>
+          )}
           <div className="approval-actions">
             {[false, true].map((accepted) => (
               <button
@@ -108,7 +125,7 @@ export function ApprovalRequests({
                   try {
                     await api(
                       `/teams/${encodeURIComponent(teamId)}/approvals/${encodeURIComponent(request.id)}`,
-                      { accepted },
+                      { accepted, language: workspace.language },
                     );
                     setRequests((old) =>
                       old.filter((a) => a.id !== request.id),
@@ -121,7 +138,13 @@ export function ApprovalRequests({
                   }
                 }}
               >
-                {t(accepted ? "Allow once" : "Decline")}
+                {t(
+                  accepted
+                    ? request.kind === "member-permissions"
+                      ? "Approve change"
+                      : "Allow once"
+                    : "Decline",
+                )}
               </button>
             ))}
           </div>

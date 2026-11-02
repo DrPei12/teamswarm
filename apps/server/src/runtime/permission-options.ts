@@ -60,7 +60,14 @@ export function permissionCatalog(harnesses: Map<string, Harness>): Record<strin
 
 export function memberPermissions(config: ExecutionConfig, member: Member): ExecutionConfig {
   const p = member.permissionOverride;
-  return p?.harness === config.harness ? { ...config, permissions: p } : config;
+  if (p?.harness === config.harness) return { ...config, permissions: p };
+  if (member.config.harness === config.harness && member.config.permissions)
+    return { ...config, permissions: member.config.permissions };
+  if (member.kind === "member") {
+    const { permissions: _resourcePolicy, ...model } = config;
+    return model;
+  }
+  return config;
 }
 
 export function mergePermissionChoice(config: ExecutionConfig, permissions: NativePermissions): ExecutionConfig {

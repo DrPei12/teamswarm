@@ -114,6 +114,9 @@ function ToolDetails({ item }: { item: TranscriptItem }) {
 }
 
 const toolLabels: Record<string, string> = {
+  team_set_member_permissions: "Manage member permissions",
+  team_pending_permissions: "Check pending approvals",
+  team_answer_permission: "Answer permission request",
   team_write_file: "Wrote file",
   team_edit_file: "Edited file",
   team_read_work: "Read work details",
@@ -167,7 +170,7 @@ const ActivityItem = memo(function ActivityItem({
       : item.kind === "file" ||
           ["team_write_file", "team_edit_file"].includes(item.title ?? "")
         ? FileCode2
-        : item.kind === "reasoning"
+        : item.kind === "reasoning" || item.kind === "status"
           ? Circle
           : Wrench;
   const filePath = ["team_write_file", "team_edit_file"].includes(
@@ -176,26 +179,29 @@ const ActivityItem = memo(function ActivityItem({
     ? field(toolValue(item.text), "path").split(/[\\/]/).at(-1)
     : undefined;
   const title =
-    (item.kind === "command"
-      ? t(
-          item.status === "running"
-            ? "Running {command}"
-            : item.status === "completed"
-              ? "Ran {command}"
-              : "Command did not complete: {command}",
-          { command: commandLabel(item.title || item.text) },
-        )
-      : item.title
-        ? [t(toolLabels[item.title] ?? item.title), filePath]
-            .filter(Boolean)
-            .join(" ")
-        : "") ||
-    (item.kind === "reasoning"
-      ? t("Thinking")
-      : item.kind === "file"
-        ? item.changes?.map((c) => c.path.split(/[\\/]/).at(-1)).join(", ") ||
-          t("File changes")
-        : t("Tool activity"));
+    item.kind === "status"
+      ? [t(item.title ?? "Working"), item.text].filter(Boolean).join(" · ")
+      : (item.kind === "command"
+          ? t(
+              item.status === "running"
+                ? "Running {command}"
+                : item.status === "completed"
+                  ? "Ran {command}"
+                  : "Command did not complete: {command}",
+              { command: commandLabel(item.title || item.text) },
+            )
+          : item.title
+            ? [t(toolLabels[item.title] ?? item.title), filePath]
+                .filter(Boolean)
+                .join(" ")
+            : "") ||
+        (item.kind === "reasoning"
+          ? t("Thinking")
+          : item.kind === "file"
+            ? item.changes
+                ?.map((c) => c.path.split(/[\\/]/).at(-1))
+                .join(", ") || t("File changes")
+            : t("Tool activity"));
   if (!canExpandActivity(item))
     return (
       <div className={`activity-item ${item.status}`}>

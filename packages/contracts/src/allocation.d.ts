@@ -1,6 +1,7 @@
 import type { Access, ExecutionConfig, WorkStatus } from "./runtime.js";
 
 export type ConnectionProtocol = "responses" | "chat-completions" | "anthropic-messages";
+export type MemberPermissionPreset = "read-only" | "workspace-write" | "manual" | "auto" | "full-access";
 export interface ModelAccess {
   id: string;
   name: string;
@@ -20,6 +21,7 @@ export interface TeamCapabilities {
     priority: "balanced" | "economy" | "quality";
     preferSubscription: boolean;
     instructions: string;
+    workerPolicy?: "request" | "autonomous";
   };
 }
 

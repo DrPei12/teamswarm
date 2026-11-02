@@ -369,6 +369,91 @@
   white-space: nowrap;
   padding-inline: 4px;
 }
+.member-permission-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+}
+.member-permission-choice select {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  min-width: 0;
+  max-width: 180px;
+  cursor: pointer;
+  padding: 0;
+}
+.member-permission-choice:focus-within {
+  outline: 2px solid var(--cds-brand);
+  outline-offset: 2px;
+}
+.member-permission-choice select:focus {
+  outline: none;
+}
+.member-permission-field select {
+  width: 100%;
+}
+.new-member-runtime {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.new-member-runtime legend,
+.new-member-permissions > span {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.new-member-runtime .runtime-controls {
+  justify-content: flex-start;
+  gap: 4px;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--cds-radius-control);
+}
+.new-member-permissions {
+  display: grid;
+  gap: 8px;
+}
+.new-member-permissions small {
+  color: var(--secondary);
+  line-height: 1.5;
+}
+.deleted-members-body {
+  max-height: min(60vh, 500px);
+  overflow-y: auto;
+}
+.deleted-member-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-block: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.deleted-member-row strong {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.deleted-member-row button {
+  flex-shrink: 0;
+}
+.approval-member-change p {
+  margin-block: 8px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 520px) {
+  .deleted-member-row {
+    flex-wrap: wrap;
+  }
+  .deleted-member-row strong {
+    flex-basis: 100%;
+  }
+}
 .composer-chin .model-picker-trigger.compact,
 .composer-chin .effort-choice {
   padding-inline: 8px;

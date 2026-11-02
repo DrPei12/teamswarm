@@ -358,8 +358,9 @@ export class TeamCatalog {
     if (input.kind === "run") {
       const run = scope.runs.find((r) => r.id === input.id);
       if (!run) throw notFound();
+      const { maxWorksPerRun: _workLimit, maxConcurrent: _concurrency, ...settings } = run.settings;
       return {
-        run,
+        run: { ...run, settings },
         requirement: this.store.get("requirements", teamId, run.requirementId),
         hostWorks: scope.works
           .filter(

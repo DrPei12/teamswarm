@@ -8,6 +8,50 @@ import {
 
 export type Language = "en" | "zh-CN";
 export const zhCN: Record<string, string> = {
+  "Manage member permissions": "修改成员权限",
+  "Check pending approvals": "查看待批准请求",
+  "Answer permission request": "处理权限请求",
+  "Worker permission policy": "成员权限策略",
+  "Approval on demand": "按需授权",
+  "Autonomous execution": "自主执行",
+  "New members start read-only. Host asks in the conversation before expanding permissions.":
+    "新成员默认只读；需要更高权限时，由 Host 在对话中向你申请。",
+  "Host manages worker permissions and prefers the highest supported access for new members.":
+    "Host 自主配置成员权限；新成员默认采用该 Harness 支持的较高权限。",
+  "Read-only": "只读",
+  "Workspace write": "工作区写入",
+  "Member permission strategy": "权限策略",
+  "Team default: {permission}": "跟随团队：{permission}",
+  "Execution configuration": "执行配置",
+  "Review tasks run read-only; the member can use its saved permissions for other work.":
+    "独立验收任务以只读方式执行，成员在其他工作中使用已保存的权限。",
+  "Change member permissions": "修改成员权限",
+  "Approve change": "批准变更",
+  "Applies to future executions. Running turns keep their permissions.":
+    "对后续执行生效，当前回合保持原权限。",
+  "Remove member entry permanently": "永久移除成员入口",
+  'Remove "{name}" from member lists permanently?':
+    "永久移除成员列表中的“{name}”？",
+  "Conversations, results and author records will be kept.":
+    "已有对话、成果和作者记录会保留。",
+  "View history": "查看历史",
+  'Remove "{name}" permanently': "永久移除“{name}”",
+  "Remove permanently": "永久移除",
+  "No deleted members": "没有已删除成员",
+  "Removing…": "正在移除…",
+  "Adding…": "正在添加…",
+  "Starting Harness": "正在启动执行器",
+  "Harness started": "执行器已启动",
+  "Waiting for model": "等待模型响应",
+  "Model response received": "已收到模型响应",
+  "Model request failed": "模型请求失败",
+  "Team permission policy changed. Review the current default before creating a member.":
+    "团队权限策略已变化，请确认当前默认值后再创建成员。",
+  "Member configuration changed. Request approval for the current configuration.":
+    "成员配置已变化，请针对当前配置重新申请授权。",
+  "Member status changed. Reload before removing its entry.":
+    "成员状态已变化，请刷新后再移除入口。",
+
   Models: "模型",
   "Available models": "可用模型",
   "Refresh models": "刷新列表",

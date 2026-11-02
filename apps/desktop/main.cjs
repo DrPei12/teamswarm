@@ -495,8 +495,9 @@ ipcMain.on("pending-input", (event, action, key, value) => {
     /^teamswarm\.(?:member-input|work-input|delivery-view):[0-9a-f-]{36}:(?:host:)?[0-9a-f-]{36}$/.test(
       key,
     );
+  const memberCreateKey = typeof key === "string" && /^teamswarm\.member-create:[0-9a-f-]{36}$/.test(key);
   const harnessPreferenceKey = typeof key === "string" && /^teamswarm:harness-updates:(codex|claude-code|grok|pi|opencode|deepseek-harness)$/.test(key);
-  if (!trustedIPC(event) || (!storageKeys.has(key) && !memberInputKey && !harnessPreferenceKey)) {
+  if (!trustedIPC(event) || (!storageKeys.has(key) && !memberInputKey && !memberCreateKey && !harnessPreferenceKey)) {
     event.returnValue = { error: "Untrusted request." };
     return;
   }

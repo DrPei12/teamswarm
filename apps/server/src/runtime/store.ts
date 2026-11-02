@@ -309,7 +309,10 @@ export class RuntimeStore {
       .all(teamId).map(r => JSON.parse(String(r.data)));
   }
   settings(teamId: string): RuntimeSettings | null {
-    return this.list<RuntimeSettings>("settings", teamId)[0] ?? null;
+    const saved = this.list<RuntimeSettings>("settings", teamId)[0];
+    if (!saved) return null;
+    const { maxWorksPerRun: _workLimit, maxConcurrent: _concurrency, ...current } = saved;
+    return current;
   }
   artifactHeaders(teamId: string): Omit<ArtifactVersion, "content">[] {
     return this.db
@@ -410,9 +413,9 @@ export class RuntimeStore {
           "version_conflict",
           "Runtime settings changed. Reload before saving.",
         );
-      const { maxConcurrent: _legacyConcurrency, ...deviceManagedInput } = input;
+      const { maxConcurrent: _legacyConcurrency, maxWorksPerRun: _legacyWorkLimit, ...deviceManagedInput } = input;
       if (current) {
-        const { maxConcurrent: _concurrency, ...saved } = current;
+        const { maxConcurrent: _concurrency, maxWorksPerRun: _workLimit, ...saved } = current;
         if (isDeepStrictEqual(saved, { ...deviceManagedInput, workspace,
           teamId, version: current.version, policyVersion: current.policyVersion })) return current;
       }
@@ -509,6 +512,20 @@ export class RuntimeStore {
       member.removedAt = timestamp();
       this.save("members", member);
       this.event(teamId, "member.removed", { memberId, name: member.name });
+      return member;
+    });
+  }
+  purgeMemberEntry(teamId: string, memberId: string, expectedRemovedAt: string): Member {
+    return this.transaction(() => {
+      const member = this.get<Member>("members", teamId, memberId);
+      if (member.kind === "host" || !member.removedAt)
+        throw conflict("member_not_removed", "Delete the member from the active roster first.");
+      if (member.removedAt !== expectedRemovedAt)
+        throw conflict("version_conflict", "Member status changed. Reload before removing its entry.");
+      if (member.purgedAt) return member;
+      member.purgedAt = timestamp();
+      this.save("members", member);
+      this.event(teamId, "member.entry_removed", { memberId });
       return member;
     });
   }
@@ -614,15 +631,8 @@ export class RuntimeStore {
           "A work dependency must belong to the same project branch.",
         );
     }
-    if (
-      this.list<Work>("works", run.teamId).filter((w) => w.runId === run.id)
-        .length >= run.settings.maxWorksPerRun
-    )
-      throw conflict(
-        "run_budget",
-        "The work limit for this run has been reached.",
-      );
     const work: Work = {
+      permissionVersion: this.get<Member>("members", run.teamId, memberId).permissionVersion ?? 1,
       id: randomUUID(),
       teamId: run.teamId,
       runId: run.id,

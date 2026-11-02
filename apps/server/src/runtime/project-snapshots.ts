@@ -14,6 +14,7 @@ import {
   fsyncSync,
 } from "node:fs";
 import path from "node:path";
+import { commitPreparedDirectory } from "./prepared-directory.js";
 import { spawnSync } from "node:child_process";
 import { conflict } from "../errors.js";
 
@@ -236,7 +237,7 @@ export class ProjectSnapshots {
       );
     const manifest = this.manifest(id);
     // Private staging is never executed. A failed restore can leave a staging directory for diagnosis.
-    const staging = destination + ".pending-" + randomUUID();
+    const staging = path.join(parent, ".teamswarm-restore-" + randomUUID());
     mkdirSync(staging, { recursive: true });
     for (const file of manifest.files) {
       if (
@@ -259,6 +260,6 @@ export class ProjectSnapshots {
       writeFileSync(target, bytes, { flag: "wx", mode: file.mode });
       if (process.platform !== "win32") chmodSync(target, file.mode);
     }
-    renameSync(staging, destination);
+    commitPreparedDirectory(staging, destination);
   }
 }

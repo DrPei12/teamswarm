@@ -32,6 +32,7 @@ import { grokModelConfig, isolateGrokEnvironment } from "./grok-config.js";
 import { accountHome, subscriptionEnvironment, subscriptionInspection, subscriptionAccounts, subscriptionScope, claudeSubscriptionFlags } from "./subscriptions.js";
 import { rebootConfirmsTermination, systemBootTime } from "./native-recovery.js";
 import { recoverOpenCodeTruncation } from "./opencode-recovery.js";
+import { NativeTranscript } from "./native-transcript.js";
 import {
   childEnvironment,
   nativeEntry,
@@ -277,6 +278,7 @@ export class NativeHarness implements Harness {
           "--verbose",
           "--output-format",
           "stream-json",
+          "--include-partial-messages",
           ...(c.model ? ["--model", c.model] : []),
           ...(subscription && c.effort ? ["--effort", c.effort] : []),
           "--permission-mode",
@@ -523,6 +525,7 @@ export class NativeHarness implements Harness {
         if (observation) emit("context.usage", { ...observation });
       };
       const commands = new CommandObservations(this.id, path.join(home, turnId, "commands"), emit);
+      const transcript = new NativeTranscript(this.id, turnId, emit);
       if (this.id === "opencode") acp = new OpenCodeAcp(child, request, bridge.url, path.join(home, "native-session.json"),
         (event: any) => {
           const safe = redact(event, c.credentialEnv); emit("native.event", { harness: this.id, event: safe }); commands.observe(safe);
@@ -543,6 +546,7 @@ export class NativeHarness implements Harness {
         try {
           event = redact(event, c.credentialEnv);
           emit("native.event", { harness: this.id, event });
+          transcript.observe(event);
           if (this.id === "opencode") { acp!.receive(event); return; }
           commands.observe(event);
           if (this.id === "pi" || this.id === "grok") {

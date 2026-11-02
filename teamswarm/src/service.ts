@@ -848,14 +848,22 @@ class ProductClient {
     responsibility: string,
     config: RuntimeConfig,
     clientRequestId: string,
+    options: {
+      executionConfig?: ExecutionConfig;
+      permissionPreset?:
+        | import("@team/contracts/allocation").MemberPermissionPreset
+        | "team-default";
+      expectedPolicyVersion?: number;
+    } = {},
   ) {
     const settings = this.state.workspace?.executions?.[teamId]?.settings;
     if (!settings) throw new Error("Team settings are not available.");
-    let next = await this.resolveRuntimeChoice(teamId, settings.config, config);
+    const base = options.executionConfig ?? settings.config;
+    let next = await this.resolveRuntimeChoice(teamId, base, config);
     // The form can change Harness and model together; the composer changes one at a time.
     if (
       config.model &&
-      config.model !== settings.config.model &&
+      config.model !== base.model &&
       config.model !== next.model
     )
       next = await chooseModel(
@@ -865,7 +873,13 @@ class ProductClient {
         resolveModelConnection,
       );
     const key = `teamswarm.member-create:${teamId}`;
-    const signature = JSON.stringify({ name, responsibility, config: next });
+    const signature = JSON.stringify({
+      name,
+      responsibility,
+      config: next,
+      permissionPreset: options.permissionPreset,
+      expectedPolicyVersion: options.expectedPolicyVersion,
+    });
     const previous = JSON.parse(inputStorage.getItem(key) ?? "null");
     const request =
       previous?.signature === signature
@@ -879,6 +893,8 @@ class ProductClient {
         name,
         responsibility,
         config: next,
+        permissionPreset: options.permissionPreset,
+        expectedPolicyVersion: options.expectedPolicyVersion,
       },
     );
     if (
@@ -887,6 +903,36 @@ class ProductClient {
     )
       inputStorage.removeItem(key);
     return result;
+  }
+  async resolveMemberConfiguration(
+    teamId: string,
+    previous: ExecutionConfig,
+    config: RuntimeConfig,
+    choice?: ModelChoice,
+  ) {
+    return this.resolveRuntimeChoice(teamId, previous, config, choice);
+  }
+  async configureMemberPermissionPreset(
+    teamId: string,
+    memberId: string,
+    preset: import("@team/contracts/allocation").MemberPermissionPreset,
+  ) {
+    const member = this.state.workspace?.members.find(
+      (m) => m.teamId === teamId && m.id === memberId,
+    );
+    if (!member?.configurationVersion)
+      throw new Error("Member configuration is not available. Try again.");
+    try {
+      return await this.command(
+        `/product/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/permission-preset`,
+        { expectedVersion: member.configurationVersion, preset },
+        "PUT",
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "version_conflict")
+        await this.refresh();
+      throw error;
+    }
   }
   private async resolveRuntimeChoice(
     teamId: string,
@@ -957,6 +1003,17 @@ class ProductClient {
     return this.command<{ id: string; removedAt: string }>(
       `/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}`,
       {},
+      "DELETE",
+    );
+  }
+  async purgeMemberEntry(
+    teamId: string,
+    memberId: string,
+    expectedRemovedAt: string,
+  ) {
+    return this.command(
+      `/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/entry`,
+      { expectedRemovedAt },
       "DELETE",
     );
   }

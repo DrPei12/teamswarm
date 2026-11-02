@@ -1,3 +1,4 @@
+import { DeletedMembers } from "./DeletedMembers";
 import { CanvasViewport } from "./CanvasViewport";
 import { SwarmMark } from "./SwarmMark";
 import { collaborationEdgeTypes, connectionPorts } from "./Visuals";
@@ -46,8 +47,6 @@ import {
 import {
   DetailPanel,
   Modal,
-  Menu,
-  MenuItem,
   IconButton,
   ICON_SCALE,
   useMediaQuery,
@@ -890,33 +889,16 @@ function CanvasContent({
               {tr("Add member")}
             </button>
           )}
-          {mode === "collaboration" &&
-            workspace.members.some(
-              (m) => m.teamId === team.id && m.removedAt,
-            ) && (
-              <Menu
-                label={tr("Deleted members")}
-                trigger={
-                  <button className="text-button">
-                    {tr("Deleted members")}
-                  </button>
-                }
-              >
-                {workspace.members
-                  .filter((m) => m.teamId === team.id && m.removedAt)
-                  .map((m) => (
-                    <MenuItem
-                      key={m.id}
-                      icon={<MessageSquare size={15} />}
-                      onSelect={() =>
-                        setSelection({ kind: "member", id: m.id })
-                      }
-                    >
-                      {m.name}
-                    </MenuItem>
-                  ))}
-              </Menu>
-            )}
+          {mode === "collaboration" && (
+            <DeletedMembers
+              members={workspace.members.filter((m) => m.teamId === team.id)}
+              onView={(m) => setSelection({ kind: "member", id: m.id })}
+              onRemoved={(id) => {
+                if (selection?.kind === "member" && selection.id === id)
+                  setSelection(null);
+              }}
+            />
+          )}
           {mode === "history" && chatId && (
             <button
               className="text-button"

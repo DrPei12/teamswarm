@@ -673,18 +673,6 @@ export class TeamCommunication {
             ["interrupted", "failed"].includes(priorHelper.status)
           )
             continue;
-          if (
-            this.store.workCount(teamId, run.id) >=
-            run.settings.maxWorksPerRun
-          ) {
-            run.state = "paused";
-            this.store.save("runs", run);
-            this.store.event(teamId, "run.budget_reached", {
-              runId: run.id,
-              exchangeId: e.id,
-            });
-            continue;
-          }
           run.state = "active";
           this.store.save("runs", run);
           const helper = this.store.createWork(

@@ -1,3 +1,4 @@
+import { NewMemberDialog } from "./NewMemberDialog";
 import { FieldSelect } from "./FieldSelect";
 import { ApprovalRequests } from "./ApprovalRequests";
 import { Disclosure } from "./Disclosure";
@@ -85,7 +86,6 @@ import {
   type Attachment,
   type DefinitionKind,
   type Message,
-  defaultRuntime,
 } from "./store";
 
 type Screen =
@@ -2051,92 +2051,17 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           </button>
         </div>
       )}
-      <Modal
-        open={screen === "member"}
-        onOpenChange={(open) => !open && setScreen(null)}
-        title={tr("Add member")}
-      >
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (busy) return;
-            const data = new FormData(e.currentTarget),
-              name = String(data.get("name")).trim(),
-              responsibility = String(data.get("responsibility")).trim();
-            const settings = workspace.executions?.[team.id]?.settings;
-            if (!name || !responsibility || !settings) return;
-            const model = String(data.get("model")).trim();
-            setBusy(true);
-            try {
-              await product.addMember(
-                team.id,
-                name,
-                responsibility,
-                {
-                  harness: String(data.get("harness")).trim(),
-                  model,
-                  effort: settings.config.effort ?? "Default",
-                },
-                crypto.randomUUID(),
-              );
-              setScreen(null);
-            } catch (error) {
-              setNotice((error as Error).message);
-            } finally {
-              setBusy(false);
-            }
+      {screen === "member" && (
+        <NewMemberDialog
+          team={team}
+          workspace={workspace}
+          onClose={() => setScreen(null)}
+          onSettings={(tab = "harnesses") => {
+            setExecutionTab(tab);
+            setExecutionSettings(true);
           }}
-        >
-          <div className="form-body">
-            <label>
-              {tr("Name")}
-              <input
-                name="name"
-                placeholder={tr("Member name")}
-                maxLength={60}
-                required
-              />
-            </label>
-            <label>
-              {tr("Responsibility")}
-              <input
-                name="responsibility"
-                placeholder={tr("e.g. Design & typography")}
-                maxLength={160}
-                required
-              />
-            </label>
-            <div className="form-columns">
-              <label>
-                {tr("Harness")}
-                <input
-                  name="harness"
-                  defaultValue={(team.runtime || defaultRuntime).harness}
-                  required
-                />
-              </label>
-              <label>
-                {tr("Model")}
-                <input
-                  name="model"
-                  defaultValue={(team.runtime || defaultRuntime).model}
-                  required
-                />
-              </label>
-            </div>
-          </div>
-          <div className="form-footer">
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => setScreen(null)}
-            >
-              {tr("Cancel")}
-            </button>
-            <button className="primary-button">{tr("Add member")}</button>
-          </div>
-        </form>
-      </Modal>
+        />
+      )}
       <Modal
         open={screen === "plugins"}
         onOpenChange={(open) => !open && setScreen(null)}

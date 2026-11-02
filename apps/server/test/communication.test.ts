@@ -1,3 +1,4 @@
+import { autonomousWorkers } from "./evidence-fixture.js";
 import { judgmentEvidence, withJudgmentEvidence } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -353,6 +354,7 @@ async function setup() {
     dataDir: path.join(root, "data"),
     harnesses: [harness],
   });
+  autonomousWorkers(service.runtime);
   let server = service.app.listen(0, "127.0.0.1");
   await new Promise<void>((r) => server.once("listening", r));
   const api = async (
@@ -459,6 +461,7 @@ async function setup() {
         dataDir: path.join(root, "data"),
         harnesses: [harness],
       });
+      autonomousWorkers(service.runtime);
       server = service.app.listen(0, "127.0.0.1");
       await new Promise<void>((r) => server.once("listening", r));
     },

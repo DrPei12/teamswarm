@@ -1,10 +1,12 @@
 import { permissionCatalog, mergePermissionChoice } from "./runtime/permission-options.js";
 import { nativePermissions } from "./runtime/harness/permissions.js";
 import { setHostConfiguration } from "./runtime/allocation.js";
+import { memberPermissionPreset } from "./runtime/member-permissions.js";
 import { harnessManifest } from "@team/contracts/harness-catalog";
 import express, { Router } from "express";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
 import type {
@@ -235,7 +237,6 @@ export class ProductStore {
           effort: null,
           access: "workspace-write",
         },
-        maxWorksPerRun: 20,
         timeoutSeconds: 600,
       },
       0,
@@ -763,6 +764,7 @@ export class ProductStore {
           ...p.positions[id],
           id,
           removedAt: member.removedAt,
+          purgedAt: member.purgedAt,
           teamId: team.id,
           name: member.kind === "host" ? "Host" : member.name,
           responsibility: member.responsibility,
@@ -1014,6 +1016,16 @@ export function productRoutes(runtime: TeamRuntime): Router {
     },
   );
   router.get("/product/permission-options", (_req, res) => res.json(permissionCatalog(runtime.harnesses)));
+  router.get("/product/teams/:teamId/member-permission-options", (req, res) => {
+    const teamId = parse(key, req.params.teamId);
+    if (!runtime.store.settings(teamId)) throw notFound();
+    const harness = parse(z.string().min(1).max(64), req.query.harness);
+    res.json(runtime.memberPermissions.options(teamId, harness));
+  });
+  router.put("/product/teams/:teamId/members/:memberId/permission-preset", (req, res) => {
+    const input = parse(z.object({ expectedVersion: z.number().int().positive(), preset: memberPermissionPreset }).strict(), req.body);
+    res.json(runtime.memberPermissions.setFromUser(parse(key, req.params.teamId), parse(key, req.params.memberId), input.expectedVersion, input.preset));
+  });
   router.put("/product/teams/:teamId/members/:memberId/permissions", (req, res) => {
     const teamId = parse(key, req.params.teamId), memberId = parse(key, req.params.memberId);
     const input = parse(z.object({ expectedVersion: z.number().int().positive(), branchId: key,
@@ -1040,6 +1052,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
         delete member.selection;
         delete member.permissionOverride;
         member.allocationVersion = version + 1;
+        member.permissionVersion = (member.permissionVersion ?? 1) + 1;
       }
       runtime.store.save("members", member);
       runtime.store.event(teamId, "member.configuration", { memberId, permissions: true });
@@ -1074,6 +1087,8 @@ export function productRoutes(runtime: TeamRuntime): Router {
     // Attempts already running keep their frozen configuration and session.
     // A composer choice replaces only this member's default, never a shared resource.
     runtime.store.transaction(() => {
+      if (member.config.harness !== input.config.harness || !isDeepStrictEqual(member.config.permissions, input.config.permissions))
+        member.permissionVersion = (member.permissionVersion ?? 1) + 1;
       member.config = input.config;
       delete member.selection;
       member.allocationVersion = current.allocationRevision + 1;

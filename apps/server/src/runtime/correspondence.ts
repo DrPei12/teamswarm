@@ -46,6 +46,7 @@ export class Correspondence {
     replyTo?: string,
     sourceWork?: Work,
     targetWorkId?: string,
+    replyExpected?: boolean,
   ): MemberMessage {
     const recipient = this.member(teamId, recipientId);
     this.store.activeMember(teamId, recipient.id);
@@ -66,6 +67,8 @@ export class Correspondence {
         "invalid_reply",
         "Reply to a message received from this member.",
       );
+    if (parent?.replyExpected === false)
+      throw conflict("reply_not_requested", "This message is a notice or completed reply. Do not acknowledge it with another reply; continue useful work.");
     const sourceBranch = sourceWork
       ? this.store.history!.forRun(
           this.store.get<Run>("runs", teamId, sourceWork.runId),
@@ -167,6 +170,7 @@ export class Correspondence {
       threadId: threadOf(base),
       ...(sourceWork ? { sourceWorkId: sourceWork.id } : {}),
       ...(replyTo ? { replyTo } : {}),
+      replyExpected: replyExpected ?? !replyTo,
     };
     this.save(message);
     this.store.event(
@@ -322,30 +326,12 @@ export class Correspondence {
       if (!base) continue;
       const run = this.store.get<Run>("runs", teamId, base.runId);
       if (run.state === "paused") continue;
-      if (
-        this.store.workCount(teamId, run.id) >=
-        run.settings.maxWorksPerRun
-      ) {
-        for (const message of messages) {
-          message.status = "failed";
-          message.error =
-            "This run has reached its work limit. Retry the failed message or ask Host to continue the work.";
-          this.save(message);
-          this.store.event(
-            teamId,
-            "communication.failed",
-            { messageId: message.id, error: message.error },
-            base,
-          );
-        }
-        continue;
-      }
       this.store.transaction(() => {
         const work = this.store.createWork(
           run,
           recipientId,
           "Member conversation",
-          "Respond to the incoming messages in read-only mode. Keep your previous responsibility and accepted artifacts intact. Send requests for project changes to Host for a new verifiable assignment. Use team_message to reply to another member, with replyTo. A user message can be answered normally.",
+          "Handle incoming messages in read-only mode. Keep your previous responsibility and accepted artifacts intact. Send project changes to Host for an assignment. Reply with team_message and replyTo only when replyExpected is not false. Notices and completed replies need no acknowledgement; finish the turn. A user message can be answered normally.",
           [],
           [...new Set([...base.inputs, ...base.artifactIds])],
           [],

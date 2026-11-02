@@ -247,18 +247,20 @@ export function setMemberAllocation(
   const resource = requireResource(deps, teamId, input.selection);
   // allocationRequest revisions are positive; the initial member state is revision 1.
   const currentRevision = member.allocationVersion ?? 1;
+  const priorHarness = deps.catalog.memberExecution(teamId, member.branchId ?? deps.catalog.history.ensure(teamId).id, member).config.harness;
   assertBoundary({
     scope: "member-default",
     status: memberBoundaryStatus(deps.store, teamId, member.id),
     currentRevision,
     expectedRevision: input.expectedRevision,
-    access: resource.config.access,
+    access: member.config.access === "read-only" ? "read-only" : resource.config.access,
     maximumAccess: member.config.access,
   });
   const selection = resourceSelection.parse(input.selection);
   return deps.store.transaction(() => {
     member.selection = { ...selection };
     member.allocationVersion = currentRevision + 1;
+    if (priorHarness !== resource.config.harness) member.permissionVersion = (member.permissionVersion ?? 1) + 1;
     deps.store.save("members", member);
     deps.store.event(teamId, "member.allocation", {
       memberId: member.id,
@@ -282,12 +284,14 @@ export function setWorkAllocation(
     status: work.status,
     currentRevision: work.revision,
     expectedRevision: input.expectedRevision,
-    access: resource.config.access,
+    access: member.config.access === "read-only" ? "read-only" : resource.config.access,
     maximumAccess: member.config.access,
   });
   const selection = resourceSelection.parse(input.selection);
   return deps.store.transaction(() => {
     work.selection = { ...selection };
+    if (work.permissions && work.permissions.harness !== resource.config.harness) delete work.permissions;
+    work.permissionVersion = member.permissionVersion ?? 1;
     work.updatedAt = timestamp();
     work.revision += 1;
     deps.store.save("works", work);
@@ -352,13 +356,17 @@ export function resolveExecution(
     config = { ...resource.config };
     selection = { ...effective.selection };
   }
-  const permissions = work.permissions ?? (member.permissionOverride?.harness === config.harness ? member.permissionOverride : undefined) ?? (member.config.harness === config.harness ? member.config.permissions : undefined) ?? config.permissions;
+  config = memberPermissions(config, member);
+  const workPermissions = (work.permissionVersion ?? 1) === (member.permissionVersion ?? 1) ? work.permissions : undefined;
+  const permissions = workPermissions ?? config.permissions;
   if (permissions) {
     if (permissions.harness !== config.harness)
       return { config, selection, conflict: "Select a native permission policy for the chosen Harness." };
     config = { ...config, permissions };
   }
-  if (member.config.access === "read-only" || work.interaction || work.kind === "collaboration")
+  if (work.reviewOf || work.interaction || work.kind === "collaboration")
+    config = readOnlyPermissions({ ...config, permissions: workPermissions });
+  else if (member.config.access === "read-only")
     config = readOnlyPermissions(config);
   if (member.kind !== "host" && !deps.catalog.capabilities.allowed(teamId,config))
     return {config,selection,conflict:"This Harness or model connection is no longer enabled for the Team. Ask Host to choose an enabled combination."};
