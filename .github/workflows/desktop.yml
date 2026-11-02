@@ -28,6 +28,8 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run release:check
       - run: npm run check
+        env:
+          NODE_OPTIONS: --test-reporter=tap
       - run: npm run desktop:build
       - name: Verify macOS packages and desktop
         if: runner.os == 'macOS'
