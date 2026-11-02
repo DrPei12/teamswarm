@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { spawn } from "node:child_process";
-import { spawnOwned, sampleWindowsProcesses } from "../src/runtime/harness/owned-process.js";
+import { spawn, spawnSync } from "node:child_process";
+import { spawnOwned, confirmOwnedExit, sampleWindowsProcesses } from "../src/runtime/harness/owned-process.js";
 import { terminateNative } from "../src/runtime/harness/native-support.js";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -27,6 +27,24 @@ for(const mode of ["exit","cancel"] as const) test(`Windows Job reclaims detache
   const pid=Number(output.trim());assert.ok(pid>0);
   if(mode==="cancel")assert.equal(await terminateNative(child),true);
   await close;await expectGone(pid);
+});
+
+for(const mode of ["exit","cancel"] as const) test(`POSIX group reclaims descendants on root ${mode}`, {skip:process.platform==="win32",timeout:15000}, async () => {
+  const script=`const c=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});c.unref();console.log(c.pid);${mode==="exit"?"setTimeout(()=>process.exit(0),100)":"setInterval(()=>{},1000)"}`;
+  const child=await spawnOwned(process.execPath,["-e",script],{});
+  let output=""; child.stdout.on("data",b=>output+=b); child.stderr.resume();
+  const closed=new Promise(resolve=>child.once("close",resolve));
+  try {
+    for(let i=0;i<100 && !output.includes("\n");i++)await sleep(20);
+    const pid=Number(output.trim());assert.ok(pid>0);
+    const stopped=mode==="cancel" ? await terminateNative(child) : (await closed,await confirmOwnedExit(child));
+    const processes=spawnSync('ps',['-axo','pid,ppid,pgid,state'],{encoding:'utf8'}).stdout.split('\n').filter(line=>Number(line.trim().split(/\s+/)[2])===child.pid);
+    assert.equal(stopped,true,JSON.stringify({root:child.pid,exitCode:child.exitCode,signalCode:child.signalCode,processes}));
+    await closed; await expectGone(pid);
+  } finally {
+    if(child.pid)try{process.kill(-child.pid,'SIGKILL');}catch{}
+    child.stdin.destroy();
+  }
 });
 
 test("Windows Job reclaims the execution when its owning service dies", {skip:process.platform!=="win32",timeout:15000}, async () => {

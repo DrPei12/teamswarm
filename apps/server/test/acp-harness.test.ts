@@ -70,7 +70,8 @@ test('shared ACP driver preserves turn boundaries, resumes, cancels descendants 
     await assert.rejects(harness.execute({ ...request, sessionId }), /already active/);
     const childPid = JSON.parse(readFileSync(path.join(root, 'child.json'), 'utf8')).pid;
     await harness.interrupt(sessionId, turnId);
-    assert.equal((await work).status, 'interrupted');
+    const interrupted = await work;
+    assert.equal(interrupted.status, 'interrupted', JSON.stringify(interrupted));
     assert.equal((await harness.reconcile(sessionId, turnId)).status, 'interrupted');
     assert.deepEqual(harness.resources(), []);
     assert.throws(() => process.kill(childPid, 0), { code: 'ESRCH' });
