@@ -56,7 +56,7 @@ test('shared ACP driver preserves turn boundaries, resumes, cancels descendants 
   };
   try {
     const result = await harness.execute(request);
-    assert.equal(result.status, 'completed'); assert.equal(result.text, 'ANSWER');
+    assert.equal(result.status, 'completed', JSON.stringify(result)); assert.equal(result.text, 'ANSWER');
     assert.deepEqual(harness.resources(), []);
     const firstSession = sessionId, firstTurn = turnId;
     const resumed = await harness.execute({ ...request, sessionId });
