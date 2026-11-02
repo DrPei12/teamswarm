@@ -238,6 +238,9 @@ async function startService() {
   );
   serviceChild = child;
   installCredentialBridge(child, safeStorage);
+  child.on("message", message => {
+    if (message?.type === "service-error") console.error(JSON.stringify(message));
+  });
   // Do not put model/provider errors or credentials in desktop diagnostics.
   child.stdout.resume();
   child.stderr.resume();
