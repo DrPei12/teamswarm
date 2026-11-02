@@ -134,9 +134,11 @@ export function PermissionSelect({
             }
             data-full-access={selected?.id === "full-access" || undefined}
           >
-            <Shield size={14} aria-hidden="true" />
+            <Shield size={compact ? 14 : 16} aria-hidden="true" />
             <span>{t(label)}</span>
-            {!unavailable && <ChevronDown size={14} aria-hidden="true" />}
+            {!unavailable && (
+              <ChevronDown size={compact ? 14 : 16} aria-hidden="true" />
+            )}
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>

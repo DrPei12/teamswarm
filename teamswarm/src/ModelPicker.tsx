@@ -111,7 +111,7 @@ export function ModelPicker({
           className={
             compact
               ? "runtime-choice model-picker-trigger compact"
-              : "model-picker-trigger"
+              : "field-select model-picker-trigger"
           }
           aria-label={label || t("Choose model")}
         >
@@ -121,7 +121,7 @@ export function ModelPicker({
               value ||
               t("Choose model")}
           </span>
-          <ChevronDown size={14} />
+          <ChevronDown size={compact ? 14 : 16} />
         </button>
       </Popover.Trigger>
       <Popover.Portal>

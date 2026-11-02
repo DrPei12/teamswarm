@@ -1,6 +1,13 @@
 /* Adapted from Caho1/open-claude-ui c1f923a (MIT): cds-theme.css and
    docs/v2/03 compact density. See licenses/open-claude-ui-MIT.txt. */
 :root {
+  --field-height: 42px;
+  --field-font-size: calc(14px * var(--font-scale));
+  --field-line-height: calc(20px * var(--font-scale));
+  --field-label-gap: 8px;
+  --field-padding-block: 10px;
+  --field-padding-inline: 12px;
+  --field-radius: 8px;
   --cds-surface-0: #f2f1ed;
   --cds-surface-1: #faf9f6;
   --cds-surface-2: #ffffff;

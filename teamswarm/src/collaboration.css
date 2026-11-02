@@ -75,12 +75,14 @@
 .project-records select,
 .record-editor input,
 .record-editor textarea {
-  font: inherit;
-  color: inherit;
+  font: 400 var(--field-font-size) / var(--field-line-height) var(--font-ui);
+  color: var(--text);
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 8px;
+  border-radius: var(--field-radius);
+  padding: var(--field-padding-block) var(--field-padding-inline);
+  min-height: var(--field-height);
+  min-width: 0;
 }
 .project-records {
   padding: 0 22px 22px;
@@ -148,8 +150,12 @@
 .record-editor label {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
+  gap: var(--field-label-gap);
+  font-size: var(--field-font-size);
+  line-height: var(--field-line-height);
+  font-weight: 500;
+  min-width: 0;
+  color: var(--secondary);
 }
 .record-actions {
   display: flex;
@@ -173,9 +179,11 @@
 .record-fields {
   display: flex;
   gap: 14px;
+  align-items: end;
 }
 .record-fields label {
   flex: 1;
+  min-width: 0;
 }
 .record-error {
   color: #bd4949;

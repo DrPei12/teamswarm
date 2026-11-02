@@ -369,22 +369,11 @@
   white-space: nowrap;
   padding-inline: 4px;
 }
-.member-permission-choice,
-.member-permission-field {
+.member-permission-choice {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   max-width: 100%;
-}
-.member-permission-field {
-  width: 100%;
-  padding: 10px 12px;
-  min-height: 42px;
-  border: 1px solid var(--line);
-  border-radius: var(--cds-radius-control);
-  background: var(--panel);
-  color: var(--text);
-  text-align: left;
 }
 .member-permission-field > span {
   flex: 1;
@@ -419,16 +408,23 @@
 }
 .new-member-runtime legend,
 .new-member-permissions > span {
-  font-weight: 600;
-  margin-bottom: 8px;
+  font-weight: 500;
+  margin: 0;
+  padding: 0;
+  font-size: var(--field-font-size);
+  line-height: var(--field-line-height);
+}
+.new-member-runtime legend {
+  margin-bottom: var(--field-label-gap);
 }
 .new-member-runtime .runtime-controls {
   justify-content: flex-start;
   gap: 4px;
-  padding: 8px;
+  padding: 4px;
   background: var(--panel);
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: var(--cds-radius-control);
+  min-height: var(--field-height);
 }
 .new-member-permissions {
   display: grid;

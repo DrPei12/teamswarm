@@ -143,7 +143,7 @@ export function MemberPermissionPicker({
           >
             <ShieldCheck size={16} aria-hidden />
             <span>{selected?.label ?? t("Custom permissions")}</span>
-            <ChevronDown size={14} aria-hidden />
+            <ChevronDown size={compact ? 14 : 16} aria-hidden />
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>

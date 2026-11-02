@@ -39,24 +39,29 @@
 .history-label {
   display: flex;
   flex-direction: column;
-  gap: 9px;
-  font-size: 14px;
+  gap: var(--field-label-gap);
+  font-size: var(--field-font-size);
   color: var(--secondary);
+  line-height: var(--field-line-height);
+  font-weight: 500;
+  min-width: 0;
 }
 .startup input,
-.execution-form input,
+.execution-form input:not([type="checkbox"], [type="radio"], [type="file"]),
 .execution-form select,
 .history-label input {
   width: 100%;
-  min-height: 42px;
-  padding: 10px 12px;
+  min-height: var(--field-height);
+  padding: var(--field-padding-block) var(--field-padding-inline);
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--field-radius);
   background: var(--panel);
   color: var(--text);
   transition:
     border-color 0.15s,
     box-shadow 0.15s;
+  font: 400 var(--field-font-size) / var(--field-line-height) var(--font-ui);
+  min-width: 0;
 }
 .startup input:focus,
 .execution-form input:focus,
@@ -97,8 +102,17 @@
 }
 .form-pair {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px;
+  align-items: end;
+}
+.form-pair > * {
+  min-width: 0;
+}
+@media (max-width: 640px) {
+  .form-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .connection-inspection {
   display: flex;
@@ -1012,26 +1026,38 @@
 .resource-form label {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: calc(12px * var(--font-scale));
+  gap: var(--field-label-gap);
+  font-size: var(--field-font-size);
+  line-height: var(--field-line-height);
+  font-weight: 500;
+  min-width: 0;
+  color: var(--secondary);
 }
-.resource-form input,
+.resource-form input:not([type="checkbox"], [type="radio"], [type="file"]),
 .resource-form select,
 .package-input textarea {
   width: 100%;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: var(--field-radius);
+  padding: var(--field-padding-block) var(--field-padding-inline);
   background: var(--panel);
-  font-size: calc(13px * var(--font-scale));
+  min-height: var(--field-height);
+  font: 400 var(--field-font-size) / var(--field-line-height) var(--font-ui);
+  color: var(--text);
+  min-width: 0;
 }
-.resource-checkbox {
-  flex-direction: row !important;
+.resource-form .resource-checkbox {
+  flex-direction: row;
   align-items: center;
   gap: 8px;
+  min-height: var(--field-height);
+  align-self: end;
 }
 .resource-checkbox input {
-  width: auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
 }
 .allocation-list li {
   display: flex;
@@ -1069,7 +1095,15 @@
 .allocation-picker {
   display: flex;
   gap: 8px;
-  align-items: center;
+  align-items: stretch;
+}
+.allocation-picker > .field-select {
+  flex: 1;
+  min-width: 0;
+}
+.allocation-picker > button:not(.field-select) {
+  min-height: var(--field-height);
+  flex-shrink: 0;
 }
 .allocation-picker select {
   min-width: 190px;
@@ -1082,8 +1116,12 @@
 .package-input {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: calc(12px * var(--font-scale));
+  gap: var(--field-label-gap);
+  font-size: var(--field-font-size);
+  line-height: var(--field-line-height);
+  font-weight: 500;
+  min-width: 0;
+  color: var(--secondary);
 }
 .file-button {
   cursor: pointer;
@@ -1114,32 +1152,21 @@
 .model-field {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--field-label-gap);
   min-width: 0;
   color: var(--secondary);
+  font-size: var(--field-font-size);
+  line-height: var(--field-line-height);
+  font-weight: 500;
 }
-.model-picker-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
-  min-height: 40px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: var(--panel);
-  color: var(--text);
-  text-align: left;
-  font: inherit;
-}
+
 .model-picker-trigger span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .model-picker-trigger.compact {
+  color: var(--text);
   width: auto;
   min-height: var(--cds-h-control);
   max-width: 220px;
@@ -1315,21 +1342,24 @@
   gap: 4px;
   color: var(--accent-ink);
 }
-.harness-reminders {
-  display: flex !important;
-  flex-direction: row !important;
+.harness-reminders,
+.execution-form .harness-reminders {
+  display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 7px !important;
+  gap: 7px;
   margin-top: 10px;
-  font-size: 12px !important;
+  font-size: 12px;
   color: var(--secondary);
 }
 .harness-reminders input {
-  width: 13px !important;
-  height: 13px !important;
-  min-height: 0 !important;
-  padding: 0 !important;
+  width: 13px;
+  height: 13px;
+  min-height: 0;
+  padding: 0;
   accent-color: var(--accent-solid);
+  margin: 0;
+  flex-shrink: 0;
 }
 @media (prefers-reduced-motion: reduce) {
   .model-picker-popover {
@@ -1736,21 +1766,38 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   width: 100%;
-  min-height: 38px;
-  padding: 9px 12px;
+  min-height: var(--field-height);
+  padding: var(--field-padding-block) var(--field-padding-inline);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--field-radius);
   background: var(--panel);
-  color: inherit;
-  font: inherit;
+  color: var(--text);
+  font: 400 var(--field-font-size) / var(--field-line-height) var(--font-ui);
   text-align: left;
+  min-width: 0;
 }
 .field-select > span:first-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.field-select > span:last-child:has(svg) {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+.field-select svg {
+  display: block;
+  flex-shrink: 0;
+}
+.permission-control:not(.compact) .permission-select > span {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
 }
 .field-select:disabled {
   opacity: 0.5;

@@ -451,11 +451,12 @@
   border: 1px solid var(--line);
   background: var(--panel);
   color: var(--text);
-  border-radius: 8px;
-  padding: 10px 12px;
-  font: inherit;
+  border-radius: var(--field-radius);
+  padding: var(--field-padding-block) var(--field-padding-inline);
+  font: 400 var(--field-font-size) / var(--field-line-height) var(--font-ui);
   width: 100%;
   min-width: 0;
+  min-height: var(--field-height);
 }
 .cap-freeform textarea {
   resize: vertical;
@@ -547,13 +548,18 @@
 .cap-field {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  font-size: 14px;
+  gap: var(--field-label-gap);
+  font-size: var(--field-font-size);
+  line-height: var(--field-line-height);
+  font-weight: 500;
+  min-width: 0;
+  color: var(--secondary);
 }
 .cap-field > span {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
+  gap: 8px;
 }
 .cap-field small {
   color: var(--secondary);
@@ -612,10 +618,10 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  min-height: 34px;
-  padding: 0 10px;
+  min-height: var(--field-height);
+  padding: 0 var(--field-padding-inline);
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--field-radius);
   color: var(--secondary);
   background: var(--panel);
 }
@@ -631,6 +637,7 @@
   color: var(--text);
   font: inherit;
   font-size: 14px;
+  line-height: var(--field-line-height);
 }
 .cap-model-select-all,
 .cap-model-row {
@@ -707,7 +714,7 @@
 }
 .cap-model-section .model-picker-trigger {
   width: 100%;
-  min-height: 40px;
+  min-height: var(--field-height);
 }
 .cap-codex-account {
   padding: 14px;

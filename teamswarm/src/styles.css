@@ -765,23 +765,27 @@ button.menu-item:hover {
 .form-body > label {
   display: flex;
   flex-direction: column;
-  gap: 9px;
-  font-size: calc(12px * var(--font-scale));
+  gap: var(--field-label-gap);
+  font-size: var(--field-font-size);
   font-weight: 500;
+  line-height: var(--field-line-height);
+  min-width: 0;
+  color: var(--secondary);
 }
-.form-body input,
+.form-body input:not([type="checkbox"], [type="radio"], [type="file"]),
 .form-body textarea {
   display: block;
   width: 100%;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 9px 11px;
+  border-radius: var(--field-radius);
+  padding: var(--field-padding-block) var(--field-padding-inline);
   background: var(--panel);
-  font-size: calc(13px * var(--font-scale));
-  font-weight: 400;
-  line-height: calc(20px * var(--font-scale));
   resize: vertical;
   transition: border-color 0.1s;
+  min-height: var(--field-height);
+  font: 400 var(--field-font-size) / var(--field-line-height) var(--font-ui);
+  color: var(--text);
+  min-width: 0;
 }
 .form-body input:focus,
 .form-body textarea:focus {
@@ -814,6 +818,8 @@ button.menu-item:hover {
   justify-content: center;
   transition: filter 0.1s;
   min-height: 38px;
+  gap: 8px;
+  line-height: 20px;
 }
 .primary-button {
   background: var(--accent-solid);
