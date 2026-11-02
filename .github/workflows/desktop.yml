@@ -2,6 +2,10 @@ name: Desktop packages
 on:
   workflow_dispatch:
     inputs:
+      publish_macos:
+        description: Publish the verified macOS 0.6.0 artifact to its prepared release
+        type: boolean
+        default: false
       runner:
         type: choice
         default: windows-2025
@@ -10,6 +14,7 @@ permissions:
   contents: read
 jobs:
   package:
+    if: ${{ !inputs.publish_macos }}
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 45
     env:
@@ -65,3 +70,20 @@ jobs:
           path: |
             release/*/macos-verification.json
             release/*/macos-desktop.png
+  publish_macos:
+    if: ${{ inputs.publish_macos }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.0
+      - run: node scripts/promote-macos-release.mjs
