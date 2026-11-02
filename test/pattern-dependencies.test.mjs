@@ -16,18 +16,19 @@ test('legacy glob callbacks, promises and sync calls use the patched traversal',
   try {
     await mkdir(join(root, 'nested'));
     await writeFile(join(root, 'keep.txt'), 'root');
+    await writeFile(join(root, 'alpha.txt'), 'first');
     await writeFile(join(root, 'nested', 'also.txt'), 'nested');
     await writeFile(join(root, 'skip.log'), 'excluded');
     const glob = asarRequire('glob');
     assert.equal(require('glob-upstream/package.json').version, '14.0.2');
-    const expected = ['keep.txt', 'nested/also.txt'];
-    assert.deepEqual(glob.sync('**/*.txt', { cwd: root }).sort(), expected);
-    assert.deepEqual((await glob('**/*.txt', { cwd: root })).sort(), expected);
+    const expected = ['alpha.txt', 'keep.txt', 'nested/also.txt'];
+    assert.deepEqual(glob.sync('**/*.txt', { cwd: root }), expected);
+    assert.deepEqual(await glob('**/*.txt', { cwd: root }), expected);
     const modules = await import('glob');
-    assert.deepEqual((await modules.glob('**/*.txt', { cwd: root })).sort(), expected);
+    assert.deepEqual(await modules.glob('**/*.txt', { cwd: root }), expected);
     assert.equal((await import('minimatch')).minimatch('source/main.js', '**/*.js'), true);
     const found = await new Promise((resolve, reject) => glob.glob('**/*.txt', { cwd: root }, (error, files) => error ? reject(error) : resolve(files)));
-    assert.deepEqual(found.sort(), expected);
+    assert.deepEqual(found, expected);
     const reason = new Error('fixture cancellation');
     await assert.rejects(promisify(glob)('**/*', { cwd: root, signal: AbortSignal.abort(reason) }), error => error === reason);
   } finally {
