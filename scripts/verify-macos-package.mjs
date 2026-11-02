@@ -75,6 +75,7 @@ try {
   const executable = path.join(zipApp, 'Contents/MacOS/TeamSwarm');
   const launch = async () => {
     application = await electron.launch({ executablePath: executable, cwd: scratch, env, chromiumSandbox: true, timeout: 60000 });
+    application.on('console', message => diagnostics.push(`desktop: ${message.text()}`));
     const page = await application.firstWindow({ timeout: 60000 });
     page.setDefaultTimeout(30000);
     page.on('pageerror', error => errors.push(error.message));
@@ -86,6 +87,9 @@ try {
     assert.equal(actual.version, expected.version);
     assert.equal(actual.userData, userData);
     assert.equal(actual.sandbox, true);
+    const connection = JSON.parse(fs.readFileSync(path.join(data, 'connection.json'), 'utf8'));
+    report.launches ??= [];
+    report.launches.push({ desktopPid: application.process().pid, servicePid: connection.pid, servicePort: connection.port, pageUrl: page.url() });
     return page;
   };
   const api = (page, route, method = 'GET', body) => page.evaluate(async ({ route, method, body }) => {
@@ -137,6 +141,8 @@ try {
     report.page = { url: page.url(), text: (await page.locator('body').innerText()).slice(0,2000) };
     await page.screenshot({ path: path.join(output, 'macos-desktop.png') });
   }
+  const servicePid = report.launches?.at(-1)?.servicePid;
+  if (servicePid) report.serviceProcess = spawnSync('/bin/ps', ['-p', String(servicePid), '-o', 'pid,ppid,pgid,state'], { encoding: 'utf8' }).stdout;
   process.exitCode = 1;
 } finally {
   try {

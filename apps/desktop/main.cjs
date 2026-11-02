@@ -276,7 +276,8 @@ async function startService() {
     await stopService(child, 3000);
     throw error;
   }
-  child.once("exit", () => {
+  child.once("exit", (code, signal) => {
+    if (!quitting) console.error(JSON.stringify({ event: "service-exit", code, signal }));
     if (serviceChild === child) serviceChild = undefined;
     if (!quitting && mainWindow && !mainWindow.isDestroyed())
       void recoverService();
