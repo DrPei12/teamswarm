@@ -79,12 +79,23 @@ class OwnedProcess {
 
 let bridge: Promise<string> | undefined;
 const groups = new WeakMap<ChildProcessWithoutNullStreams, { cleanup?: Promise<boolean> }>();
-async function stopProcessGroup(pid: number): Promise<boolean> {
+export async function stopProcessGroup(pid: number): Promise<boolean> {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
   try { process.kill(-pid, "SIGKILL"); }
-  catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return true;
+    if (code !== "EPERM") return false;
+  }
   for (let i = 0; i < 40; i++) {
     try { process.kill(-pid, 0); }
-    catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ESRCH") return true;
+      // Darwin can report EPERM while only unreaped zombies remain in a group.
+      // Keep waiting for ESRCH; a permission error alone never confirms exit.
+      if (code !== "EPERM") return false;
+    }
     await new Promise(r => setTimeout(r, 50));
   }
   return false;

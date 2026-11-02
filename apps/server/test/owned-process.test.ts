@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawn, spawnSync } from "node:child_process";
-import { spawnOwned, confirmOwnedExit, sampleWindowsProcesses } from "../src/runtime/harness/owned-process.js";
+import { spawnOwned, confirmOwnedExit, sampleWindowsProcesses, stopProcessGroup } from "../src/runtime/harness/owned-process.js";
 import { terminateNative } from "../src/runtime/harness/native-support.js";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -43,6 +43,29 @@ for(const mode of ["exit","cancel"] as const) test(`POSIX group reclaims descend
     await closed; await expectGone(pid);
   } finally {
     if(child.pid)try{process.kill(-child.pid,'SIGKILL');}catch{}
+    child.stdin.destroy();
+  }
+});
+
+test("POSIX exit confirmation waits through a transient permission response", {skip:process.platform==="win32",timeout:15000}, async () => {
+  const child=await spawnOwned(process.execPath,["-e","console.log('ready');setInterval(()=>{},1000)"],{});
+  let ready=false; child.stdout.on('data',()=>{ready=true;}); child.stderr.resume();
+  const closed=new Promise(resolve=>child.once('close',resolve));
+  const send=process.kill;
+  let transient=false;
+  try {
+    for(let i=0;i<100&&!ready;i++)await sleep(20);
+    assert(ready); assert(child.pid);
+    process.kill=((pid,signal)=>{
+      if(pid===-child.pid!&&signal===0&&!transient){transient=true;throw Object.assign(new Error('Transient group state'),{code:'EPERM'});}
+      return send(pid,signal);
+    }) as typeof process.kill;
+    assert.equal(await stopProcessGroup(child.pid),true);
+    assert.equal(transient,true);
+    await closed;
+  } finally {
+    process.kill=send;
+    if(child.pid)try{send(-child.pid,'SIGKILL');}catch{}
     child.stdin.destroy();
   }
 });
