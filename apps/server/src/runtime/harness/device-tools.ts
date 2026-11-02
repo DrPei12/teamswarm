@@ -1,5 +1,5 @@
 import { harnessManifest } from "@team/contracts/harness-catalog";
-import { existsSync, realpathSync, readFileSync } from "node:fs";
+import { existsSync, realpathSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -18,6 +18,7 @@ export function devicePaths() {
   ];
 }
 function isDeviceFile(file: string) {
+  try { if (!statSync(file).isFile()) return false; } catch { return false; }
   const resolved = canonicalPath(file);
   const modules = resolved.indexOf(`${path.sep}node_modules${path.sep}`);
   const root =

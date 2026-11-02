@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawn, spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { spawnOwned, confirmOwnedExit, sampleWindowsProcesses, stopProcessGroup } from "../src/runtime/harness/owned-process.js";
 import { terminateNative } from "../src/runtime/harness/native-support.js";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const gone = (pid: number) => { try { process.kill(pid, 0); return false; } catch (e) { return (e as NodeJS.ErrnoException).code === "ESRCH"; } };
 async function expectGone(pid: number) { for(let i=0;i<100 && !gone(pid);i++) await sleep(20); assert.ok(gone(pid), `Owned PID ${pid} remains`); }
+
+test("POSIX spawn failures reject instead of emitting an unhandled service error", {skip:process.platform==="win32"}, async () => {
+  await assert.rejects(spawnOwned(path.join(tmpdir(),randomUUID()),[],{}),{code:'ENOENT'});
+  await assert.rejects(spawnOwned(tmpdir(),[],{}),{code:'EACCES'});
+});
 
 test("owned process preserves arguments, streams and exit status for 32 concurrent commands", {timeout:30000}, async () => {
   await Promise.all(Array.from({length:32},async (_,i) => {

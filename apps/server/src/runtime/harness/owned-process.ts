@@ -3,6 +3,7 @@ import { execFile, spawn, type SpawnOptionsWithoutStdio, type ChildProcessWithou
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { once } from "node:events";
 
 // A small bridge to Windows Job Objects. It forwards the existing protocol pipes.
 // Filesystem/network permissions remain the responsibility of the native harness.
@@ -140,12 +141,14 @@ export async function spawnOwned(command: string, args: string[], options: Spawn
     // Terminating the helper closes the last Job handle and terminates descendants.
     const child = spawn(await windowsBridge(), ["run", String(process.pid), command, ...args], { ...options, windowsHide: true, stdio: "pipe" });
     groups.set(child, {});
+    await once(child, "spawn");
     return child;
   }
   const child = spawn(command, args, { ...options, detached: true, stdio: "pipe" });
   const group: { cleanup?: Promise<boolean> } = {};
   groups.set(child, group);
   child.once("exit", () => { if (child.pid) group.cleanup ??= stopProcessGroup(child.pid); });
+  await once(child, "spawn");
   return child;
 }
 
