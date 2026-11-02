@@ -27,7 +27,9 @@ let mounted = false;
 const mount = path.join(scratch, 'dmg');
 let application;
 let provider;
+let page;
 const errors = [];
+const diagnostics = [];
 try {
   let zipApp;
   for (const extension of ['zip', 'dmg']) {
@@ -76,6 +78,8 @@ try {
     const page = await application.firstWindow({ timeout: 60000 });
     page.setDefaultTimeout(30000);
     page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') diagnostics.push(message.text().slice(0,2000)); });
+    page.on('requestfailed', request => diagnostics.push(`${request.method()} ${request.url()}: ${request.failure()?.errorText}`));
     await page.waitForLoadState('domcontentloaded');
     const actual = await application.evaluate(({ app, BrowserWindow }) => ({ version: app.getVersion(), userData: app.getPath('userData'),
       sandbox: BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences().sandbox }));
@@ -104,10 +108,11 @@ try {
   });
   await new Promise(resolve => provider.listen(0, '127.0.0.1', resolve));
   const providerOrigin = `http://127.0.0.1:${provider.address().port}`;
-  let page = await launch();
+  page = await launch();
   await page.getByRole('textbox', { name: 'Team name', exact: true }).fill('macOS package check');
   await page.getByRole('button', { name: 'Create team', exact: true }).click();
   await page.getByRole('button', { name: 'New chat', exact: true }).waitFor();
+  await page.screenshot({ path: path.join(output, 'macos-desktop.png') });
   const team = (await api(page, '/teams')).teams.find(item => item.name === 'macOS package check');
   assert(team);
   const { reference } = await api(page, `/product/teams/${team.id}/credential`, 'PUT', { secret });
@@ -127,6 +132,11 @@ try {
   report.passed = true;
 } catch (error) {
   report.error = error.stack || String(error);
+  report.diagnostics = diagnostics;
+  if (page && !page.isClosed()) {
+    report.page = { url: page.url(), text: (await page.locator('body').innerText()).slice(0,2000) };
+    await page.screenshot({ path: path.join(output, 'macos-desktop.png') });
+  }
   process.exitCode = 1;
 } finally {
   try {
