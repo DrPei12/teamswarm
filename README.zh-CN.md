@@ -43,7 +43,7 @@ Get-FileHash .\TeamSwarm-0.6.0-Windows-x64.exe -Algorithm SHA256
 shasum -a 256 TeamSwarm-0.6.0-macOS-arm64.dmg
 ```
 
-本次 macOS 预发布版未使用 Developer ID 签名，也未经过 Apple 公证。如果 macOS 阻止首次打开，可参阅 [Apple 针对单个 App 的批准操作说明](https://support.apple.com/zh-cn/102445)。软件包已在 macOS 14 / arm64 上完成验证。
+本次 macOS 预发布版未使用 Developer ID 签名，也未经过 Apple 公证。如果 macOS 阻止首次打开，可参阅 [Apple 针对单个 App 的批准操作说明](https://support.apple.com/zh-cn/102445)。
 
 <a id="first-project"></a>
 ## 第一个项目

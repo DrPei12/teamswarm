@@ -43,7 +43,7 @@ Run the installer, then open **TeamSwarm** from the Start menu. Installation is 
 shasum -a 256 TeamSwarm-0.6.0-macOS-arm64.dmg
 ```
 
-This macOS pre-release has no Developer ID signature or Apple notarization. If macOS blocks its first launch, see [Apple's instructions for approving an individual app](https://support.apple.com/en-gb/102445). The package was verified on macOS 14 / arm64.
+This macOS pre-release has no Developer ID signature or Apple notarization. If macOS blocks its first launch, see [Apple's instructions for approving an individual app](https://support.apple.com/en-gb/102445).
 
 <a id="first-project"></a>
 ## Your first project
