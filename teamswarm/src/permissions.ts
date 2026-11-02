@@ -14,7 +14,7 @@ export function permissionMode(
     if (p.approvalPolicy === "untrusted") return "manual";
     if (p.approvalPolicy === "on-request") return "auto";
   }
-  if (p?.harness === "claude-code")
+  if (p?.harness === "claude-code" || p?.harness === "grok")
     return (
       (
         {
@@ -29,8 +29,20 @@ export function permissionMode(
   if (p?.harness === "opencode") {
     if (p.permission["*"] === "ask") return "manual";
     if (p.permission["*"] === "allow")
-      return p.permission.doom_loop === "ask" ? "auto" : "full-access";
+      return p.permission.doom_loop === "ask"
+        ? "auto"
+        : Object.values(p.permission).every((value) => value === "allow")
+          ? "full-access"
+          : "";
   }
+  if (p?.harness === "deepseek-harness" && p.sandbox === "danger-full-access")
+    return "full-access";
+  if (
+    p?.harness === "pi" &&
+    ["write", "edit"].every((t) => p.tools.includes(t as "write" | "edit")) &&
+    p.tools.some((t) => t === "bash" || t === "powershell")
+  )
+    return "full-access";
   return "";
 }
 export function permissionsForMode(
@@ -90,6 +102,28 @@ export function permissionsForMode(
                 grep: "allow",
                 list: "allow",
               },
+    };
+  if (mode === "full-access" && config.harness === "grok")
+    return { harness: "grok", mode: "bypassPermissions" };
+  if (mode === "full-access" && config.harness === "deepseek-harness")
+    return {
+      harness: "deepseek-harness",
+      sandbox: "danger-full-access",
+      approval: "never",
+    };
+  if (mode === "full-access" && config.harness === "pi")
+    return {
+      harness: "pi",
+      tools: [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "write",
+        "edit",
+        "bash",
+        "powershell",
+      ],
     };
   return undefined;
 }

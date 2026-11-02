@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
-import { ShieldCheck, ChevronDown } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { DropdownMenu } from "radix-ui";
+import { ShieldCheck, ChevronDown, Check } from "lucide-react";
 import type { MemberPermissionPreset } from "@team/contracts/allocation";
 import type { ExecutionConfig } from "@team/contracts/runtime";
 import { api } from "./service";
@@ -46,6 +47,8 @@ export function MemberPermissionPicker({
   onOptions?: (options: MemberPermissionOptions) => void;
 }) {
   const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const lock = useRef(false);
   const [options, setOptions] = useState<MemberPermissionOptions | null>(null);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -78,56 +81,110 @@ export function MemberPermissionPicker({
   const defaultLabel = options?.options.find(
     (o) => o.id === options.defaultPreset,
   )?.label;
+  const choices = [
+    ...(includeDefault
+      ? [
+          {
+            id: "team-default",
+            label: defaultLabel
+              ? t("Team default: {permission}", { permission: t(defaultLabel) })
+              : t("Team default"),
+            help: "",
+          },
+        ]
+      : []),
+    ...(options?.options ?? []).map((option) => ({
+      ...option,
+      label: t(option.label),
+      help: t(
+        option.id === "full-access"
+          ? "Read and write files across the device and run system commands."
+          : "Read files without changing them.",
+      ),
+    })),
+  ];
+  const selected = choices.find((option) => option.id === value);
+  const save = async (next: MemberPermissionPreset | "team-default") => {
+    if (lock.current) return;
+    lock.current = true;
+    setSaving(true);
+    setError("");
+    try {
+      await onChange(next);
+      setFeedback(!!running);
+      setOpen(false);
+    } catch (error) {
+      setError((error as Error).message);
+    } finally {
+      lock.current = false;
+      setSaving(false);
+    }
+  };
   return (
     <>
-      <label
-        className={
-          compact
-            ? "runtime-choice member-permission-choice"
-            : "member-permission-field"
-        }
+      <DropdownMenu.Root
+        modal={false}
+        open={open}
+        onOpenChange={(next) => {
+          if (!saving) setOpen(next);
+        }}
       >
-        {compact && <ShieldCheck size={15} aria-hidden />}
-        <select
-          aria-label={t("Member permission strategy")}
-          disabled={disabled || saving || !options}
-          value={value}
-          onChange={async (e) => {
-            const next = e.target.value as
-              MemberPermissionPreset | "team-default";
-            if (saving) return;
-            setSaving(true);
-            setError("");
-            try {
-              await onChange(next);
-              setFeedback(!!running);
-            } catch (error) {
-              setError((error as Error).message);
-            } finally {
-              setSaving(false);
+        <DropdownMenu.Trigger asChild>
+          <button
+            type="button"
+            className={
+              compact
+                ? "runtime-choice member-permission-choice"
+                : "field-select member-permission-field"
             }
-          }}
-        >
-          {includeDefault && (
-            <option value="team-default">
-              {defaultLabel
-                ? t("Team default: {permission}", {
-                    permission: t(defaultLabel),
-                  })
-                : t("Team default")}
-            </option>
-          )}
-          {!includeDefault && !options?.options.some((o) => o.id === value) && (
-            <option value={value}>{t("Custom permissions")}</option>
-          )}
-          {options?.options.map((option) => (
-            <option value={option.id} key={option.id}>
-              {t(option.label)}
-            </option>
-          ))}
-        </select>
-        {compact && <ChevronDown size={14} aria-hidden />}
-      </label>
+            aria-label={t("Member permission strategy")}
+            disabled={disabled || saving || !options}
+            aria-busy={saving || undefined}
+          >
+            <ShieldCheck size={16} aria-hidden />
+            <span>{selected?.label ?? t("Custom permissions")}</span>
+            <ChevronDown size={14} aria-hidden />
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            className="runtime-popover member-permission-menu"
+            side={compact ? "top" : "bottom"}
+            align="start"
+            sideOffset={6}
+            collisionPadding={12}
+          >
+            <DropdownMenu.Label className="menu-heading">
+              {t("Member permission strategy")}
+            </DropdownMenu.Label>
+            <DropdownMenu.Separator className="separator" />
+            <DropdownMenu.RadioGroup
+              value={value}
+              onValueChange={(next) =>
+                void save(next as MemberPermissionPreset | "team-default")
+              }
+            >
+              {choices.map((option) => (
+                <DropdownMenu.RadioItem
+                  key={option.id}
+                  value={option.id}
+                  className="menu-item member-permission-option"
+                  disabled={saving}
+                  onSelect={(e) => e.preventDefault()}
+                >
+                  <span className="item-label">
+                    <span>{option.label}</span>
+                    {option.help && <small>{option.help}</small>}
+                  </span>
+                  <DropdownMenu.ItemIndicator>
+                    <Check size={15} />
+                  </DropdownMenu.ItemIndicator>
+                </DropdownMenu.RadioItem>
+              ))}
+            </DropdownMenu.RadioGroup>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
       {feedback && (
         <span className="runtime-pending" role="status">
           {t("Applies next turn")}

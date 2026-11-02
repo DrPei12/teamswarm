@@ -6,7 +6,7 @@ export type BuiltinNativePermissions =
   | { harness: "claude-code"; mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions"; allow?: string[]; deny?: string[] }
   | { harness: "grok"; mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions"; allow?: string[]; deny?: string[] }
   | { harness: "pi"; tools: ("read" | "grep" | "find" | "ls" | "write" | "edit" | "bash" | "powershell")[] }
-  | { harness: "deepseek-harness"; sandbox: Access; approval: "ask" | "never" }
+  | { harness: "deepseek-harness"; sandbox: Access | "danger-full-access"; approval: "ask" | "never" }
   | { harness: "opencode"; permission: Record<string, "allow" | "ask" | "deny" | Record<string, "allow" | "ask" | "deny">> };
 export interface NativePermissionRequest {
   nativeId: string;

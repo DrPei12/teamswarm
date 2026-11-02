@@ -8,6 +8,11 @@ import {
 
 export type Language = "en" | "zh-CN";
 export const zhCN: Record<string, string> = {
+  "Wrap lines": "自动换行",
+  "Code content": "代码内容",
+  "Read and write files across the device and run system commands.":
+    "可读写工作目录之外的文件并执行系统命令。",
+  "Read files without changing them.": "可读取文件，不修改文件。",
   "Manage member permissions": "修改成员权限",
   "Check pending approvals": "查看待批准请求",
   "Answer permission request": "处理权限请求",

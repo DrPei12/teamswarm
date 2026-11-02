@@ -15,8 +15,7 @@ const labels: Record<MemberPermissionPreset, string> = {
 export function memberPermissionChoices(harness?: Harness) {
   const native = harness?.permissionOptions?.().options ?? [];
   return [{ id: "read-only", label: labels["read-only"] },
-    ...(native.length ? native.filter(o => ["manual", "auto", "full-access"].includes(o.id)).map(o => ({id: o.id, label: o.label}))
-      : [{ id: "workspace-write", label: labels["workspace-write"] }])];
+    ...native.filter(o => o.id === "full-access").map(o => ({ id: o.id, label: o.label }))];
 }
 export type MemberPermissionChange = { preset?: MemberPermissionPreset; access?: ExecutionConfig["access"]; permissions?: ExecutionConfig["permissions"] };
 type Pending = ExecutionApproval & { expectedVersion: number; preset?: MemberPermissionPreset; change?: MemberPermissionChange; branchId: string };
@@ -35,7 +34,7 @@ export class MemberPermissions {
   options(teamId: string, harness: string) {
     const choices = memberPermissionChoices(this.harnesses.get(harness));
     return { version: this.catalog.capabilities.read(teamId).version, policy: this.mode(teamId), options: choices,
-      defaultPreset: this.mode(teamId) === "request" ? "read-only" : choices.some(c => c.id === "full-access") ? "full-access" : "workspace-write" };
+      defaultPreset: this.mode(teamId) === "request" ? "read-only" : choices.some(c => c.id === "full-access") ? "full-access" : "read-only" };
   }
   configuration(teamId: string, base: ExecutionConfig, preset: MemberPermissionPreset | "team-default") {
     const selected = preset === "team-default" ? this.options(teamId, base.harness).defaultPreset : preset;

@@ -256,6 +256,8 @@
   line-height: 1.65;
 }
 .code-block pre code {
+  font-size: inherit;
+  line-height: inherit;
   background: transparent;
   padding: 0;
   border-radius: 0;

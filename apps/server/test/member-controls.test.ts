@@ -190,3 +190,28 @@ test("custom native permission fields and later revocation apply to future attem
     await f.send("Allow Custom worker to write in the workspace using automatic review.");
   }finally{await f.close();}
 });
+
+
+test("full device access reaches shared native execution without a workspace sandbox or repeated approvals", async () => {
+ const f=await setup();let member!:Member,checked=false;
+ try {
+  const rt=f.service.runtime,store=rt.store;
+  member=store.createMember(f.team.id,"Device worker","Explicit full access verification",executionConfig.parse({harness:"codex",model:"fixture-model",access:"workspace-write",permissions:{harness:"codex",approvalPolicy:"never",sandbox:"danger-full-access"}}),f.branch.id);
+  f.action=async r=>{
+   const input=JSON.parse(r.input),own=store.get<Work>("works",f.team.id,input.work.id);
+   if(own.memberId===member.id){
+    assert.equal(r.workspaceBoundary,undefined);assert.equal(r.verificationDirectory,undefined);assert.equal(r.config.permissions?.sandbox,"danger-full-access");
+    const request={nativeId:"native-device-request",tool:"exec_command",input:{cmd:"fixture"}};
+    assert.equal(await r.onPermission!(request),"allow");assert.equal(rt.nativePermissions.list(f.team.id).length,0);
+    assert.equal(await r.onPermission!(request),"deny","A repeated native request cannot replay a one-time decision");
+    checked=true;
+    await tool(r,"team_submit_result",{summary:"Confirmed the full native authority fixture",files:[],usedArtifactIds:[],selfChecks:[{criterion:"Device authority",passed:true,evidence:"Native request retained full access and no workspace boundary"}]});return;
+   }
+   store.publishRequirement(own,"Device permission fixture",[]);const run=store.get<Run>("runs",f.team.id,own.runId);
+   await tool(r,"team_delegate",{memberId:member.id,title:"Device fixture",instructions:"Verify explicit device access",workspaceMode:"shared",acceptanceCriteria:["Device authority"],acceptanceEvidence:[{criterion:"Device authority",evidenceType:"review_judgment"}],verification:"self-check",inputArtifactIds:[],dependsOn:[]});
+  };
+  await f.send("Check full access without changing real files.");
+  for(let i=0;i<150&&!checked;i++)await new Promise(r=>setTimeout(r,20));
+  assert(checked,"The worker must execute with its full native permissions");
+ }finally{await f.close();}
+});

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer, type ServerResponse } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ModelGateway } from "../src/runtime/model-gateway.js";
 import { executionConfig, toolSpecs, tools as teamTools } from "../src/runtime/validation.js";
+import { CodexHarness } from "../src/runtime/harness/codex.js";
 import { NativeHarness } from "../src/runtime/harness/native.js";
 import { resolveConnection } from "../src/runtime/connections.js";
 import { decodeRequest, encodeResponse, chatGPTPayload, requestOptions } from "../src/runtime/model-wire.js";
@@ -470,5 +471,34 @@ for (const id of ["deepseek-harness", "claude-code", "pi"] as const) {
       const messages = events.filter(e => e.type === "transcript.item" && e.data.kind === "message" && e.data.status === "completed");
       assert.equal(messages.length, 1); assert.equal(messages[0].data.text, marker);
     } finally { await native.close(); if (old === undefined) delete process.env.TEAM_HARNESS_HOME; else process.env.TEAM_HARNESS_HOME = old; await f.close(); }
+  });
+}
+
+for (const id of ["deepseek-harness", "pi", "grok", "claude-code", "opencode", "codex"] as const) {
+  test(`installed ${id} full access writes and reads beyond its working directory`, { skip: process.env.TEAM_NATIVE_DEVICE_TEST !== "1", timeout: 90000 }, async () => {
+    const marker = "DEVICE_ACCESS_PROOF_42"; let calls = 0, nativeTool = "", nativeSnapshot:Record<string,unknown>={};
+    const f = await setup((body,res) => {
+      if (++calls > 6) { res.writeHead(500).end("Fixture request limit");return; }
+      const outputs=body.input.filter((v:any)=>v.type==='function_call_output');
+      if(outputs.length){respond(res,body.model,JSON.stringify(outputs).includes(marker)?"DEVICE_ACCESS_CONFIRMED":"FAILED: "+JSON.stringify(outputs));return;}
+      const tool=body.tools?.find((t:any)=>/^(Bash|bash|pwsh|powershell|run_terminal_command|run_terminal_cmd|exec_command)$/.test(t.name));
+      if(!tool){respond(res,body.model,"NO_COMMAND_TOOL");return;}
+      nativeTool=tool.name;const schema=tool.parameters?.properties??{};
+      const values={cmd:"node device-check.cjs",yield_time_ms:10000,max_output_tokens:1000,command:"node device-check.cjs",description:"Write and read only the generated sibling proof file",explanation:"Verify explicitly selected full access",timeout:10000,timeoutMs:10000,is_background:false};
+      respond(res,body.model,{name:tool.name,arguments:Object.fromEntries(Object.entries(values).filter(([k])=>k in schema))});
+    });
+    const workspace=path.join(f.directory,"work");mkdirSync(workspace);
+    const outside=path.join(f.directory,"device-access-proof.txt");
+    writeFileSync(path.join(workspace,"device-check.cjs"),`const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(outside)},${JSON.stringify(marker)});process.stdout.write(fs.readFileSync(${JSON.stringify(outside)},'utf8'));`);
+    const old=process.env.TEAM_HARNESS_HOME;process.env.TEAM_HARNESS_HOME=path.join(f.directory,"sessions");
+    const native=id === "codex" ? new CodexHarness() : new NativeHarness(id),harness=f.gateway.wrap(native),events:any[]=[];
+    try {
+      const permissions=native.permissionOptions().options.find(o=>o.id==='full-access')!.permissions;
+      const result=await harness.execute({workspace,isolatedWorkspace:false,config:{...f.config,harness:id,permissions},instructions:"Perform the single requested local verification command. Do not delegate.",input:"Run node device-check.cjs once. It writes only a generated proof file outside the working directory and reads it back.",tools:[],onSession:(_id,actual)=>{nativeSnapshot=actual;},onTurn:()=>{},onEvent:e=>events.push(e),onTool:async()=>{throw Error("Native command must not use the Team bridge");}});
+      writeFileSync(path.join(process.cwd(),'.local',`device-access-${id}.json`),JSON.stringify({result,nativeTool,permissions,nativeSnapshot,events},null,2));
+      assert.equal(result.status,'completed',JSON.stringify(result));assert.match(result.text,/DEVICE_ACCESS_CONFIRMED/);
+      assert.equal(readFileSync(outside,'utf8'),marker);assert(events.some(e=>e.type==='execution.item'&&(id === 'codex' ? e.data.status === 'completed' && e.data.exitCode === 0 : e.data.nativeOutcome==='succeeded')));
+      if(id === 'codex') assert.equal((nativeSnapshot.sandbox as any).type,'dangerFullAccess');
+    } finally {await native.close();if(old===undefined)delete process.env.TEAM_HARNESS_HOME;else process.env.TEAM_HARNESS_HOME=old;await f.close();}
   });
 }

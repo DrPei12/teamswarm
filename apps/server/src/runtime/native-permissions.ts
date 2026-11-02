@@ -1,3 +1,4 @@
+import { nativeAccess } from "./permission-options.js";
 import { randomUUID } from "node:crypto";
 import { conflict } from "../errors.js";
 import { redact } from "./redact.js";
@@ -53,6 +54,11 @@ export class NativePermissions {
       workId: work.id, attemptId: attempt.id, memberId: member.id, harness: attempt.config.harness, createdAt: new Date().toISOString(), state: "pending" };
     const body = JSON.stringify(p.input);
     if (Buffer.byteLength(body) > 65536) return "deny";
+    if (nativeAccess(attempt.config) === "full-access") {
+      p.state = "allow"; this.save(p);
+      this.store.event(work.teamId, "permission.resolved", { id: p.id, nativeId: p.nativeId, state: "allow", policy: "full-access" }, work, attempt.id);
+      return "allow";
+    }
     return new Promise(resolve => {
       const end = (decision: "allow" | "deny") => { signal?.removeEventListener("abort", cancel); this.waiting.delete(p.id); resolve(decision); };
       const cancel = () => this.settle(p, "cancelled");

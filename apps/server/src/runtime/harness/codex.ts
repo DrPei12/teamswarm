@@ -1,4 +1,4 @@
-import { codexPermissionOptions, withDefaultPermissions } from "../permission-options.js";
+import { nativeAccess, codexPermissionOptions, withDefaultPermissions } from "../permission-options.js";
 import { conversationInput } from "./conversation-input.js";
 import { productVersion } from "../../version.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -14,7 +14,7 @@ import { HarnessTransportError } from "../types.js";
 import { codexDisplayItem } from "./codex-items.js";
 import { sessionStoreScope } from "./session-scope.js";
 import { deviceEntry } from "./device-tools.js";
-import { preflight, probeCodexExecution, type PreflightInput } from "./preflight.js";
+import { inspectExecution, preflight, probeCodexExecution, type PreflightInput } from "./preflight.js";
 import { prepareExecutionEnvironment } from "./execution-environment.js";
 import { contextObservation } from "../context-budget.js";
 import { readOnlyPermissions, validateNativePermissions, policyFor } from "./permissions.js";
@@ -663,6 +663,11 @@ export class CodexHarness implements Harness {
     const command = codexCommand();
     if (!Object.values(request.requirements).some(Boolean))
       return preflight(request, command.args[0] ?? command.command, true);
+    if (nativeAccess(request.config) === "full-access") {
+      const identity = inspectExecution(request, command.args[0] ?? command.command);
+      const environment = prepareExecutionEnvironment(request.scratchDirectory, request.requirements);
+      return { passed: true, mode: "native-full-access", identity, environment, modelRequests: 0 };
+    }
     const permissions = codexReviewPermissions(request.workspace, request.scratchDirectory);
     const environment = prepareExecutionEnvironment(request.scratchDirectory, request.requirements);
     const report = await preflight(request, command.args[0] ?? command.command, true, () =>

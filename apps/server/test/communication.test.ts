@@ -421,6 +421,7 @@ async function setup() {
     const member = await tool(hostId, "team_add_member", {
       name,
       responsibility: name + " responsibility",
+      config,
     });
     members.push(member);
     const work = await tool(hostId, "team_delegate", {

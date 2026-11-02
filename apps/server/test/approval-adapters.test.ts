@@ -123,7 +123,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
       assert.equal(permissions["*"], option.id === "manual" ? "ask" : "allow");
       assert.equal(permissions.edit, undefined, "Do not overwrite an inherited ask rule with allow");
       assert.equal(permissions.doom_loop, option.id === "auto" ? "ask" : undefined);
-      assert.equal(permissions.external_directory, "deny");
+      assert.equal(permissions.external_directory, option.id === "full-access" ? "allow" : "deny");
       assert.deepEqual(wire.findLast(r => r.id === 800).result.outcome, { outcome: "selected", optionId: "once" });
     }
     const { openCodePermissions } = await import("../src/runtime/permission-options.js");

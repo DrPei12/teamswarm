@@ -166,9 +166,6 @@
   font-size: inherit;
   line-height: inherit;
 }
-.member-entry .markdown pre {
-  font-size: 12px;
-}
 .message-focus {
   /* Keep the entrance animation's identity when the focus animation ends. */
   animation:

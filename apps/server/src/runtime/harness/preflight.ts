@@ -1,3 +1,4 @@
+import { nativeAccess } from "../permission-options.js";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnOwned } from "./owned-process.js";
 import { createInterface } from "node:readline";
@@ -16,7 +17,7 @@ export function inspectExecution(input: PreflightInput, entry: string) {
   if (!installed.isFile()) throw new Error("The installed Harness entry is not a file.");
   if (input.config.credentialEnv && !input.modelCredentialPresent && !process.env[input.config.credentialEnv])
     throw new Error(`Credential environment variable ${input.config.credentialEnv} is not set.`);
-  if (input.config.access === "workspace-write" && input.writePaths === undefined && !input.legacyWorkspaceWrite)
+  if (input.config.access === "workspace-write" && nativeAccess(input.config) !== "full-access" && input.writePaths === undefined && !input.legacyWorkspaceWrite)
     throw new Error("write_scope_required: assign explicit project-relative writePaths before starting this member.");
   new WorkspaceAccess(source, input.writePaths ?? []);
   return { source, entry: realpathSync(entry), size: installed.size, modified: installed.mtimeMs };

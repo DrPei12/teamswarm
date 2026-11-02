@@ -173,7 +173,7 @@ async function setup() {
     (await tool(hostId, "team_add_member", {
       name,
       responsibility: `${name} responsibility`,
-      ...(Object.keys(overrides).length ? { config: { ...config, ...overrides } } : {}),
+      config: { ...config, ...overrides },
     })) as Member;
   return {
     root,

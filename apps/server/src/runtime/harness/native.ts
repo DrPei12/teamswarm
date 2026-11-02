@@ -1,4 +1,4 @@
-import { claudePermissionOptions, openCodePermissionOptions, openCodePermissions, withDefaultPermissions } from "../permission-options.js";
+import { nativeAccess, deepseekPermissionOptions, grokPermissionOptions, piPermissionOptions, claudePermissionOptions, openCodePermissionOptions, openCodePermissions, withDefaultPermissions } from "../permission-options.js";
 import { conversationInput } from "./conversation-input.js";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnOwned, confirmOwnedExit } from "./owned-process.js";
@@ -53,10 +53,10 @@ type Active = {
 
 /** Native loops stay in their own executable/SDK. No model-loop emulation here. */
 export class NativeHarness implements Harness {
-  permissionOptions() { return this.id === "claude-code" ? claudePermissionOptions : this.id === "opencode" ? openCodePermissionOptions : { defaultId: "", options: [] }; }
+  permissionOptions() { return this.id === "claude-code" ? claudePermissionOptions : this.id === "opencode" ? openCodePermissionOptions : this.id === "deepseek-harness" ? deepseekPermissionOptions : this.id === "grok" ? grokPermissionOptions : piPermissionOptions; }
   readonly capabilities;
   get sessionScope(): string {
-    return sessionStoreScope(nativeHome(this.id)) + (this.id === "claude-code" || this.id === "grok" ? ":" + subscriptionScope(this.id) : "") + (this.id === "grok" ? ":acp-profile-v1" : "");
+    return sessionStoreScope(nativeHome(this.id)) + (this.id === "claude-code" || this.id === "grok" ? ":" + subscriptionScope(this.id) : "") + (this.id === "grok" ? ":acp-profile-v1" : "") + ":device-access-v1";
   }
   private active = new Map<string, Active>();
   resources() {
@@ -110,8 +110,6 @@ export class NativeHarness implements Harness {
   }
   validateConfig(config: ExecutionConfig) {
     validateNativePermissions(config);
-    if (config.permissions && !["claude-code", "opencode"].includes(this.id))
-      throw new Error("This Harness does not support configurable approval modes yet.");
     const entry = nativeEntry(this.id);
     if (config.contextWindowTokens != null && !["pi", "opencode"].includes(this.id))
       throw new Error("An explicit context window requires Pi or OpenCode.");
@@ -152,7 +150,7 @@ export class NativeHarness implements Harness {
     validateNativePermissions(request.config);
     if (Object.values(request.requirements).some(Boolean)) {
       try {
-        if (!request.isolatedWorkspace) throw new Error("native_workspace_required: assign an isolated member working directory for native commands.");
+        if (!request.isolatedWorkspace && nativeAccess(request.config) !== "full-access") throw new Error("native_workspace_required: assign an isolated member working directory for native commands.");
         const piPolicy = policyFor(request.config, "pi");
         const policy = request.config.permissions;
         if (piPolicy && !piPolicy.tools.some(tool => ["bash", "powershell"].includes(tool)))
@@ -273,7 +271,7 @@ export class NativeHarness implements Harness {
             : "Read,Glob,Grep,Write,Edit,Bash";
         args.push(
           ...(subscription ? claudeSubscriptionFlags : ["--bare"]),
-          "--restricted",
+          ...(nativeAccess(c) === "full-access" ? [] : ["--restricted"]),
           "--print",
           "--verbose",
           "--output-format",

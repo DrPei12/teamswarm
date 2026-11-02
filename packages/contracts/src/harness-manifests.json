@@ -523,7 +523,8 @@
             "type": "string",
             "enum": [
               "read-only",
-              "workspace-write"
+              "workspace-write",
+              "danger-full-access"
             ]
           },
           "approval": {
