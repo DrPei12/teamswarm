@@ -71,6 +71,8 @@ export interface EffectiveSelection {
   selection: ResourceSelection | null;
 }
 export interface AllocationBoundary {
+  /** Defaults affect future Attempts; task edits require a nonexecuting Work. */
+  scope?: AllocationScope;
   status: WorkStatus;
   currentRevision: number;
   expectedRevision: number;

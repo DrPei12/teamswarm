@@ -362,6 +362,13 @@
   flex-wrap: wrap;
   row-gap: var(--cds-gap-xs);
 }
+.runtime-pending {
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+  padding-inline: 4px;
+}
 .composer-chin .model-picker-trigger.compact,
 .composer-chin .effort-choice {
   padding-inline: 8px;

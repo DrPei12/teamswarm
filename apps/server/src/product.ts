@@ -1,5 +1,6 @@
 import { permissionCatalog, mergePermissionChoice } from "./runtime/permission-options.js";
 import { nativePermissions } from "./runtime/harness/permissions.js";
+import { setHostConfiguration } from "./runtime/allocation.js";
 import { harnessManifest } from "@team/contracts/harness-catalog";
 import express, { Router } from "express";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
@@ -352,8 +353,13 @@ export class ProductStore {
         : this.runtime.history.ensure(team.id).id;
       const hostAllocation = hostMember ? this.runtime.catalog.memberExecution(team.id, activeBranch, hostMember) : null;
       const hostConfig = hostAllocation?.config ?? settings?.config;
+      const runningHostAttempt = attempts.find(a => a.memberId === hostMember?.id &&
+        ["running", "stopping"].includes(a.status) &&
+        state.runs.some(r => r.id === state.works.find(w => w.id === a.workId)?.runId && this.runtime.history.forRun(r).id === activeBranch));
       if (hostMember && hostConfig) workspace.executions![team.id].host = {
         config: hostConfig, permissionVersion: hostMember.permissionVersion ?? 1,
+        configurationVersion: hostAllocation?.allocationRevision ?? 1,
+        runningConfig: runningHostAttempt?.config,
         memberId: hostMember.id, branchId: activeBranch,
       };
       const latestUsage = attempts
@@ -787,6 +793,7 @@ export class ProductStore {
               "Default",
           ),
           executionConfig: nextExecution?.config,
+          runningExecutionConfig: attempts.find(a => a.memberId === member.id && ["running", "stopping"].includes(a.status))?.config,
           configurationVersion: nextExecution?.allocationRevision,
           sessionId: latestAttempt?.sessionId ?? undefined,
           workId: work?.id,
@@ -1039,6 +1046,15 @@ export function productRoutes(runtime: TeamRuntime): Router {
     });
     res.json({ config: next, version: version + 1 });
   });
+  router.put("/product/teams/:teamId/branches/:branchId/host/runtime", (req, res) => {
+    const teamId = parse(key, req.params.teamId);
+    const branchId = parse(key, req.params.branchId);
+    const input = parse(z.object({
+      expectedVersion: z.number().int().positive(), config: executionConfig,
+    }).strict(), req.body);
+    runtime.validateConfig(input.config);
+    res.json(setHostConfiguration(runtime, teamId, branchId, input.expectedVersion, input.config));
+  });
   router.put("/product/teams/:teamId/members/:memberId/runtime", (req, res) => {
     const teamId = parse(key, req.params.teamId);
     const memberId = parse(key, req.params.memberId);
@@ -1049,7 +1065,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
     runtime.validateConfig(input.config);
     const member = runtime.store.activeMember(teamId, memberId);
     if (member.kind === "host")
-      throw badRequest("host_configuration", "Change Host configuration through Team runtime settings.");
+      throw badRequest("host_configuration", "Change Host configuration in its conversation.");
     const current = runtime.catalog.memberExecution(teamId, member.branchId ?? runtime.history.ensure(teamId).id, member);
     if (current.allocationRevision !== input.expectedVersion)
       throw conflict("version_conflict", "Member configuration changed. Try again.");

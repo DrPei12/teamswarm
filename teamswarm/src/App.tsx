@@ -1678,15 +1678,14 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                               workspace.executions?.[team.id]?.host?.config ??
                               workspace.executions?.[team.id]?.settings?.config
                             }
-                            running={workspace.executions?.[
-                              team.id
-                            ]?.works.some(
-                              (w) =>
-                                w.memberId ===
-                                  workspace.executions?.[team.id]?.host
-                                    ?.memberId &&
-                                ["running", "stopping"].includes(w.status),
-                            )}
+                            runningConfig={
+                              workspace.executions?.[team.id]?.host
+                                ?.runningConfig
+                            }
+                            running={
+                              !!workspace.executions?.[team.id]?.host
+                                ?.runningConfig
+                            }
                             onPermissionChange={(permissions) =>
                               product.configurePermissions(
                                 team.id,

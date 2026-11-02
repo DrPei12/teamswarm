@@ -80,7 +80,8 @@ export interface Member {
   selection?: ResourceSelection;
   /** Optimistic revision for member-default allocation updates. */
   allocationVersion?: number;
-  /** Host defaults are branch-scoped and affect future Attempts only. */
+  /** Host defaults are branch-scoped and affect future Attempts only.
+   * A null selection with config is a composer override; without config it follows Team settings. */
     hostSelections?: Record<string, { revision: number; selection: ResourceSelection | null; config?: ExecutionConfig }>;
 }
 export interface Requirement {

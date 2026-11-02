@@ -182,7 +182,7 @@ function assertBoundary(input: AllocationBoundary): void {
 
 const ACTIVE_ATTEMPT_STATES: WorkStatus[] = ["running", "stopping", "recovery_required"];
 
-/** A member default may change while idle; an active attempt always blocks it. */
+/** Report live work independently of whether a future-default edit is allowed. */
 function memberBoundaryStatus(
   store: RuntimeStore,
   teamId: string,
@@ -212,6 +212,26 @@ export function setHostAllocation(deps: AllocationDeps, teamId: string, branchId
   });
 }
 
+/** A composer edit replaces only this branch's future Host configuration. */
+export function setHostConfiguration(deps: AllocationDeps, teamId: string, branchId: string, expectedRevision: number, config: ExecutionConfig) {
+  deps.catalog.history.branch(teamId, branchId);
+  return deps.store.transaction(() => {
+    const host = deps.store.list<Member>("members", teamId).find(m => m.kind === "host");
+    if (!host) throw notFound();
+    const current = deps.catalog.memberExecution(teamId, branchId, host);
+    if (current.allocationRevision !== expectedRevision)
+      throw conflict("version_conflict", "Host configuration changed. Reload before saving.");
+    if (config.access !== current.config.access)
+      throw conflict("access_escalation", "Keep Host's existing file access when changing its model.");
+    host.hostSelections = { ...host.hostSelections, [branchId]: {
+      revision: expectedRevision + 1, selection: null, config: { ...config },
+    } };
+    deps.store.save("members", host);
+    deps.store.event(teamId, "host.configuration", { branchId, revision: expectedRevision + 1 });
+    return deps.catalog.memberExecution(teamId, branchId, host);
+  });
+}
+
 export function setMemberAllocation(
   deps: AllocationDeps,
   teamId: string,
@@ -228,6 +248,7 @@ export function setMemberAllocation(
   // allocationRequest revisions are positive; the initial member state is revision 1.
   const currentRevision = member.allocationVersion ?? 1;
   assertBoundary({
+    scope: "member-default",
     status: memberBoundaryStatus(deps.store, teamId, member.id),
     currentRevision,
     expectedRevision: input.expectedRevision,
@@ -301,18 +322,18 @@ export function resolveExecution(
 ): ResolvedExecution {
   const branchId = member.kind === "host" && deps.store.history
     ? deps.store.history.forRun(deps.store.get("runs", teamId, work.runId)).id : null;
-  const memberChoice = (branchId ? member.hostSelections?.[branchId]?.selection : member.selection) ?? null;
+  const hostChoice = branchId ? member.hostSelections?.[branchId] : undefined;
+  const memberChoice = (branchId ? hostChoice?.selection : member.selection) ?? null;
   const effective: EffectiveSelection = effectiveSelection(
     member.kind === "host" && memberChoice?.resourceId === RESERVED_RESOURCE_ID ? null : memberChoice,
     work.selection ?? null,
   );
-  let config: ExecutionConfig = { ...member.config };
+  let config: ExecutionConfig = { ...(hostChoice?.selection === null && hostChoice.config ? hostChoice.config : member.config) };
   let selection: ResourceSelection | null = null;
   if (effective.selection) {
     const resource = listResources(deps, teamId).find(
       (r) => r.id === effective.selection!.resourceId,
     );
-    const hostChoice = member.kind === "host" && branchId ? member.hostSelections?.[branchId] : undefined;
     const retained = effective.selection.resourceId.startsWith("cap_") && hostChoice?.selection?.resourceId === effective.selection.resourceId && hostChoice.selection.resourceVersion === effective.selection.resourceVersion ? hostChoice.config : undefined;
     if ((!resource || resource.version !== effective.selection.resourceVersion) && retained)
       return { config: readOnlyExecution(memberPermissions(retained, member)), selection: {...effective.selection}, conflict: null };

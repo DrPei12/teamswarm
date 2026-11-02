@@ -754,15 +754,25 @@ class ProductClient {
     );
   }
   async configure(teamId: string, config: RuntimeConfig, choice?: ModelChoice) {
-    const settings = this.state.workspace?.executions?.[teamId]?.settings;
-    if (!settings) throw new Error("Team settings are not available.");
+    const host = this.state.workspace?.executions?.[teamId]?.host;
+    if (!host) throw new Error("Team settings are not available.");
     const next = await this.resolveRuntimeChoice(
       teamId,
-      settings.config,
+      host.config,
       config,
       choice,
     );
-    return this.saveSettings(teamId, { ...settings, config: next });
+    try {
+      return await this.command(
+        `/product/teams/${encodeURIComponent(teamId)}/branches/${encodeURIComponent(host.branchId)}/host/runtime`,
+        { config: next, expectedVersion: host.configurationVersion },
+        "PUT",
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "version_conflict")
+        await this.refresh();
+      throw error;
+    }
   }
   async configurePermissions(
     teamId: string,

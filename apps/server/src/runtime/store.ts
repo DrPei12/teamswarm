@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { DatabaseSync } from "node:sqlite";
 import { TeamStore } from "../store.js";
 import { badRequest, conflict, notFound } from "../errors.js";
@@ -409,6 +410,12 @@ export class RuntimeStore {
           "version_conflict",
           "Runtime settings changed. Reload before saving.",
         );
+      const { maxConcurrent: _legacyConcurrency, ...deviceManagedInput } = input;
+      if (current) {
+        const { maxConcurrent: _concurrency, ...saved } = current;
+        if (isDeepStrictEqual(saved, { ...deviceManagedInput, workspace,
+          teamId, version: current.version, policyVersion: current.policyVersion })) return current;
+      }
       if (
         this.list<Work>("works", teamId).some(
           (w) => w.status === "queued" || activeStates.has(w.status),
@@ -418,7 +425,6 @@ export class RuntimeStore {
           "active_execution",
           "Stop and reconcile pending work before changing runtime settings.",
         );
-      const { maxConcurrent: _legacyConcurrency, ...deviceManagedInput } = input;
       const settings = {
         ...deviceManagedInput,
         workspace,

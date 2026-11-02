@@ -780,6 +780,7 @@ function ConversationThread({
                 team={team}
                 config={runtimeConfig}
                 executionConfig={executionConfig}
+                runningConfig={member.runningExecutionConfig}
                 showContext={false}
                 running={!!activeWork || member.status === "working"}
                 onPermissionChange={(permissions) =>

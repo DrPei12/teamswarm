@@ -66,6 +66,112 @@ async function setup() {
 }
 const call = (r: HarnessRequest, name: string, args: unknown) => r.onTool(name, withJudgmentEvidence(name, args), randomUUID());
 
+test("Host composer saves next-turn configuration while running, with branch isolation and frozen Attempts", async () => {
+  const app = await setup();
+  let release: (() => void) | undefined;
+  let first: Promise<Work> | undefined;
+  try {
+    const runtime = app.service.runtime, store = runtime.store;
+    const defaults = store.settings(app.team.id)!;
+    const resource = app.add("Pinned low", { harness: "codex", model: "fixture-model", effort: "low", access: "read-only" });
+    const allocation = `/teams/${app.team.id}/branches/${app.branch.id}/host-allocation`;
+    assert.equal((await app.request(allocation, { expectedRevision: 1,
+      selection: { resourceId: resource.id, resourceVersion: 1, reason: "Pinned fixture" } }, "PUT")).status, 200);
+    app.codex.action = () => new Promise(resolve => { release = () => resolve({ status: "completed", text: "First turn completed" }); });
+    first = app.send("Hold this turn while changing effort.");
+    await until(() => !!release);
+    const attempt = store.list<Attempt>("attempts", app.team.id).at(-1)!;
+    const endpoint = `/product/teams/${app.team.id}/branches/${app.branch.id}/host/runtime`;
+    const current = (await app.request("/product")).body.executions[app.team.id].host;
+    assert.equal(current.config.effort, "low");
+    assert.equal(current.runningConfig.effort, "low");
+    const next = { ...current.config, effort: "high" };
+    const saved = await app.request(endpoint, { expectedVersion: current.configurationVersion, config: next }, "PUT");
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    const reloaded = (await app.request("/product")).body.executions[app.team.id].host;
+    assert.equal(reloaded.config.effort, "high");
+    assert.equal(reloaded.runningConfig.effort, "low");
+    assert.equal(reloaded.configurationVersion, current.configurationVersion + 1);
+    assert.deepEqual(store.get<Attempt>("attempts", app.team.id, attempt.id), attempt);
+    assert.equal(app.codex.requests[0].config.effort, "low");
+    assert.deepEqual(store.settings(app.team.id), defaults);
+    assert.deepEqual(runtime.catalog.resource(app.team.id, resource.id), resource);
+    const host = store.get<Member>("members", app.team.id, attempt.memberId);
+    assert.equal(runtime.catalog.memberExecution(app.team.id, "another-branch", host).config.effort, defaults.config.effort);
+
+    const stale = await app.request(endpoint, { expectedVersion: current.configurationVersion, config: next }, "PUT");
+    assert.equal(stale.status, 409);
+    assert.equal(stale.body.error.code, "version_conflict");
+    const escalated = await app.request(endpoint, { expectedVersion: reloaded.configurationVersion, config: { ...next, access: "workspace-write" } }, "PUT");
+    assert.equal(escalated.status, 409);
+    assert.equal(escalated.body.error.code, "access_escalation");
+    const noOp = await app.request(`/product/teams/${app.team.id}/runtime`, {
+      expectedVersion: defaults.version, workspace: defaults.workspace, config: defaults.config,
+    }, "PUT");
+    assert.equal(noOp.status, 200);
+    assert.equal(noOp.body.version, defaults.version);
+    const structural = await app.request(`/product/teams/${app.team.id}/runtime`, {
+      expectedVersion: defaults.version, workspace: defaults.workspace, config: { ...defaults.config, model: "other-default" },
+    }, "PUT");
+    assert.equal(structural.status, 409);
+    assert.equal(structural.body.error.code, "active_execution");
+
+    release!();
+    assert.equal((await first).status, "submitted");
+    app.codex.action = async () => ({ status: "completed", text: "Next turn completed" });
+    assert.equal((await app.send("Use the saved effort.")).status, "submitted");
+    assert.equal(app.codex.requests.at(-1)?.config.effort, "high");
+    assert.equal(store.list<Attempt>("attempts", app.team.id).at(-1)?.config.effort, "high");
+    assert.equal(store.get<Attempt>("attempts", app.team.id, attempt.id).config.effort, "low");
+    assert.equal((await app.request("/product")).body.executions[app.team.id].host.runningConfig, undefined);
+  } finally { release?.(); await first?.catch(() => {}); await app.close(); }
+});
+
+test("running members do not block Host or future member-default changes, and task pins still win", async () => {
+  const app = await setup();
+  let release: (() => void) | undefined;
+  try {
+    clearInterval((app.service.runtime as any).timer);
+    const runtime = app.service.runtime, store = runtime.store;
+    const low = app.add("Member low", { harness: "codex", model: "fixture-model", effort: "low", access: "read-only" });
+    const high = app.add("Member high", { ...low.config, effort: "high" });
+    const member = store.createMember(app.team.id, "Reader", "Read", low.config, app.branch.id);
+    let hostWork!: Work;
+    store.teams.recordMessage(app.team.id, app.chat.id, "Create work", randomUUID(), message => {
+      hostWork = store.enqueueHost(app.team.id, app.chat.id, message.id, true, false);
+    });
+    store.publishRequirement(hostWork, "Create work", []);
+    const run = store.get<any>("runs", app.team.id, hostWork.runId);
+    store.setStatus(hostWork, "accepted");
+    const work = store.createWork(run, member.id, "Read", "Read", ["Read completed"], [], []);
+    app.codex.action = () => new Promise(resolve => { release = () => resolve({ status: "completed", text: "Member completed" }); });
+    (runtime as any).pump();
+    await until(() => !!release);
+    const attempt = store.list<Attempt>("attempts", app.team.id).find(a => a.workId === work.id)!;
+    const host = (await app.request("/product")).body.executions[app.team.id].host;
+    assert.equal(host.runningConfig, undefined);
+    const saved = await app.request(`/product/teams/${app.team.id}/branches/${app.branch.id}/host/runtime`, {
+      expectedVersion: host.configurationVersion, config: { ...host.config, effort: "high" },
+    }, "PUT");
+    assert.equal(saved.status, 200);
+    const memberSaved = await app.request(`/teams/${app.team.id}/members/${member.id}/allocation`, {
+      expectedRevision: 1, selection: { resourceId: high.id, resourceVersion: 1, reason: "Next execution" },
+    }, "PUT");
+    assert.equal(memberSaved.status, 200, JSON.stringify(memberSaved.body));
+    assert.deepEqual(store.get<Attempt>("attempts", app.team.id, attempt.id), attempt);
+    assert.equal(app.codex.requests[0].config.effort, "low");
+    const currentMember = store.get<Member>("members", app.team.id, member.id);
+    const nextWork = store.createWork(run, member.id, "Next read", "Read", ["Read completed"], [], []);
+    assert.equal(resolveExecution(runtime, app.team.id, currentMember, nextWork).config.effort, "high");
+    nextWork.selection = { resourceId: low.id, resourceVersion: 1, reason: "Pinned task" };
+    assert.equal(resolveExecution(runtime, app.team.id, currentMember, nextWork).config.effort, "low");
+    store.setStatus(nextWork, "superseded");
+    (runtime as any).closing = true;
+    release!();
+    await until(() => store.get<Attempt>("attempts", app.team.id, attempt.id).status !== "running");
+  } finally { release?.(); await app.close(); }
+});
+
 async function until(check: () => boolean) {
   const start = Date.now();
   while (!check()) {
@@ -278,7 +384,9 @@ test("Host selections enforce branch, member permissions, optimistic versions, b
       assert.equal(assigned.selection.resourceId, ro.id);
       const queued = store.get<Work>("works", app.team.id, waiting.id); store.setStatus(queued, "queued");
       const attempt = store.start(queued, ro.config);
-      await assert.rejects(select(reader.id, ro.id, 2), (e: any) => e.code === "busy");
+      const nextDefault: any = await select(reader.id, ro.id, 2);
+      assert.equal(nextDefault.allocationRevision, 3);
+      assert.deepEqual(store.get<Attempt>("attempts", app.team.id, attempt.id).config, attempt.config);
       await assert.rejects(runtime.tool(app.team.id, waiting.id, attempt.id, "team_select_resource", { target: "host", expectedRevision: 1, resourceId: ro.id, expectedResourceVersion: 1, reason: "Forbidden member call" }, randomUUID()), (e: any) => e.code === "host_required");
       await assert.rejects(runtime.tool(app.team.id, waiting.id, attempt.id, "team_check_resource", { resourceId: ro.id, expectedResourceVersion: 1 }, randomUUID()), (e: any) => e.code === "host_required");
       Object.assign(waiting, store.get<Work>("works", app.team.id, waiting.id)); store.setStatus(waiting, "self_checked");

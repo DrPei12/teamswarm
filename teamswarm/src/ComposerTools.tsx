@@ -1,4 +1,5 @@
 import { PermissionSelect } from "./PermissionSelect";
+import { hasPendingRuntimeConfiguration } from "./runtimeConfiguration";
 import { isComposing } from "./design-system/motion";
 import {
   forwardRef,
@@ -38,6 +39,7 @@ import {
 export function RuntimeControls({
   team,
   executionConfig,
+  runningConfig,
   config: runtimeConfig,
   showContext = true,
   disabled = false,
@@ -48,6 +50,7 @@ export function RuntimeControls({
 }: {
   team: Team;
   executionConfig?: ExecutionConfig;
+  runningConfig?: ExecutionConfig;
   config?: RuntimeConfig;
   showContext?: boolean;
   disabled?: boolean;
@@ -154,7 +157,7 @@ export function RuntimeControls({
                 type="button"
                 className={`runtime-choice ${key === "effort" ? "effort-choice" : ""}`}
                 aria-label={tr(`Choose ${key}`)}
-                disabled={disabled || (key === "effort" && !hasModel)}
+                disabled={disabled || saving || (key === "effort" && !hasModel)}
               >
                 <span>
                   {key === "effort" && config[key] !== "Default"
@@ -197,6 +200,7 @@ export function RuntimeControls({
                     type="button"
                     className="menu-item"
                     key={value}
+                    disabled={saving}
                     title={
                       key === "effort"
                         ? efforts.find((e) => e.reasoningEffort === value)
@@ -271,7 +275,7 @@ export function RuntimeControls({
         <PermissionSelect
           compact
           config={executionConfig}
-          disabled={disabled}
+          disabled={disabled || saving}
           running={running}
           open={!disabled && edit === "permissions"}
           onOpenChange={(open) =>
@@ -338,6 +342,11 @@ export function RuntimeControls({
             </Tooltip.Content>
           </Tooltip.Portal>
         </Tooltip.Root>
+      )}
+      {hasPendingRuntimeConfiguration(executionConfig, runningConfig) && (
+        <span className="runtime-pending" role="status">
+          {tr("Applies next turn")}
+        </span>
       )}
     </div>
   );

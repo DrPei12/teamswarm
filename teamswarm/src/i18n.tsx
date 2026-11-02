@@ -29,6 +29,7 @@ export const zhCN: Record<string, string> = {
   "Permission options unavailable": "权限选项暂不可用",
   "Permissions saved": "权限已保存",
   "Applies to the next execution": "下次执行生效",
+  "Applies next turn": "下一轮生效",
   "Could not save permissions": "权限保存失败",
   "Read-only access prevents this permission mode.":
     "当前为只读，无法使用此权限模式。",

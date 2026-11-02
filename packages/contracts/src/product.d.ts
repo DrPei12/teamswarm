@@ -12,7 +12,7 @@ import type {
 } from "./runtime";
 export type { ProjectNode, ProjectBranch, ProjectDocument } from "./runtime";
 export type TeamExecution = {
-  host?: { config: ExecutionConfig; permissionVersion: number; memberId: string; branchId: string };
+  host?: { config: ExecutionConfig; configurationVersion: number; runningConfig?: ExecutionConfig; permissionVersion: number; memberId: string; branchId: string };
   settings: RuntimeSettings | null;
   works: Work[];
   runs: Run[];
@@ -82,6 +82,8 @@ export type Member = {
   effort?: string;
   /** Configuration for the next execution, separate from the last attempt. */
   executionConfig?: ExecutionConfig;
+  /** Frozen configuration of the current Attempt, if one is executing. */
+  runningExecutionConfig?: ExecutionConfig;
   configurationVersion?: number;
   sessionId?: string;
   x?: number;

@@ -209,8 +209,7 @@ try {
   const save = () =>
     page.waitForResponse(
       (r) =>
-        r.url().endsWith(`/product/teams/${team.id}/runtime`) &&
-        r.request().method() === "PUT",
+        r.url().endsWith(`/host/runtime`) && r.request().method() === "PUT",
     );
   const saved = await Promise.all([
     save(),
@@ -219,11 +218,13 @@ try {
       .click(),
   ]);
   assert.equal(saved[0].status(), 200, await saved[0].text());
-  settings = service.runtime.store.settings(team.id);
-  assert.equal(settings.config.harness, "grok");
-  assert.equal(settings.config.provider, "secondary connection");
-  assert.equal(settings.config.credentialEnv, "TEST_SECONDARY");
-  assert.equal(settings.config.protocol, "chat-completions");
+  const hostConfig = async () =>
+    (await request("/product")).executions[team.id].host.config;
+  let selectedConfig = await hostConfig();
+  assert.equal(selectedConfig.harness, "grok");
+  assert.equal(selectedConfig.provider, "secondary connection");
+  assert.equal(selectedConfig.credentialEnv, "TEST_SECONDARY");
+  assert.equal(selectedConfig.protocol, "chat-completions");
   await page
     .getByRole("button", { name: "Choose harness", exact: true })
     .click();
@@ -232,10 +233,10 @@ try {
     page.getByRole("button", { name: "Claude Code", exact: true }).click(),
   ]);
   assert.equal(switched[0].status(), 200, await switched[0].text());
-  settings = service.runtime.store.settings(team.id);
-  assert.equal(settings.config.model, "qwen-plus");
-  assert.equal(settings.config.protocol, "anthropic-messages");
-  assert.equal(settings.config.baseUrl, "https://secondary.example/anthropic");
+  selectedConfig = await hostConfig();
+  assert.equal(selectedConfig.model, "qwen-plus");
+  assert.equal(selectedConfig.protocol, "anthropic-messages");
+  assert.equal(selectedConfig.baseUrl, "https://secondary.example/anthropic");
   await page.getByRole("button", { name: /^Execution permissions:/ }).click();
   for (const name of ["Request approval", "Automatic review", "Full access"])
     assert.equal(

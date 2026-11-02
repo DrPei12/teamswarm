@@ -316,7 +316,8 @@ export class TeamCatalog {
     const selected = selection ? this.resources(teamId).find(r => r.id === selection.resourceId) : undefined;
     const selectionCurrent = !selection || selected?.version === selection.resourceVersion;
     const selectionRetained = !selectionCurrent && !!choice?.config && !!selection?.resourceId.startsWith("cap_");
-    const configuration = memberPermissions(selectionCurrent ? selected?.config ?? member.config : choice?.config ?? member.config, member);
+    const branchConfig = choice?.selection === null ? choice.config : undefined;
+    const configuration = memberPermissions(selectionCurrent ? selected?.config ?? branchConfig ?? member.config : choice?.config ?? member.config, member);
     return {
       harness: configuration.harness, model: configuration.model, effort: configuration.effort,
       config: member.config.access === "read-only" ? readOnlyExecution(configuration) : configuration,

@@ -53,15 +53,17 @@ export function effectiveSelection(
   };
 }
 
-/** Caller must also check member-wide active attempts, resource version and scope
- * inside the same transaction as assignment. This pure guard is not authorization.
- * Only nonexecuting unfinished work is mutable; recovery_required is unsafe.
+/** Caller must also check resource version and scope inside the assignment
+ * transaction. Defaults seed future Attempts; task edits require a safe boundary.
+ * This pure guard is not authorization.
  */
 export function allocationBoundary(input: AllocationBoundary):
   "version_conflict" | "busy" | "invalid_state" | "access_escalation" | null {
   if (input.currentRevision !== input.expectedRevision) return "version_conflict";
-  if (["running", "stopping", "recovery_required"].includes(input.status)) return "busy";
-  if (!["waiting", "yielded", "queued", "interrupted", "failed"].includes(input.status)) return "invalid_state";
+  if (input.scope !== "member-default") {
+    if (["running", "stopping", "recovery_required"].includes(input.status)) return "busy";
+    if (!["waiting", "yielded", "queued", "interrupted", "failed"].includes(input.status)) return "invalid_state";
+  }
   if (input.maximumAccess === "read-only" && input.access !== "read-only") return "access_escalation";
   return null;
 }

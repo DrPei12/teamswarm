@@ -318,7 +318,7 @@ test("member and task allocation use stable contract codes and never half-write"
     assert.equal(workOk.status, 200);
     assert.equal(workOk.body.selection.resourceId, writable.id);
 
-    // A running attempt is busy: neither the work nor the member may be reallocated.
+    // A running task stays pinned; a member default can seed future Attempts.
     const running0 = store.get<Work>("works", teamId, work.id);
     store.setStatus(running0, "running");
     const busyWork = await api(running, `/api/teams/${teamId}/works/${work.id}/allocation`, {
@@ -337,8 +337,9 @@ test("member and task allocation use stable contract codes and never half-write"
         selection: { resourceId: readonly.id, resourceVersion: 1, reason: "swap" },
       }),
     });
-    assert.equal(busyMember.status, 409);
-    assert.equal(busyMember.body.error.code, "busy");
+    assert.equal(busyMember.status, 200);
+    assert.equal(busyMember.body.selection.resourceId, readonly.id);
+    assert.equal(store.get<Work>("works", teamId, work.id).selection?.resourceId, writable.id);
 
     // A terminal, non-executing work cannot be reallocated either.
     const finished = store.createWork(run, writer.id, "Done", "Done", ["c"], [], []);
