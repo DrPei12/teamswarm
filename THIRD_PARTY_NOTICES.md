@@ -26,11 +26,19 @@ The approved TeamSwarm marks in `teamswarm/branding/` are project artwork. Publi
 
 ## Modified npm runtime
 
-The bundled `npm-11.21.1-teamswarm.2.tgz` is based on npm 11.21.1.
-Its bundled `ip-address 10.7.2` and `undici 6.29.0` are replaced by the
-unmodified upstream packages 10.7.4 and 6.29.1. The npm version in
-`package.json` and `TEAMSWARM-NOTICE.md` identify this modified distribution.
-All other upstream file bytes and modes are retained.
+The bundled `npm-11.21.1-teamswarm.3.tgz` is based on npm 11.21.1.
+It includes unmodified upstream releases of ip-address 10.7.4, undici 6.29.1,
+glob 14.0.2, minimatch 11.0.1, path-scurry 3.0.0 and
+`@isaacs/nonrecursive-glob-match` 1.0.1. Bundled package manifests reference
+the updated glob and minimatch versions. The npm version in `package.json`
+and `TEAMSWARM-NOTICE.md` identify this modified distribution; other
+upstream file bytes and modes are retained.
+
+The Apache-2.0 adapters in `vendor/glob-compat` and `vendor/minimatch-compat`
+provide the callback and callable exports used by older build dependencies.
+They delegate matching and filesystem traversal to the unmodified upstream
+glob and minimatch releases listed above, whose ISC licenses remain with
+their installed packages.
 
 The npm source and these modifications are distributed under Artistic-2.0.
 Dependencies retain their own licenses, included in the archive and desktop

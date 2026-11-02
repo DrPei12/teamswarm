@@ -6,7 +6,9 @@
   "workspaces": [
     "teamswarm",
     "apps/server",
-    "packages/contracts"
+    "packages/contracts",
+    "vendor/glob-compat",
+    "vendor/minimatch-compat"
   ],
   "scripts": {
     "build": "node scripts/build-product.mjs",
@@ -32,7 +34,7 @@
     "@types/node": "^24.0.0",
     "electron": "44.9.1",
     "electron-builder": "26.15.3",
-    "npm": "file:vendor/npm-11.21.1-teamswarm.2.tgz",
+    "npm": "file:vendor/npm-11.21.1-teamswarm.3.tgz",
     "typescript": "^5.9.0"
   },
   "license": "Apache-2.0",
@@ -48,6 +50,25 @@
   "overrides": {
     "global-agent@3.0.0": {
       "roarr": "3.0.0"
+    },
+    "@electron/asar": {
+      "glob": "14.0.2+teamswarm.1",
+      "minimatch": "11.0.1+teamswarm.1"
+    },
+    "rimraf": {
+      "glob": "14.0.2+teamswarm.1"
+    },
+    "dir-compare": {
+      "minimatch": "11.0.1+teamswarm.1"
+    },
+    "filelist": {
+      "minimatch": "11.0.1+teamswarm.1"
+    },
+    "app-builder-lib": {
+      "minimatch": "11.0.1+teamswarm.1"
+    },
+    "@electron/universal": {
+      "minimatch": "11.0.1+teamswarm.1"
     }
   }
 }
