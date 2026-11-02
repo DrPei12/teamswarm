@@ -4,7 +4,7 @@
 
 TeamSwarm is for AI builders working on code and text projects across multiple agents, sessions and revisions. Discuss a goal with the Host, let members work in independent harnesses, and keep the current decisions, work and deliverables together.
 
-[简体中文](README.zh-CN.md) · [Install](#install) · [First project](#first-project) · [Harnesses and models](#harnesses-and-models) · [Data and recovery](#data-and-recovery)
+[简体中文](README.zh-CN.md) · [Install](#install) · [First project](#first-project) · [Harnesses and models](#harnesses-and-models) · [Data and recovery](#data-and-recovery) · [Privacy](#privacy) · [Code signing policy](#code-signing-policy)
 
 [![Watch the TeamSwarm product film — 36 seconds, 4K at 120 fps](.github/media/teamswarm-film-cover-en.jpg)](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-EN.mp4)
 
@@ -29,7 +29,7 @@ Download the Windows x64 installer and `SHA256SUMS.txt` from the same [GitHub Re
 | Linux x64 | AppImage, DEB | Build from source |
 | macOS Apple Silicon | DMG, ZIP | Build from source |
 
-The Windows installer is unsigned and Windows displays an unknown publisher. Compare its hash with the release checksum file:
+The Windows installer is unsigned and Windows displays an unknown publisher. See the [Code signing policy](#code-signing-policy). Compare its hash with the release checksum file:
 
 ```powershell
 Get-FileHash .\TeamSwarm-0.6.0-Windows-x64.exe -Algorithm SHA256
@@ -189,6 +189,17 @@ The selected harness sends prompts and relevant project content to its configure
 
 Saved Windows keys use current-account DPAPI. macOS desktop builds use Keychain-backed encryption; Linux desktop builds require a supported unlocked system keyring and reject plaintext fallback. The source Web service on macOS/Linux uses environment credentials or startup secret-file references. Reconnect credentials after moving to another device or OS account.
 
+<a id="privacy"></a>
+### Privacy and network connections
+
+TeamSwarm stores workspace data on your device as described above. It does not operate a project-hosted telemetry or advertising service.
+
+Signing in, refreshing accounts, checking model availability and running tasks contact the account services or model providers you select. Model requests can include your prompts, relevant project files and tool results. Native harnesses keep their own account/session records and can make additional network requests according to their settings and the permissions you grant. Their privacy policies and your provider agreements apply, including those of [OpenAI](https://openai.com/policies/privacy-policy/), [Anthropic](https://www.anthropic.com/legal/privacy), [xAI](https://x.ai/legal/privacy-policy) and [DeepSeek Harness](https://www.deepseek.com/harness/privacy/) when those services are used.
+
+Opening a harness installation page can query the npm registry for version information. **Notify me about harness updates** controls automatic version checks; **Check for updates** also makes a registry request. Installing a selected harness downloads its packages. These requests are covered by [npm's privacy policy](https://docs.npmjs.com/policies/privacy/).
+
+Project files remain in the folders you select. Uninstalling TeamSwarm retains its local service data and project files. Share diagnostic files and backups only with recipients you choose; native harness records are managed by the respective tools.
+
 Close the application and service before backup or restore. From a source checkout:
 
 ```sh
@@ -265,6 +276,15 @@ The report includes event count, peak occupied work, latest terminal states, exc
 Use [Issues](https://github.com/DrPei12/teamswarm/issues) for reproducible problems, with version, OS, harness/model, launch method and redacted diagnostics. For vulnerabilities, use **Security → Report a vulnerability** when available; otherwise, ask in an issue for a private contact channel without disclosing the details. Exclude credentials, private transcripts and personal project files from reports.
 
 Focused pull requests are welcome. Run checks appropriate to the changed behavior, preserve data and execution recovery, and keep both READMEs consistent. UI changes should be exercised in both languages and relevant window sizes. Contributions are provided under Apache-2.0; retain third-party attribution.
+
+<a id="code-signing-policy"></a>
+## Code signing policy
+
+Windows installers are currently unsigned. TeamSwarm is applying to [SignPath Foundation](https://signpath.org/) for free code signing through [SignPath.io](https://about.signpath.io/), using a certificate issued to SignPath Foundation.
+
+The project maintainer, contribution reviewer and release approver is [DrPei12](https://github.com/DrPei12). Signing access requires multi-factor authentication, and every signing request requires manual approval by the release approver.
+
+Signing requests cover TeamSwarm's own application executable and Windows installer built from reviewed public source by the [Desktop packages workflow](https://github.com/DrPei12/teamswarm/actions/workflows/desktop.yml). The source commit, build identity and file hashes are recorded in the release manifest and checksum file. Upstream executables and libraries retain their own signatures and licenses; they are not signed under TeamSwarm's signing request. See [third-party notices](THIRD_PARTY_NOTICES.md) and the [privacy policy](#privacy).
 
 <a id="license"></a>
 ## License

@@ -4,7 +4,7 @@
 
 TeamSwarm 面向需要跨成员、会话和多轮修改推进代码与文本项目的 AI builders。通过 Host 讨论目标，让成员在各自独立的 Harness 中执行，并把当前决定、任务与成果保存在同一个工作空间。
 
-[English](README.md) · [安装](#install) · [第一个项目](#first-project) · [Harness 与模型](#harnesses-and-models) · [数据与恢复](#data-and-recovery)
+[English](README.md) · [安装](#install) · [第一个项目](#first-project) · [Harness 与模型](#harnesses-and-models) · [数据与恢复](#data-and-recovery) · [隐私](#privacy) · [代码签名策略](#code-signing-policy)
 
 [![观看 TeamSwarm 宣传片 — 36 秒，4K / 120 fps](.github/media/teamswarm-film-cover-zh.jpg)](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-ZH.mp4)
 
@@ -29,7 +29,7 @@ TeamSwarm 面向本地单用户场景。Harness 使用你配置的账号或 API 
 | Linux x64 | AppImage、DEB | 从源码构建 |
 | macOS Apple Silicon | DMG、ZIP | 从源码构建 |
 
-Windows 安装器未签名，系统会显示未知发布者。将文件哈希与同版校验文件比较：
+Windows 安装器未签名，系统会显示未知发布者。签名安排见[代码签名策略](#code-signing-policy)。将文件哈希与同版校验文件比较：
 
 ```powershell
 Get-FileHash .\TeamSwarm-0.6.0-Windows-x64.exe -Algorithm SHA256
@@ -186,6 +186,17 @@ Host 和成员先获得项目概况、当前分工与可检索的资料索引，
 
 Windows 保存的 Key 使用当前账号的 DPAPI。macOS 桌面版使用 Keychain 加密，Linux 桌面版要求受支持且已解锁的系统密钥环，并拒绝明文回退。macOS/Linux 的源码 Web 服务使用环境变量或启动密钥文件引用。更换设备或系统账号后重新连接凭据。
 
+<a id="privacy"></a>
+### 隐私与网络连接
+
+TeamSwarm 按上述方式将工作区数据保存在你的设备上，没有项目自建的遥测或广告服务。
+
+登录、刷新账号、检查模型可用性和执行任务时，会连接你选择的账号服务或模型提供方。模型请求可能包含你的提示、相关项目文件和工具结果。原生 Harness 保存各自的账号与会话记录，并按自身设置及你授予的权限发起其他网络请求。相应工具的隐私政策和你与提供方的协议适用，包括使用相关服务时的 [OpenAI](https://openai.com/policies/privacy-policy/)、[Anthropic](https://www.anthropic.com/legal/privacy)、[xAI](https://x.ai/legal/privacy-policy) 和 [DeepSeek Harness](https://www.deepseek.com/harness/privacy/) 政策。
+
+打开 Harness 安装页时，可能向 npm registry 查询版本信息。“提醒 Harness 更新”控制自动版本检查；“检查更新”也会发起 registry 请求。安装所选 Harness 时会下载相应软件包。这些请求适用 [npm 隐私政策](https://docs.npmjs.com/policies/privacy/)。
+
+项目文件保存在你选择的目录。卸载 TeamSwarm 会保留本地服务数据和项目文件。仅向你选择的接收方分享诊断文件和备份；原生 Harness 记录由相应工具管理。
+
 备份或恢复前关闭应用及服务。从源码目录执行：
 
 ```sh
@@ -262,6 +273,15 @@ node tools/offline-audit/audit.mjs events.json --format markdown --team team-id
 通过 [Issues](https://github.com/DrPei12/teamswarm/issues) 反馈可复现问题，附上版本、系统、Harness/模型、启动方式和脱敏诊断。漏洞使用可用的 **Security → Report a vulnerability** 入口；若未开放，在 issue 中请求私下联系渠道，不公开漏洞细节。反馈中排除凭据、私有对话与个人项目文件。
 
 欢迎提交聚焦的 PR。针对行为变化运行相关检查，保留数据与执行恢复路径，维护两份 README 的一致性；界面变化检查中英文和相关窗口尺寸。提交供项目收录的贡献按 Apache-2.0 提供，并保留第三方署名。
+
+<a id="code-signing-policy"></a>
+## 代码签名策略（Code signing policy）
+
+Windows 安装器目前未签名。TeamSwarm 正在向 [SignPath Foundation](https://signpath.org/) 申请通过 [SignPath.io](https://about.signpath.io/) 提供的免费代码签名，证书签发给 SignPath Foundation。
+
+项目维护者、贡献审查者及发布批准人为 [DrPei12](https://github.com/DrPei12)。签名访问要求多因素认证，每个签名请求均须由发布批准人手动批准。
+
+签名请求仅覆盖由 [Desktop packages 工作流](https://github.com/DrPei12/teamswarm/actions/workflows/desktop.yml) 从已审查的公开源码构建的 TeamSwarm 应用可执行文件及 Windows 安装器。发布清单和校验文件记录源码提交、构建身份及文件哈希。上游可执行文件和库保留各自的签名与许可证，不纳入 TeamSwarm 的签名请求。详情见[第三方声明](THIRD_PARTY_NOTICES.md)及[隐私政策](#privacy)。
 
 <a id="license"></a>
 ## 许可
