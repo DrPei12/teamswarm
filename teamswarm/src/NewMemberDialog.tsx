@@ -11,7 +11,7 @@ import {
   MemberPermissionPicker,
   type MemberPermissionOptions,
 } from "./MemberPermissionPicker";
-import { harnessId } from "./harnessCatalog";
+import { harnessId, harnessLabel } from "./harnessCatalog";
 
 export function NewMemberDialog({
   team,
@@ -25,11 +25,17 @@ export function NewMemberDialog({
   onSettings: (tab?: "harnesses" | "connections" | "runtime") => void;
 }) {
   const { t } = useI18n();
-  const [config, setConfig] = useState(team.runtime ?? defaultRuntime);
   const [execution, setExecution] = useState<ExecutionConfig | undefined>(
     workspace.executions?.[team.id]?.host?.config ??
       workspace.executions?.[team.id]?.settings?.config,
   );
+  const config = execution
+    ? {
+        harness: harnessLabel(execution.harness),
+        model: execution.model ?? "",
+        effort: execution.effort ?? "Default",
+      }
+    : defaultRuntime;
   const [preset, setPreset] = useState<MemberPermissionPreset | "team-default">(
     "team-default",
   );
@@ -125,7 +131,6 @@ export function NewMemberDialog({
                     setPolicy(undefined);
                   }
                   setExecution(resolved);
-                  setConfig(next);
                 } finally {
                   setResolving(false);
                 }

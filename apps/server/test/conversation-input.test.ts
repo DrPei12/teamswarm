@@ -42,3 +42,21 @@ test("native callers and production assignments retain their input unchanged", (
   for (const input of ["plain input", "null", "{}", JSON.stringify({ work: { instructions: "Produce the artifact" }, turnPurpose: "task" })])
     assert.equal(conversationInput(input), input);
 });
+
+
+test("native member conversations retain reply routing and distinguish requests from notices", () => {
+  const rendered = conversationInput(JSON.stringify({
+    work: { memberId: "worker", interaction: { messageIds: ["request", "notice"] } },
+    incomingMessages: [
+      { id: "request", senderId: "host", content: "Report completion", replyExpected: true },
+      { id: "notice", senderId: "peer", content: "A notice", replyExpected: false },
+    ],
+  }));
+  const context = JSON.parse(rendered.split("Background context:\n\n")[1].split("\n\nCurrent message:")[0]);
+  assert.deepEqual(context.currentMessageRoutes, [
+    { messageId: "request", senderId: "host", replyExpected: true },
+    { messageId: "notice", senderId: "peer", replyExpected: false },
+  ]);
+  assert.equal(rendered.split("Report completion").length - 1, 1);
+  assert.match(rendered, /replyTo=messageId/);
+});
