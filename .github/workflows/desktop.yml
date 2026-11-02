@@ -29,6 +29,9 @@ jobs:
       - run: npm run release:check
       - run: npm run check
       - run: npm run desktop:build
+      - name: Verify macOS packages and desktop
+        if: runner.os == 'macOS'
+        run: node scripts/verify-macos-package.mjs release/darwin-arm64
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: TeamSwarm-${{ inputs.runner }}
@@ -42,3 +45,15 @@ jobs:
             release/*/TeamSwarm-*.zip
             release/*/SHA256SUMS.txt
             release/*/release-manifest.json
+            release/*/macos-verification.json
+            release/*/macos-desktop.png
+      - name: Upload macOS diagnostics
+        if: failure() && runner.os == 'macOS'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: TeamSwarm-macOS-diagnostics
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            release/*/macos-verification.json
+            release/*/macos-desktop.png
