@@ -14,6 +14,7 @@ export const release = Object.freeze({
   runId: 41450867298,
   artifactId: 13144756890,
   artifactName: 'TeamSwarm-macos-14',
+  releaseId: 431681894,
   assets: {
     'TeamSwarm-0.6.0-macOS-arm64.dmg': '0b92fffa5f0c06d3a758e39187f4c6a389f575b3f6d02cddac14c1eeb95d4224',
     'TeamSwarm-0.6.0-macOS-arm64.zip': 'c3fc41a7b4eff69c3a855ec2061170720c482b919b7331c100bad5570c55098a',
@@ -78,7 +79,8 @@ async function promote() {
   const artifacts = api(`actions/runs/${release.runId}/artifacts`).artifacts;
   const artifact = artifacts.find(a => a.id === release.artifactId);
   assert(artifact && !artifact.expired && artifact.name === release.artifactName);
-  const draft = api(`releases/tags/${release.tag}`);
+  const draft = api(`releases/${release.releaseId}`);
+  assert.equal(draft.tag_name, release.tag);
   assert.equal(draft.draft, true, 'An existing published release will not be modified.');
   const tag = api(`git/ref/tags/${release.tag}`);
   assert.equal(tag.object.type, 'commit'); assert.equal(tag.object.sha, release.commit);
@@ -116,11 +118,11 @@ async function promote() {
   }
   const missing = Object.keys(hashes).filter(name => !existing.some(a => a.name === name));
   if (missing.length) gh(['release','upload',release.tag,'--repo',release.repository,...missing.map(name => path.join(output,name))]);
-  const uploaded = api(`releases/tags/${release.tag}`);
+  const uploaded = api(`releases/${release.releaseId}`);
   assert.equal(uploaded.assets.length, Object.keys(hashes).length);
   for (const asset of uploaded.assets) assert.equal(asset.digest, `sha256:${hashes[asset.name]}`, `Upload differs: ${asset.name}`);
   gh(['release','edit',release.tag,'--repo',release.repository,'--draft=false','--prerelease','--latest=false']);
-  const published = api(`releases/tags/${release.tag}`);
+  const published = api(`releases/${release.releaseId}`);
   assert.equal(published.draft, false); assert.equal(published.prerelease, true);
   console.log(JSON.stringify({ published: true, url: published.html_url, commit: release.commit, assets: published.assets.map(a => ({ name:a.name, size:a.size, digest:a.digest, url:a.browser_download_url })) }));
 }
