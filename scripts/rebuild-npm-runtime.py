@@ -14,11 +14,18 @@ CONFIG = ROOT / "vendor/npm-runtime.json"
 
 
 def fetch(spec):
-    with urllib.request.urlopen(spec["url"], timeout=60) as response:
-        data = response.read()
+    cache = ROOT / ".local" / "npm-runtime-sources" / (hashlib.sha256(spec["url"].encode()).hexdigest() + ".tgz")
+    if cache.exists():
+        data = cache.read_bytes()
+    else:
+        with urllib.request.urlopen(spec["url"], timeout=60) as response:
+            data = response.read()
     actual = "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode()
     if actual != spec["integrity"]:
         raise ValueError("Upstream archive integrity mismatch: " + spec["url"])
+    if not cache.exists():
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(data)
     return data
 
 
@@ -42,36 +49,63 @@ def rebuild(config):
     package = json.loads(original["package/package.json"][0])
     if package["version"] != config["npm"]["version"]:
         raise ValueError("Unexpected upstream npm bundle")
-    replacements = [("ipAddress", "ip-address", "10.7.2"), ("undici", "undici", "6.29.0")]
+    replacements = [
+        ("ipAddress", "ip-address", "10.7.2"),
+        ("undici", "undici", "6.29.0"),
+        ("glob", "glob", "13.0.6"),
+        ("minimatch", "minimatch", "10.2.5"),
+        ("pathScurry", "path-scurry", "2.0.2"),
+        ("nonrecursiveGlobMatch", "@isaacs/nonrecursive-glob-match", None),
+    ]
     files = dict(original)
     prefixes = []
     for key, name, old_version in replacements:
         prefix = "package/node_modules/" + name + "/"
         prefixes.append(prefix)
         replacement = entries(fetch(config[key]))
-        old = json.loads(original[prefix + "package.json"][0])
         new = json.loads(replacement["package/package.json"][0])
-        if old["name"] != name or old["version"] != old_version:
-            raise ValueError("Unexpected bundled package: " + name)
+        if old_version is None:
+            if any(path.startswith(prefix) for path in original):
+                raise ValueError("Unexpected existing bundled package: " + name)
+        else:
+            old = json.loads(original[prefix + "package.json"][0])
+            if old["name"] != name or old["version"] != old_version:
+                raise ValueError("Unexpected bundled package: " + name)
         if new["name"] != name or new["version"] != config[key]["version"]:
             raise ValueError("Unexpected replacement package: " + name)
         files = {path: value for path, value in files.items() if not path.startswith(prefix)}
         for path, value in replacement.items():
             files[prefix + path.removeprefix("package/")] = value
-    package["version"] = config["version"]
-    files["package/package.json"] = ((json.dumps(package, indent=2) + "\n").encode(), 0o644)
+    changed_manifests = set()
+    for name, (data, mode) in list(files.items()):
+        if not name.endswith("/package.json"):
+            continue
+        manifest = json.loads(data)
+        changed = False
+        for dependency in ["glob", "minimatch"]:
+            dependencies = manifest.get("dependencies", {})
+            version = "^" + config[dependency]["version"]
+            if dependency in dependencies and dependencies[dependency] != version:
+                dependencies[dependency] = version
+                changed = True
+        if name == "package/package.json":
+            manifest["version"] = config["version"]
+            changed = True
+        if changed:
+            files[name] = ((json.dumps(manifest, indent=2) + "\n").encode(), mode)
+            changed_manifests.add(name)
     files["package/TEAMSWARM-NOTICE.md"] = (
         ("# npm runtime distributed with TeamSwarm\n\n"
-         f"Based on npm {config['npm']['version']}, with unmodified upstream "
-         f"ip-address {config['ipAddress']['version']} and undici {config['undici']['version']}. "
-         "These replace bundled ip-address 10.7.2 and undici 6.29.0.\n\n"
+         f"Based on npm {config['npm']['version']}, with pinned unmodified upstream packages:\n\n"
+         + "".join(f"- {name} {config[key]['version']}\n" for key, name, _ in replacements)
+         + "\nBundled package manifests reference the updated glob and minimatch versions.\n\n"
          "npm source and these modifications are redistributable under Artistic-2.0. "
          "Bundled dependencies retain their licenses. Upstream notices are preserved.\n\n"
          "Sources and reproduction: https://github.com/DrPei12/teamswarm/tree/main/vendor\n"
-         + "".join(f"{key}: {config[key]['url']}\n" for key in ["npm", "ipAddress", "undici"])
+         + "".join(f"{key}: {config[key]['url']}\n" for key in ["npm", *[item[0] for item in replacements]])
          ).encode(), 0o644)
     for name, value in original.items():
-        if name != "package/package.json" and not any(name.startswith(prefix) for prefix in prefixes):
+        if name not in changed_manifests and not any(name.startswith(prefix) for prefix in prefixes):
             assert files[name] == value
     output = io.BytesIO()
     with gzip.GzipFile(fileobj=output, mode="wb", filename="", mtime=0, compresslevel=9) as zipped:
