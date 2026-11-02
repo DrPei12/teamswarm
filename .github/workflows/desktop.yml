@@ -5,7 +5,7 @@ on:
       runner:
         type: choice
         default: windows-2025
-        options: [windows-2025, ubuntu-24.04, macos-15]
+        options: [windows-2025, ubuntu-24.04, macos-14, macos-15]
 permissions:
   contents: read
 jobs:
