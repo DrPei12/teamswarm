@@ -2,7 +2,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
+const { verifyCompiledOutputs } = require("../../scripts/release-identity.mjs");
 function verifyProduct(product) {
+  const build = JSON.parse(fs.readFileSync(path.join(product, "build-identity.json"), "utf8"));
+  verifyCompiledOutputs(product, build.outputs);
   const inventory = JSON.parse(fs.readFileSync(path.join(product, "package-inventory.json"), "utf8"));
   for (const [relative, expected] of Object.entries(inventory.files)) {
     const file = path.resolve(product, relative);
