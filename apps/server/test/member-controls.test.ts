@@ -225,7 +225,8 @@ test("Host permissions save per branch, survive model changes, and apply only to
  const chosen=await f.api(endpoint,{expectedVersion:1,preset:'full-access'},'PUT');assert.equal(chosen.status,200,JSON.stringify(chosen.body));
  const current=rt.catalog.memberExecution(f.team.id,f.branch.id,host());assert.equal(current.config.permissions?.sandbox,'danger-full-access');assert.equal(current.config.access,'workspace-write');
  const otherChat=(await f.api(`/teams/${f.team.id}/conversations`,{title:'Separate branch'})).body;
- const otherBranch=rt.history.forConversation(f.team.id,otherChat.id);
+ const otherBranch=rt.history.importConversation(f.team.id,otherChat.id,'Separate branch',[]);
+ assert.notEqual(otherBranch.id,f.branch.id);
  assert.equal(rt.catalog.memberExecution(f.team.id,otherBranch.id,host()).config.access,'read-only');
  const reloaded=(await f.api('/product')).body.executions[f.team.id];
  assert.equal(reloaded.host.config.access,'workspace-write');
