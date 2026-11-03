@@ -151,6 +151,7 @@ export type ConversationEntry = {
   error?: string;
   /** Original failed delivery; retry reuses its existing work instead of resending. */
   retryWorkId?: string;
+  deliveryHistory?: { id: string; createdAt: number; status: "failed" | "delivered"; error?: string }[];
   items?: TranscriptItem[];
   elapsedMs?: number;
   exchangeId?: string;

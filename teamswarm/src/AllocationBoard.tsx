@@ -217,6 +217,7 @@ export function AllocationBoard({
               selection={host.selection ?? null}
               revision={host.configurationVersion}
               label={t("Host execution resource")}
+              assignedCaption={t("Change resource")}
               resetLabel={t("Restore Team default")}
               host
               onReload={onChanged}
@@ -258,6 +259,7 @@ export function AllocationBoard({
                       selection={member.resourceSelection ?? null}
                       revision={member.configurationVersion}
                       label={t("Set member default")}
+                      assignedCaption={t("Change resource")}
                       resetLabel={t("Remove resource assignment")}
                       onReload={onChanged}
                       onSave={(selection, expectedRevision) =>

@@ -648,6 +648,30 @@ function ConversationThread({
                   pending={entry.status === "running"}
                 />
               )}
+              {entry.deliveryHistory && (
+                <details className="delivery-history">
+                  <summary>
+                    {t("Delivery history ({count})", {
+                      count: entry.deliveryHistory.length,
+                    })}
+                  </summary>
+                  <ol>
+                    {entry.deliveryHistory.map((outcome) => (
+                      <li key={outcome.id}>
+                        <time
+                          dateTime={new Date(outcome.createdAt).toISOString()}
+                        >
+                          {new Date(outcome.createdAt).toLocaleString(locale)}
+                        </time>
+                        <span>{t(statusLabels[outcome.status])}</span>
+                        {outcome.error && (
+                          <p>{t(executionFeedback(outcome.error))}</p>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              )}
               {entry.messageKind === "accept" && entry.commitment && (
                 <div className="session-status">
                   <strong>{t("Commitment")}: </strong>

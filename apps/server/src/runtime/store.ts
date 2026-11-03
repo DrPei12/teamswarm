@@ -146,6 +146,7 @@ export class RuntimeStore {
             team_id TEXT NOT NULL REFERENCES teams(id), run_id TEXT, work_id TEXT, attempt_id TEXT,
             type TEXT NOT NULL, data TEXT NOT NULL CHECK(json_valid(data)), created_at TEXT NOT NULL);
           CREATE INDEX IF NOT EXISTS runtime_events_team ON runtime_events(team_id, sequence);
+          CREATE INDEX IF NOT EXISTS runtime_events_work ON runtime_events(team_id, work_id, sequence);
           CREATE INDEX IF NOT EXISTS runtime_events_attempt ON runtime_events(attempt_id, type, sequence);
           CREATE INDEX IF NOT EXISTS runtime_works_status ON runtime_works(json_extract(data,'$.status'),team_id);
           CREATE INDEX IF NOT EXISTS runtime_works_run ON runtime_works(team_id,json_extract(data,'$.runId'));

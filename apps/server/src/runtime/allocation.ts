@@ -19,7 +19,7 @@ import {
 } from "./allocation-portable.js";
 import { executionConfig } from "./validation.js";
 import { readOnlyPermissions } from "./harness/permissions.js";
-import { allocationTaskIds } from "./allocation-tasks.js";
+import { allocationTaskIds, historicalAllocationWork } from "./allocation-tasks.js";
 import type { TeamCatalog } from "./catalog.js";
 import type { RuntimeStore } from "./store.js";
 import type { Attempt, ExecutionConfig, Member, Requirement, Run, Work, WorkStatus } from "./types.js";
@@ -121,12 +121,14 @@ export function deleteResource(
     const usedByMember = deps.store
       .list<Member>("members", teamId)
       .some((m) => !m.removedAt && (m.selection?.resourceId === resourceId || Object.values(m.hostSelections ?? {}).some(s => s.selection?.resourceId === resourceId)));
-    const usedByOpenWork = deps.store
-      .list<Work>("works", teamId)
-      .some(
+    const works = deps.store.list<Work>("works", teamId);
+    const historical = historicalAllocationWork({ works, runs: deps.store.list<Run>("runs", teamId),
+      requirements: deps.store.list<Requirement>("requirements", teamId) });
+    const usedByOpenWork = works.some(
         (w) =>
           w.selection?.resourceId === resourceId &&
-          !TERMINAL_WORK_STATES.has(w.status),
+          !TERMINAL_WORK_STATES.has(w.status) &&
+          (!historical.has(w.id) || ACTIVE_ATTEMPT_STATES.includes(w.status)),
       );
     const usedByActiveAttempt = deps.store
       .list<Attempt>("attempts", teamId)

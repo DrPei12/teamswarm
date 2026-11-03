@@ -1000,9 +1000,20 @@
   padding: 8px 0;
 }
 .allocation-subject {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: var(--field-height);
   flex: 1 1 180px;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+.allocation-row:has(> .allocation-assignment) {
+  align-items: flex-start;
+}
+.allocation-row-actions {
+  align-items: baseline;
 }
 .allocation-assignment {
   flex: 0 1 340px;

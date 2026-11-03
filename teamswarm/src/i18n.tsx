@@ -9,6 +9,8 @@ import {
 export type Language = "en" | "zh-CN";
 export const zhCN: Record<string, string> = {
   "Choose configuration": "选择具体配置",
+  "Change resource": "更换资源",
+  "Delivery history ({count})": "投递记录（{count}）",
   "Resource unavailable": "资源已不可用",
   "Configuration details": "配置详情",
   "Resource version": "资源版本",

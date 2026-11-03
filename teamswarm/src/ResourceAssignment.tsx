@@ -210,6 +210,7 @@ function ResourcePicker({
 export function ResourceAssignment({
   resources,
   selection,
+  assignedCaption,
   inherited,
   revision,
   label,
@@ -223,6 +224,7 @@ export function ResourceAssignment({
   resources: ExecutionResource[];
   selection: ResourceSelection | null;
   inherited?: ResourceSelection | null;
+  assignedCaption?: string;
   revision: number;
   label: string;
   resetLabel: string;
@@ -250,7 +252,7 @@ export function ResourceAssignment({
   const display = (r: ExecutionResource) =>
     r.id === reservedResourceId ? t("Team default") : resourceSummary(r);
   const caption = resource
-    ? display(resource)
+    ? (!draft && assignedCaption) || display(resource)
     : selected
       ? t("Resource unavailable")
       : draft && host

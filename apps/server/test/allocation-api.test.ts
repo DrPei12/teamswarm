@@ -229,9 +229,14 @@ test("only actionable formal tasks enter allocation; hide, restore and unpin pre
     assert.equal(snapshot().selection,undefined);
     assert.equal((await api(app,resourceUrl,{method:"DELETE",...json({expectedVersion:2})})).body.error.code,"version_conflict");
     assert.equal((await api(app,resourceUrl,{method:"DELETE",...json({expectedVersion:1})})).status,200);
+    const historicResource=await seedResource(app,team,"Past allocation",{harness:"codex",access:"read-only"});
+    const oldPin={resourceId:historicResource.id,resourceVersion:historicResource.version,reason:"Historical assignment"};
+    assert.equal((await update("/allocation",{selection:oldPin,fromAllocationList:true})).status,200);
     run.state="completed";store.save("runs",run);
     assert.deepEqual(await ids(),[]);
     assert.equal((await api(app,endpoint+"/retry",{method:"POST",...json({expectedRevision:snapshot().revision,fromAllocationList:true})})).status,409);
+    assert.equal((await api(app,"/api/teams/"+team+"/resources/"+historicResource.id,{method:"DELETE",...json({expectedVersion:1})})).status,200);
+    assert.deepEqual(snapshot().selection,oldPin);
     assert.equal(store.get<Work>("works",team,mail.id).interaction?.messageIds[0],mail.interaction.messageIds[0]);
     assert.equal(store.get<Work>("works",team,predecessor.id).status,"failed");
     assert.equal(store.get<Work>("works",team,continuation.id).status,"self_checked");

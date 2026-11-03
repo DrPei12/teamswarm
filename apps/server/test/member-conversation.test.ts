@@ -924,6 +924,9 @@ test("pre-start resource failure settles mail once and retry reuses the work", a
     assert.equal(f.store.list<Work>("works", f.team.id).filter(w => w.interaction?.messageIds.includes(message.id)).length, 1);
     f.harness.finish();
     await until(() => f.service.runtime.correspondence.list(f.team.id).find(m => m.id === message.id)?.status === "delivered");
+    const delivered = memberConversation(f.service.runtime, f.team.id, f.a.id).entries.find(e => e.id === message.id);
+    assert.deepEqual(delivered?.deliveryHistory?.map(outcome => outcome.status), ["failed", "delivered"]);
+    assert.match(delivered!.deliveryHistory![0].error!, /changed to version/);
   } finally { await f.close(); }
 });
 

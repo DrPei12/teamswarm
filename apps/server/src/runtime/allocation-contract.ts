@@ -16,6 +16,10 @@ export const allocationRequest = z.object({
   expectedRevision: version, selection: resourceSelection.nullable(),
 }).strict();
 
+export function canReallocateWork(status: AllocationBoundary["status"]) {
+  return ["waiting", "yielded", "queued", "interrupted", "failed", "rejected"].includes(status);
+}
+
 export const checkExecutionCompatibility = executionCompatibility;
 
 export const executionObservation = z.object({
@@ -62,7 +66,7 @@ export function allocationBoundary(input: AllocationBoundary):
   if (input.currentRevision !== input.expectedRevision) return "version_conflict";
   if (input.scope !== "member-default") {
     if (["running", "stopping", "recovery_required"].includes(input.status)) return "busy";
-    if (!["waiting", "yielded", "queued", "interrupted", "failed", "rejected"].includes(input.status)) return "invalid_state";
+    if (!canReallocateWork(input.status)) return "invalid_state";
   }
   if (input.maximumAccess === "read-only" && input.access !== "read-only") return "access_escalation";
   return null;

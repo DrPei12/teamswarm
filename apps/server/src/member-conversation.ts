@@ -221,9 +221,8 @@ export function memberConversation(
   const selected = options.workId
     ? runtime.store.get<Work>("works", teamId, options.workId)
     : undefined;
-  const works = runtime.store
-    .list<Work>("works", teamId)
-    .filter(
+  const teamWorks = runtime.store.list<Work>("works", teamId);
+  const works = teamWorks.filter(
       (w) =>
         w.memberId === member.id &&
         (!selected || threadOf(w) === threadOf(selected)),
@@ -393,6 +392,7 @@ export function memberConversation(
       ),
     };
   });
+  attachDeliveryHistory(runtime, teamId, page, teamWorks, messages);
   return {
     memberId,
     workId: selected?.id,
@@ -402,4 +402,54 @@ export function memberConversation(
     before: start,
     canSend: !member.removedAt && works.length > 0 && !!runtime.store.settings(teamId),
   };
+}
+
+/**
+ * Pre-start failures in old workspaces have a work event but no native attempt.
+ * Keep retry outcomes attached to the original message even after it is delivered.
+ */
+function attachDeliveryHistory(
+  runtime: TeamRuntime, teamId: string, page: ConversationEntry[], works: Work[],
+  messages: {id: string; workId?: string}[],
+) {
+  const entries = new Map(page.filter(e => e.exchangeId === e.id).map(e => [e.id, e]));
+  if (!entries.size) return;
+  const linked = new Set(messages.filter(m => m.workId && entries.has(m.id)).map(m => m.workId!));
+  const prestart = new Map<string, string[]>();
+  for (const work of works) {
+    const ids = work.interaction?.messageIds.filter(id => entries.has(id));
+    if (ids?.length) {
+      prestart.set(work.id, ids);
+      linked.add(work.id);
+    }
+  }
+  if (!linked.size) return;
+  const rows = runtime.store.db.prepare(
+    "SELECT id, work_id, type, data, created_at FROM runtime_events WHERE team_id=? AND work_id IN (SELECT value FROM json_each(?)) " +
+    "AND ((type='work.failed' AND attempt_id IS NULL) OR type IN ('communication.failed','communication.settled')) ORDER BY sequence",
+  ).all(teamId, JSON.stringify([...linked]));
+  type Outcome = NonNullable<ConversationEntry["deliveryHistory"]>[number];
+  const histories = new Map<string, Outcome[]>();
+  const recordedFailures = new Set<string>();
+  for (const row of rows) {
+    const workId = String(row.work_id), data = JSON.parse(String(row.data));
+    const ids = row.type === "work.failed" ? prestart.get(workId) ?? [] : [data.messageId];
+    for (const id of ids) {
+      if (!entries.has(id)) continue;
+      const pair = workId + "/" + id;
+      // failBeforeStart records communication.failed immediately after work.failed for the same failure.
+      if (row.type === "communication.failed" && recordedFailures.delete(pair)) continue;
+      if (row.type === "work.failed") recordedFailures.add(pair);
+      const status = row.type === "communication.settled" ? data.status : "failed";
+      if (status !== "delivered" && status !== "failed") continue;
+      const history = histories.get(id) ?? [];
+      history.push({ id: String(row.id), createdAt: Date.parse(String(row.created_at)), status,
+        ...(typeof data.error === "string" && data.error ? {error: data.error} : {}) });
+      histories.set(id, history);
+    }
+  }
+  for (const [id, history] of histories) {
+    if (history.length > 1 && history.some(entry => entry.status === "failed"))
+      entries.get(id)!.deliveryHistory = history;
+  }
 }
