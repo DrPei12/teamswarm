@@ -5,7 +5,7 @@ import {
 import type { MemberPermissionPreset } from "@team/contracts/allocation";
 import { FieldSelect } from "./FieldSelect";
 import { Disclosure } from "./Disclosure";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   AlertCircle,
@@ -20,7 +20,6 @@ import {
 } from "lucide-react";
 import type { RuntimeSettings } from "@team/contracts/runtime";
 import type { Workspace } from "./store";
-import { AllocationSettings } from "./AllocationSettings";
 import { CapabilitySettings } from "./CapabilitySettings";
 import { ModelPicker } from "./ModelPicker";
 import { SwarmMark } from "./SwarmMark";
@@ -45,6 +44,12 @@ import {
   effortLabel,
   type HarnessInspection,
 } from "./harnessCatalog.ts";
+
+const AllocationSettings = lazy(() =>
+  import("./AllocationSettings").then(({ AllocationSettings }) => ({
+    default: AllocationSettings,
+  })),
+);
 
 export function Startup({
   state,
@@ -249,6 +254,9 @@ function ManualExecutionSettings({
     settings?.config.harness ?? "codex",
     open,
   );
+  const manualResources =
+    workspace.service?.manualResourceConfiguration === true;
+  const showResources = manualResources && tab === "resources";
   useEffect(() => {
     if (open) {
       setSettings(workspace.executions?.[teamId]?.settings ?? null);
@@ -391,34 +399,38 @@ function ManualExecutionSettings({
       title={t("Advanced settings")}
       className="execution-modal"
     >
-      <div
-        className="modal-tabs"
-        role="tablist"
-        aria-label={t("Advanced settings")}
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "settings"}
-          className={tab === "settings" ? "active" : ""}
-          onClick={() => setTab("settings")}
+      {manualResources && (
+        <div
+          className="modal-tabs"
+          role="tablist"
+          aria-label={t("Advanced settings")}
         >
-          {t("Runtime")}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "resources"}
-          className={tab === "resources" ? "active" : ""}
-          onClick={() => setTab("resources")}
-        >
-          {t("Resources and allocation")}
-        </button>
-      </div>
-      {tab === "resources" && (
-        <AllocationSettings teamId={teamId} workspace={workspace} />
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "settings"}
+            className={tab === "settings" ? "active" : ""}
+            onClick={() => setTab("settings")}
+          >
+            {t("Runtime")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "resources"}
+            className={tab === "resources" ? "active" : ""}
+            onClick={() => setTab("resources")}
+          >
+            {t("Resources and allocation")}
+          </button>
+        </div>
       )}
-      {tab === "settings" && settings && (
+      {showResources && (
+        <Suspense fallback={<p role="status">{t("Loading…")}</p>}>
+          <AllocationSettings teamId={teamId} workspace={workspace} />
+        </Suspense>
+      )}
+      {!showResources && settings && (
         <form
           className="execution-form"
           onSubmit={async (e) => {
@@ -431,7 +443,7 @@ function ManualExecutionSettings({
               if (secret.trim()) {
                 const result = await api<{ reference: string }>(
                   `/product/teams/${teamId}/credential`,
-                  { secret: secret.trim() },
+                  { secret: secret.trim(), purpose: "runtime" },
                   "PUT",
                 );
                 next = {

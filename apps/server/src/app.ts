@@ -19,6 +19,8 @@ const WRITE_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1']);
 
 export interface CreateAppOptions {
+  /** Explicit opt-in for isolated development of the unfinished client panel. */
+  manualResourceConfiguration?: boolean;
   controlToken?: string;
   dataDir?: string;
   webDistDir?: string;
@@ -188,7 +190,7 @@ export function createApp(options: CreateAppOptions = {}): TeamService {
   const apiPort = options.apiPort ?? DEFAULT_API_PORT;
   const store = new TeamStore({ dataDir: options.dataDir ?? defaultDataDir() });
   let runtime: TeamRuntime;
-  try { runtime = new TeamRuntime(store, options.harnesses, options.resourceSampling); } catch (error) { store.close(); throw error; }
+  try { runtime = new TeamRuntime(store, options.harnesses, options.resourceSampling, options.manualResourceConfiguration === true); } catch (error) { store.close(); throw error; }
   const app = express();
   const webDistDir = path.resolve(options.webDistDir ?? defaultWebDistDir());
 
@@ -227,6 +229,8 @@ export function createApp(options: CreateAppOptions = {}): TeamService {
       sendError(response, new ServiceError(401, 'control_required', '请使用服务启动时提供的连接链接打开 TeamSwarm。'));
       return;
     }
+    // Product windows use a scoped session cookie. Keep the independent control API for integration clients.
+    response.locals.productSession = !bearer || cookie !== undefined || request.headers.origin !== undefined;
     // Existing browser sessions and desktop launchers migrate on their first authenticated request.
     if (!bearer && scopedCookie === undefined && legacyCookie !== undefined) {
       response.cookie(controlCookie, controlToken, cookieOptions);

@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { createApp } from "../src/app.js";
+import { RuntimeSelections } from "../src/runtime/selection-source.js";
 import { executionConfig } from "../src/runtime/validation.js";
 import { deleteResource, resolveExecution } from "../src/runtime/allocation.js";
 import { executionObservation } from "../src/runtime/resource-planning.js";
@@ -65,6 +66,51 @@ async function setup() {
   };
 }
 const call = (r: HarnessRequest, name: string, args: unknown) => r.onTool(name, withJudgmentEvidence(name, args), randomUUID());
+
+test("paused client pins cannot replace Host or worker harness requests, or block them on a stale version", async () => {
+  const app = await setup();
+  try {
+    const {store,catalog}=app.service.runtime, team=app.team.id, branch=app.branch.id;
+    const edge=app.add("Existing", {harness:"grok",model:"alternate",access:"read-only"});
+    const pin={resourceId:edge.id,resourceVersion:edge.version,reason:"Selected by user"};
+    const host=store.list<Member>("members",team).find(m=>m.kind==="host")!;
+    host.config={...host.config,model:"host-chat",effort:"medium"};
+    host.hostSelections={[branch]:{revision:2,selection:{...pin,resourceVersion:99},config:edge.config}};
+    store.save("members",host);
+    const worker=store.createMember(team,"Worker","Read",executionConfig.parse({harness:"pi",model:"worker-chat",effort:"low",access:"read-only"}),branch);
+    worker.selection={...pin,reason:"Member default set for Worker"};store.save("members",worker);
+    assert.equal(catalog.memberExecution(team,branch,host).model,"host-chat");
+    assert.equal(catalog.memberExecution(team,branch,worker).model,"worker-chat");
+    const other=store.createMember(team,"Directed","Read",worker.config,branch);
+    let taskId="";
+    app.codex.action=async r=>{
+      if(taskId) return {status:"completed",text:"Recorded follow-up"};
+      assert.equal(r.config.model,"host-chat");assert.equal(r.config.effort,"medium");
+      const own=store.get<Work>("works",team,JSON.parse(r.input).work.id);
+      const task=store.createWork(store.get("runs",team,own.runId),worker.id,"Read input","Read",[],[],[]);
+      task.selection={...pin,resourceId:"missing-old-resource",reason:"Task resource set for Read input"};
+      store.save("works",task);taskId=task.id;
+      // A legitimate Host instruction can have exactly the same free-text reason as an old panel.
+      await call(r,"team_select_resource",{target:"member",targetId:other.id,expectedRevision:1,resourceId:edge.id,expectedResourceVersion:1,reason:"Selected by user"});
+      return {status:"completed",text:"Configured member"};
+    };
+    const result=await app.send("Read with the chosen configurations.");
+    assert.equal(result.status,"submitted",result.error??"");
+    await until(()=>app.pi.requests.length>0);
+    assert.equal(app.pi.requests[0].config.model,"worker-chat");assert.equal(app.pi.requests[0].config.effort,"low");
+    assert.equal(JSON.parse(app.pi.requests[0].input).work.selection,undefined);
+    const attempt=store.list<Attempt>("attempts",team).find(a=>a.workId===taskId)!;
+    assert.equal(attempt.allocation?.selection,null);
+    assert.equal(store.get<Work>("works",team,taskId).selection!.resourceId,"missing-old-resource");
+    const directed=store.get<Member>("members",team,other.id);
+    assert.equal(catalog.memberExecution(team,branch,directed).config.model,"alternate");
+    assert.equal(directed.selectionSource,"runtime");
+    const legacy = {...directed, selectionSource:undefined};
+    assert.deepEqual(new RuntimeSelections(store,false).active(team,"member",legacy.id,legacy),directed.selection);
+    const previewOnly={...directed,selectionSource:"resource-panel" as const,selection:{...pin,reason:"Arbitrary label"}};
+    assert.equal(catalog.memberExecution(team,branch,previewOnly).config.model,"worker-chat");
+  } finally {await app.close();}
+});
 
 test("Host and workers expose frozen current executions separately from future defaults and request receipts", async () => {
   const app = await setup();

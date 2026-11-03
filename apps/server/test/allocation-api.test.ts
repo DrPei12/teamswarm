@@ -49,9 +49,10 @@ interface Running {
   baseUrl: string;
   close: () => Promise<void>;
 }
-async function open(harness: Harness): Promise<Running> {
+async function open(harness: Harness, manualResourceConfiguration = false): Promise<Running> {
   const directory = mkdtempSync(path.join(process.cwd(), ".test-allocation-api-"));
   const service = createApp({
+    manualResourceConfiguration,
     dataDir: path.join(directory, "data"),
     webDistDir: path.join(directory, "web"),
     harnesses: [harness],
@@ -188,7 +189,7 @@ test("resources persist, list, update with optimistic versions and delete safely
 });
 
 test("only actionable formal tasks enter allocation; hide, restore and unpin preserve their history", async () => {
-  const app = await open(fixtureCodex());
+  const app = await open(fixtureCodex(), true);
   try {
     const team = await seedTeam(app, "Allocation list");
     const worker = await seedMember(app, team, "Writer", "read-only");
@@ -241,6 +242,66 @@ test("only actionable formal tasks enter allocation; hide, restore and unpin pre
     assert.equal(store.get<Work>("works",team,predecessor.id).status,"failed");
     assert.equal(store.get<Work>("works",team,continuation.id).status,"self_checked");
   } finally {await app.close();}
+});
+
+test("the installed client policy rejects every paused panel write before it can change state", async () => {
+  const app = await open(fixtureCodex());
+  try {
+    const team = await seedTeam(app, "Paused resource settings");
+    const member = await seedMember(app, team, "Member", "read-only");
+    const saved = await seedResource(app, team, "Existing resource", { harness: "codex", access: "read-only" });
+    const { store, history } = app.service.runtime;
+    const chat = history.mainConversation(team);
+    let host!: Work;
+    store.teams.recordMessage(team, chat, "Fixture", randomUUID(), m => { host = store.enqueueHost(team, chat, m.id, true, false); });
+    const run = store.get<Run>("runs", team, host.runId);
+    const task = store.createWork(run, member.id, "Fixture", "Fixture", [], [], []);
+    store.setStatus(task, "failed");
+    const branch = history.forRun(run).id;
+    const prefix = "/api/teams/" + team;
+    const session = await fetch(app.baseUrl + "/api/control/session", {method:"POST",headers:{authorization:"Bearer "+app.service.controlToken}});
+    const cookie = session.headers.get("set-cookie")!.split(";")[0];
+    const client = (method:string, route:string, body:unknown) => fetch(app.baseUrl+route, {
+      method, headers: {cookie, "content-type":"application/json"}, body:JSON.stringify(body)
+    });
+    const selection = {resourceId:saved.id,resourceVersion:saved.version,reason:"Selected by user"};
+    const assignment = {expectedRevision:task.revision,selection};
+    const resource = {name:"Pending change",description:"",config:saved.config};
+    const state = () => ["runtime_resources","runtime_members","runtime_works","runtime_runs","runtime_attempts","runtime_events"].map(
+      table=>store.db.prepare("SELECT * FROM "+table+" WHERE team_id=? ORDER BY rowid").all(team)
+    );
+    const before=state();
+    const writes:[string,string,unknown][]=[
+      ["POST","/resources",resource],["PUT","/resources/"+saved.id,{...resource,expectedVersion:saved.version}],
+      ["DELETE","/resources/"+saved.id,{expectedVersion:saved.version}],
+      ["PUT","/branches/"+branch+"/host-allocation",{expectedRevision:1,selection}],
+      ["PUT","/members/"+member.id+"/allocation",{expectedRevision:1,selection}],
+      ["PUT","/works/"+task.id+"/allocation",assignment],
+      ["PUT","/works/"+task.id+"/allocation-list",{expectedRevision:task.revision,hidden:true}],
+      ["POST","/works/"+task.id+"/retry",{expectedRevision:task.revision,fromAllocationList:true}],
+      ["POST","/allocation-package/import",{package:(await api(app,prefix+"/allocation-package")).body}],
+    ];
+    for(const [method, route, body] of writes) {
+      const response=await client(method,prefix+route,body);
+      assert.equal(response.status,409,route);
+      assert.equal((await response.json()).error.code,"resource_configuration_paused",route);
+    }
+    for (const body of [{secret:"isolated-placeholder"}, {secret:"isolated-placeholder",purpose:"resource-panel"}]) {
+      const denied=await client("PUT","/api/product/teams/"+team+"/credential",body);
+      assert.equal(denied.status,409);
+      assert.equal((await denied.json()).error.code,"resource_configuration_paused");
+    }
+    assert.deepEqual(state(),before);
+    const view=(await api(app,"/api/product")).body;
+    assert.equal(view.service.manualResourceConfiguration,false);
+    assert.equal(view.executions[team].allocationTaskIds,undefined);
+    const current=view.executions[team].host;
+    const normal=await client("PUT","/api/product/teams/"+team+"/branches/"+branch+"/host/runtime",{
+      expectedVersion:current.configurationVersion,config:{...current.config,model:"chat-model",effort:"high"}
+    });
+    assert.equal(normal.status,200);
+    assert.equal((await api(app,"/api/product")).body.executions[team].host.config.effort,"high");
+  } finally { await app.close(); }
 });
 
 test("member and task allocation use stable contract codes and never half-write", async () => {

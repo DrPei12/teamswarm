@@ -1,7 +1,7 @@
 import { harnessManifest } from "@team/contracts/harness-catalog";
 import { applicationDataBase } from "../../../../scripts/platform.cjs";
 import { projectFileRoutes } from "../project-files.js";
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import path from "node:path";
 import { z } from "zod";
 import { isDeepStrictEqual } from "node:util";
@@ -51,6 +51,15 @@ import {
 
 export function runtimeRoutes(runtime: TeamRuntime): Router {
   const router = Router();
+  const requireResourcePanel = () => {
+    if (!runtime.catalog.manualResourceConfiguration)
+      throw conflict("resource_configuration_paused", "手动资源配置已暂停。");
+  };
+  // Older installed renderers still know these URLs. Reject their writes before validation or side effects.
+  const resourcePanelWrite: RequestHandler = (req, res, next) => {
+    if (res.locals.productSession || req.body?.fromAllocationList === true) requireResourcePanel();
+    next();
+  };
   router.get("/teams/:teamId/approvals", (req, res) => {
     const teamId = param(req.params.teamId);
     res.json([...runtime.approvals.list(teamId, true), ...runtime.nativePermissions.approvals(teamId), ...runtime.memberPermissions.list(teamId)]);
@@ -125,7 +134,7 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
     } catch {throw badRequest("model_catalog_unavailable","Could not load the model list. Check the address and API key, or enter a model ID.");}
   });
   const harnessManagement = new HarnessManagement(path.join(applicationDataBase(), "TeamSwarm", "installer"), () => store.teams.listTeams().flatMap(team => { const settings = store.settings(team.id); return settings ? [settings.workspace] : []; }));
-  router.put("/teams/:teamId/resources/:resourceId", (req, res) => {
+  router.put("/teams/:teamId/resources/:resourceId", resourcePanelWrite, (req, res) => {
     const input = parse(resourceInput, req.body);
     if (!runtime.harnesses.has(input.config.harness))
       throw badRequest(
@@ -160,13 +169,14 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
     if (!host) throw notFound();
     res.json(runtime.catalog.memberExecution(teamId, branchId, host));
   });
-  router.put("/teams/:teamId/branches/:branchId/host-allocation", (req, res) => {
+  router.put("/teams/:teamId/branches/:branchId/host-allocation", resourcePanelWrite, (req, res) => {
     const teamId = param(req.params.teamId), branchId = param(req.params.branchId);
     const input = parse(z.object({expectedRevision: z.number().int().positive(), selection: resourceSelection.nullable()}).strict(), req.body);
     if (input.selection) runtime.validateConfig(runtime.catalog.resource(teamId, input.selection.resourceId).config);
-    res.json(setHostAllocation(allocationDeps(), teamId, branchId, input.expectedRevision, input.selection));
+    res.json(setHostAllocation(allocationDeps(), teamId, branchId, input.expectedRevision, input.selection,
+      res.locals.productSession ? "resource-panel" : "runtime"));
   });
-  router.post("/teams/:teamId/resources", (req, res) => {
+  router.post("/teams/:teamId/resources", resourcePanelWrite, (req, res) => {
     const input = parse(resourceCreateInput, req.body);
     if (!runtime.harnesses.has(input.config.harness))
       throw badRequest(
@@ -178,7 +188,7 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       .status(201)
       .json(createResource(allocationDeps(), param(req.params.teamId), input));
   });
-  router.delete("/teams/:teamId/resources/:resourceId", (req, res) => {
+  router.delete("/teams/:teamId/resources/:resourceId", resourcePanelWrite, (req, res) => {
     const input = parse(z.object({ expectedVersion: z.number().int().positive().optional() }).strict(), req.body ?? {});
     res.json(
       deleteResource(
@@ -198,7 +208,7 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       ),
     );
   });
-  router.put("/teams/:teamId/members/:memberId/allocation", (req, res) => {
+  router.put("/teams/:teamId/members/:memberId/allocation", resourcePanelWrite, (req, res) => {
     const input = parse(allocationRequest, req.body);
     res.json(
       setMemberAllocation(
@@ -206,10 +216,11 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
         param(req.params.teamId),
         param(req.params.memberId),
         input,
+        res.locals.productSession ? "resource-panel" : "runtime",
       ),
     );
   });
-  router.put("/teams/:teamId/works/:workId/allocation", (req, res) => {
+  router.put("/teams/:teamId/works/:workId/allocation", resourcePanelWrite, (req, res) => {
     const input = parse(allocationRequest.extend({ fromAllocationList: z.literal(true).optional() }), req.body);
     if (input.fromAllocationList) requireAllocationTask(store, param(req.params.teamId), param(req.params.workId));
     res.json(
@@ -218,10 +229,12 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
         param(req.params.teamId),
         param(req.params.workId),
         input,
+        res.locals.productSession || input.fromAllocationList ? "resource-panel" : "runtime",
       ),
     );
   });
   router.put("/teams/:teamId/works/:workId/allocation-list", (req, res) => {
+    requireResourcePanel();
     const input = parse(z.object({ expectedRevision: z.number().int().positive(), hidden: z.boolean() }).strict(), req.body);
     res.json(setAllocationListVisibility(allocationDeps(), param(req.params.teamId), param(req.params.workId), input.expectedRevision, input.hidden));
   });
@@ -241,7 +254,7 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       ),
     );
   });
-  router.post("/teams/:teamId/allocation-package/import", (req, res) => {
+  router.post("/teams/:teamId/allocation-package/import", resourcePanelWrite, (req, res) => {
     const input = parse(packageInput, req.body);
     res.json(
       importAllocationPackage(
@@ -769,6 +782,7 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
         member.permissionVersion = (member.permissionVersion ?? 1) + 1;
       Object.assign(member, input);
       delete member.selection;
+      delete member.selectionSource;
       member.allocationVersion = (member.allocationVersion ?? 1) + 1;
       store.save("members", member);
       store.event(teamId, "member.updated", { memberId: member.id });
@@ -807,7 +821,10 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       z.object({ expectedRevision: z.number().int().positive(), fromAllocationList: z.literal(true).optional() }).strict(),
       req.body,
     );
-    if (input.fromAllocationList) requireAllocationTask(store, param(req.params.teamId), param(req.params.workId));
+    if (input.fromAllocationList) {
+      requireResourcePanel();
+      requireAllocationTask(store, param(req.params.teamId), param(req.params.workId));
+    }
     res.json(
       runtime.retry(
         param(req.params.teamId),

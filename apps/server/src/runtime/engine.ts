@@ -107,7 +107,7 @@ export class TeamRuntime {
     return this.closing;
   }
 
-  constructor(teams: TeamStore, harnesses: Harness[] = [new CodexHarness()], sampling: ResourceSampling = {}) {
+  constructor(teams: TeamStore, harnesses: Harness[] = [new CodexHarness()], sampling: ResourceSampling = {}, manualResourceConfiguration = false) {
     this.store = new RuntimeStore(teams);
     this.history = new ProjectHistory(this.store);
     this.store.history = this.history;
@@ -119,7 +119,7 @@ export class TeamRuntime {
     this.communication = new TeamCommunication(this.store, this.history);
     this.models = new ModelGateway(teams.dataDir);
     this.harnesses = new Map(harnesses.map((h) => [h.id, this.models.wrap(h)]));
-    this.catalog = new TeamCatalog(this.store, this.history, this.harnesses);
+    this.catalog = new TeamCatalog(this.store, this.history, this.harnesses, manualResourceConfiguration);
     this.memberPermissions = new MemberPermissions(this.store, this.catalog, this.harnesses, config => this.validateConfig(config));
     this.resources = new RuntimeResources(this.store, this.harnesses, () => this.requestPump(), sampling.sample, sampling.availablePhysical, sampling.now);
     this.hostContext = new HostContext(this.store, this.history, this.catalog, () => this.resources.summary());
@@ -2476,7 +2476,10 @@ export class TeamRuntime {
           // The selected model is a template; it must not undo the creation
           // policy's explicit write grant. Read-only members can narrow any edge.
           const pinned = created.config.access === "read-only" || created.config.access === resource.config.access;
-          if (pinned) created.selection = selection;
+          if (pinned) {
+            created.selection = selection;
+            created.selectionSource = "runtime";
+          }
           this.store.save("members", created);
           this.store.event(
             teamId,

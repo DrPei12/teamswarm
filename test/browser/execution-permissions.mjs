@@ -28,7 +28,8 @@ const harness = {
 };
 const server = createServer().listen(0, '127.0.0.1');
 await new Promise(r => server.once('listening', r));
-const service = createApp({ dataDir: path.join(root, 'data'), apiPort: server.address().port, harnesses: [harness, { ...harness, id: 'claude-code', permissionOptions() { return claudePermissionOptions; } }], webDistDir: path.resolve('teamswarm/dist') });
+// Explicit, isolated preview keeps its existing interaction coverage while the shipped client is paused.
+const service = createApp({ manualResourceConfiguration:true, dataDir: path.join(root, 'data'), apiPort: server.address().port, harnesses: [harness, { ...harness, id: 'claude-code', permissionOptions() { return claudePermissionOptions; } }], webDistDir: path.resolve('teamswarm/dist') });
 server.on('request', service.app);
 const origin = `http://127.0.0.1:${server.address().port}`;
 const call = async (route, body, method = body ? 'POST' : 'GET') => {

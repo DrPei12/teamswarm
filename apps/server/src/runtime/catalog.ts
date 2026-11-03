@@ -8,6 +8,7 @@ import { executionConfig, key } from "./validation.js";
 import { executionObservation } from "./resource-planning.js";
 import { attemptExecution, executionConfiguration, executionStatusGuidance, isCurrentAttempt } from "./execution-status.js";
 import { CapabilityStore } from "./capabilities.js";
+import { RuntimeSelections } from "./selection-source.js";
 import { harnessDescription } from "./harness/description.js";
 import type {
   Attempt,
@@ -60,12 +61,15 @@ const matchesConfiguration = (actual: ExecutionConfig, configured: ExecutionConf
 
 /** A configured execution option, not an assertion about task quality or remaining credit. */
 export class TeamCatalog {
+  readonly selections: RuntimeSelections;
   readonly capabilities: CapabilityStore;
   constructor(
     readonly store: RuntimeStore,
     readonly history: ProjectHistory,
     readonly harnesses: Map<string, Harness>,
+    readonly manualResourceConfiguration = false,
   ) {
+    this.selections = new RuntimeSelections(store, manualResourceConfiguration);
     store.db.exec(`CREATE TABLE IF NOT EXISTS runtime_resources (
       team_id TEXT NOT NULL REFERENCES teams(id), id TEXT NOT NULL, data TEXT NOT NULL CHECK(json_valid(data)), PRIMARY KEY(team_id,id));
       CREATE TABLE IF NOT EXISTS runtime_harness_observations (id TEXT PRIMARY KEY, data TEXT NOT NULL CHECK(json_valid(data)));`);
@@ -332,7 +336,9 @@ export class TeamCatalog {
   }
   memberExecution(teamId: string, branchId: string, member: Member) {
     const choice = member.kind === "host" ? member.hostSelections?.[branchId] : undefined;
-    const saved = member.kind === "host" ? choice?.selection ?? null : member.selection ?? null;
+    const saved = member.kind === "host"
+      ? this.selections.active(teamId, "host", branchId, choice)
+      : this.selections.active(teamId, "member", member.id, member);
     // Older Host choices pinned the synthetic default; preserve its follow-default meaning.
     const selection = member.kind === "host" && saved?.resourceId === "team-default" ? null : saved;
     const selected = selection ? this.resources(teamId).find(r => r.id === selection.resourceId) : undefined;

@@ -83,11 +83,12 @@ export interface Member {
   branchId?: string;
   /** Member default resource; seeds a future Attempt only when the task has none. */
   selection?: ResourceSelection;
+  selectionSource?: "runtime" | "resource-panel";
   /** Optimistic revision for member-default allocation updates. */
   allocationVersion?: number;
   /** Host defaults are branch-scoped and affect future Attempts only.
    * A null selection with config is a composer override; without config it follows Team settings. */
-    hostSelections?: Record<string, { revision: number; selection: ResourceSelection | null; config?: ExecutionConfig; permissionPreset?: "read-only" | "full-access" }>;
+    hostSelections?: Record<string, { revision: number; selection: ResourceSelection | null; selectionSource?: "runtime" | "resource-panel"; config?: ExecutionConfig; permissionPreset?: "read-only" | "full-access" }>;
 }
 export interface Requirement {
   id: string;
@@ -136,6 +137,7 @@ export interface AcceptanceEvidence {
   evidenceType: "review_judgment" | "native_check" | "unresolved";
 }
 export interface Work {
+  selectionSource?: "runtime" | "resource-panel";
   /** Hidden from the allocation list only. Work state, mail and attempts remain addressable. */
   allocationDismissedAt?: string;
   /** Work-level native grants belong to the member's permission epoch. */

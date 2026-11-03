@@ -256,7 +256,7 @@ export type Workspace = {
   updates?: Delivery[];
   plugins: Plugin[];
   eventIds?: string[];
-  service?: { revision: number; migrated: boolean };
+  service?: { revision: number; migrated: boolean; manualResourceConfiguration?: boolean };
   executions?: Record<string, TeamExecution>;
   projectNodes?: ProjectNode[];
   projectBranches?: ProjectBranch[];

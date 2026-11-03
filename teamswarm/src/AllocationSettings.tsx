@@ -590,7 +590,7 @@ function ResourceForm({
           if (!subscriptionMode && secret.trim()) {
             const result = await api<{ reference: string }>(
               `/product/teams/${teamId}/credential`,
-              { secret: secret.trim() },
+              { secret: secret.trim(), purpose: "resource-panel" },
               "PUT",
             );
             reference = result.reference;

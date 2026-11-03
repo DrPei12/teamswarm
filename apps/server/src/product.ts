@@ -301,7 +301,7 @@ export class ProductStore {
       connections: [],
       deliveries: [],
       updates: [],
-      service: { revision, migrated: true },
+      service: { revision, migrated: true, manualResourceConfiguration: this.runtime.catalog.manualResourceConfiguration },
       executions: {},
       projectNodes: [],
       projectBranches: [],
@@ -344,7 +344,7 @@ export class ProductStore {
       workspace.executions![team.id] = {
         settings,
         works: state.works,
-        allocationTaskIds: allocationTaskIds(state),
+        ...(this.runtime.catalog.manualResourceConfiguration ? { allocationTaskIds: allocationTaskIds(state) } : {}),
         runs: state.runs,
         attempts,
         latestEvent: events.at(-1)?.sequence ?? 0,
@@ -1064,6 +1064,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
       } else {
         member.config = next;
         delete member.selection;
+        delete member.selectionSource;
         delete member.permissionOverride;
         member.allocationVersion = version + 1;
         member.permissionVersion = (member.permissionVersion ?? 1) + 1;
@@ -1105,6 +1106,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
         member.permissionVersion = (member.permissionVersion ?? 1) + 1;
       member.config = input.config;
       delete member.selection;
+      delete member.selectionSource;
       member.allocationVersion = current.allocationRevision + 1;
       runtime.store.save("members", member);
       runtime.store.event(teamId, "member.configuration", { memberId });
@@ -1208,9 +1210,13 @@ export function productRoutes(runtime: TeamRuntime): Router {
     const teamId = parse(key, req.params.teamId);
     if (!runtime.store.teams.getTeam(teamId)) throw notFound();
     const input = parse(
-      z.object({ secret: z.string().trim().min(8).max(16000) }).strict(),
+      z.object({ secret: z.string().trim().min(8).max(16000), purpose: z.enum(["connection", "runtime", "resource-panel"]).optional() }).strict(),
       req.body,
     );
+    // Older resource editors saved a key before submitting their resource. A paused save must not leave one behind.
+    if (!runtime.catalog.manualResourceConfiguration &&
+        (input.purpose === "resource-panel" || (res.locals.productSession && !input.purpose)))
+      throw conflict("resource_configuration_paused", "请在模型连接或运行时设置中保存密钥。");
     const reference =
       "TEAMSWARM_KEY_" +
       createHash("sha256")

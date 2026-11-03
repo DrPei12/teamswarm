@@ -651,7 +651,7 @@ function ConnectionEditor({
     if (!secret.trim()) return draft.credentialEnv;
     const r = await api<{ reference: string }>(
       `/product/teams/${teamId}/credential`,
-      { secret: secret.trim() },
+      { secret: secret.trim(), purpose: "connection" },
       "PUT",
     );
     setSecret("");

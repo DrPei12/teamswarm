@@ -367,7 +367,7 @@ export class HostContext {
         currentExecution: { ...executionConfiguration(attempt.config), attemptId: attempt.id, modelRequest: attempt.modelRequest ?? null },
         nextExecution: { ...executionConfiguration(nextExecution.config), available: nextExecution.selectionCurrent || nextExecution.selectionRetained },
       },
-      work,
+      work: work.selection ? { ...work, selection: this.catalog.selections.active(work.teamId, "work", work.id, work) ?? undefined } : work,
       requirement: this.store.get(
         "requirements",
         work.teamId,

@@ -97,7 +97,7 @@ export class MemberPermissions {
       const config = this.requestedConfiguration(teamId, execution.config, change);
       this.validate(config);
       member.config = config;
-      delete member.selection; delete member.permissionOverride;
+      delete member.selection; delete member.selectionSource; delete member.permissionOverride;
       member.allocationVersion = expectedVersion + 1;
       member.permissionVersion = (member.permissionVersion ?? 1) + 1;
       this.store.save("members", member);
