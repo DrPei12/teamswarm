@@ -916,6 +916,8 @@ test("pre-start resource failure settles mail once and retry reuses the work", a
     const conversation = memberConversation(f.service.runtime, f.team.id, f.a.id);
     assert.equal(conversation.entries.filter(e => e.id.startsWith("error:")).length, 1);
     assert.equal(conversation.entries.find(e => e.retryWorkId)?.retryWorkId, failed[0].id);
+    // Older services also reported independent pre-dispatch failures on the original assignment.
+    f.store.event(f.team.id, "communication.failed", { messageId: message.id, error: "Historical run limit" }, f.wa);
     assert.throws(() => f.service.runtime.retry(f.team.id, failed[0].id, failed[0].revision), /changed to version/);
     delete f.a.selection;
     f.store.save("members", f.a);
@@ -925,8 +927,9 @@ test("pre-start resource failure settles mail once and retry reuses the work", a
     f.harness.finish();
     await until(() => f.service.runtime.correspondence.list(f.team.id).find(m => m.id === message.id)?.status === "delivered");
     const delivered = memberConversation(f.service.runtime, f.team.id, f.a.id).entries.find(e => e.id === message.id);
-    assert.deepEqual(delivered?.deliveryHistory?.map(outcome => outcome.status), ["failed", "delivered"]);
+    assert.deepEqual(delivered?.deliveryHistory?.map(outcome => outcome.status), ["failed", "failed", "delivered"]);
     assert.match(delivered!.deliveryHistory![0].error!, /changed to version/);
+    assert.equal(delivered!.deliveryHistory![1].error, "Historical run limit");
   } finally { await f.close(); }
 });
 

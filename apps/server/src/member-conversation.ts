@@ -410,27 +410,31 @@ export function memberConversation(
  */
 function attachDeliveryHistory(
   runtime: TeamRuntime, teamId: string, page: ConversationEntry[], works: Work[],
-  messages: {id: string; workId?: string}[],
+  messages: {id: string}[],
 ) {
   const entries = new Map(page.filter(e => e.exchangeId === e.id).map(e => [e.id, e]));
   if (!entries.size) return;
-  const linked = new Set(messages.filter(m => m.workId && entries.has(m.id)).map(m => m.workId!));
+  const messageIds = messages.filter(m => entries.has(m.id)).map(m => m.id);
+  if (!messageIds.length) return;
   const prestart = new Map<string, string[]>();
   for (const work of works) {
     const ids = work.interaction?.messageIds.filter(id => entries.has(id));
     if (ids?.length) {
       prestart.set(work.id, ids);
-      linked.add(work.id);
     }
   }
-  if (!linked.size) return;
   const rows = runtime.store.db.prepare(
-    "SELECT id, work_id, type, data, created_at FROM runtime_events WHERE team_id=? AND work_id IN (SELECT value FROM json_each(?)) " +
-    "AND ((type='work.failed' AND attempt_id IS NULL) OR type IN ('communication.failed','communication.settled')) ORDER BY sequence",
-  ).all(teamId, JSON.stringify([...linked]));
+    `SELECT id, work_id, type, data, created_at, sequence FROM runtime_events
+       WHERE team_id=? AND type='work.failed' AND attempt_id IS NULL AND work_id IN (SELECT value FROM json_each(?))
+     UNION ALL
+     SELECT id, work_id, type, data, created_at, sequence FROM runtime_events
+       WHERE team_id=? AND type IN ('communication.failed','communication.settled')
+         AND json_extract(data,'$.messageId') IN (SELECT value FROM json_each(?))
+     ORDER BY sequence`,
+  ).all(teamId, JSON.stringify([...prestart.keys()]), teamId, JSON.stringify(messageIds));
   type Outcome = NonNullable<ConversationEntry["deliveryHistory"]>[number];
   const histories = new Map<string, Outcome[]>();
-  const recordedFailures = new Set<string>();
+  const recordedFailures = new Map<string, string>();
   for (const row of rows) {
     const workId = String(row.work_id), data = JSON.parse(String(row.data));
     const ids = row.type === "work.failed" ? prestart.get(workId) ?? [] : [data.messageId];
@@ -438,8 +442,13 @@ function attachDeliveryHistory(
       if (!entries.has(id)) continue;
       const pair = workId + "/" + id;
       // failBeforeStart records communication.failed immediately after work.failed for the same failure.
-      if (row.type === "communication.failed" && recordedFailures.delete(pair)) continue;
-      if (row.type === "work.failed") recordedFailures.add(pair);
+      if (row.type === "communication.failed") {
+        const previous = recordedFailures.get(pair);
+        recordedFailures.delete(pair);
+        if (previous && previous === data.error) continue;
+      } else if (row.type === "work.failed" && typeof data.error === "string") {
+        recordedFailures.set(pair, data.error);
+      } else recordedFailures.delete(pair);
       const status = row.type === "communication.settled" ? data.status : "failed";
       if (status !== "delivered" && status !== "failed") continue;
       const history = histories.get(id) ?? [];

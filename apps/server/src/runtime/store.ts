@@ -147,6 +147,8 @@ export class RuntimeStore {
             type TEXT NOT NULL, data TEXT NOT NULL CHECK(json_valid(data)), created_at TEXT NOT NULL);
           CREATE INDEX IF NOT EXISTS runtime_events_team ON runtime_events(team_id, sequence);
           CREATE INDEX IF NOT EXISTS runtime_events_work ON runtime_events(team_id, work_id, sequence);
+          CREATE INDEX IF NOT EXISTS runtime_events_mail ON runtime_events(team_id,json_extract(data,'$.messageId'),sequence)
+            WHERE type IN ('communication.failed','communication.settled');
           CREATE INDEX IF NOT EXISTS runtime_events_attempt ON runtime_events(attempt_id, type, sequence);
           CREATE INDEX IF NOT EXISTS runtime_works_status ON runtime_works(json_extract(data,'$.status'),team_id);
           CREATE INDEX IF NOT EXISTS runtime_works_run ON runtime_works(team_id,json_extract(data,'$.runId'));
