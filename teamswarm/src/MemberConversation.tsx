@@ -490,7 +490,7 @@ function ConversationThread({
         onClickCapture={(event) => {
           if (
             (event.target as Element).closest(
-              ".activity-summary, .activity-toggle",
+              ".activity-summary, .activity-toggle, .delivery-history > summary",
             )
           ) {
             inspectingActivity.current = true;
@@ -516,7 +516,7 @@ function ConversationThread({
         onPointerDownCapture={(event) => {
           if (
             !(event.target as Element).closest(
-              ".activity-summary, .activity-toggle",
+              ".activity-summary, .activity-toggle, .delivery-history > summary",
             )
           )
             inspectingActivity.current = false;
@@ -649,7 +649,15 @@ function ConversationThread({
                 />
               )}
               {entry.deliveryHistory && (
-                <details className="delivery-history">
+                <details
+                  className="delivery-history"
+                  onToggle={(event) => {
+                    if (event.currentTarget.open) {
+                      inspectingActivity.current = true;
+                      stopAutoScroll();
+                    }
+                  }}
+                >
                   <summary>
                     {t("Delivery history ({count})", {
                       count: entry.deliveryHistory.length,
