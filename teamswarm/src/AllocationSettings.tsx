@@ -1,3 +1,4 @@
+import { AllocationBoard } from "./AllocationBoard";
 import {
   MemberPermissionPicker,
   currentMemberPreset,
@@ -9,7 +10,6 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -24,12 +24,9 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import type {
-  ExecutionResource,
-  ResourceSelection,
-} from "@team/contracts/allocation";
+import type { ExecutionResource } from "@team/contracts/allocation";
 import { harnessManifest } from "@team/contracts/harness-catalog";
-import type { ExecutionConfig, Work } from "@team/contracts/runtime";
+import type { ExecutionConfig } from "@team/contracts/runtime";
 import type { Workspace } from "./store";
 import { ApiError, api, product } from "./service";
 import { useI18n } from "./i18n";
@@ -47,11 +44,9 @@ import {
   availabilityFacts,
   availabilityStatus,
   configFields,
-  effectiveSelection,
   isCustomProvider,
   previewPackage,
   reservedResourceId,
-  resourceFor,
   resourceIssues,
   type HarnessObservation,
   type PackagePreview,
@@ -241,12 +236,15 @@ export function AllocationSettings({
                     resource={resource}
                     observation={observations[resource.config.harness]}
                     onEdit={() => setEditing(resource)}
-                    onDelete={() =>
-                      void action(
-                        () => product.deleteResource(teamId, resource.id),
-                        "Resource removed.",
-                      )
-                    }
+                    onDelete={async () => {
+                      await product.deleteResource(
+                        teamId,
+                        resource.id,
+                        resource.version,
+                      );
+                      setNotice("Resource removed.");
+                      await load();
+                    }}
                   />
                 ))}
               </ul>
@@ -274,11 +272,6 @@ export function AllocationSettings({
           }
         />
       )}
-      <HostAllocation
-        teamId={teamId}
-        workspace={workspace}
-        resources={resources}
-      />
       <AllocationBoard
         teamId={teamId}
         workspace={workspace}
@@ -317,9 +310,12 @@ function ResourceRow({
   observation: HarnessObservation | undefined;
   reserved?: boolean;
   onEdit?: () => void;
-  onDelete?: () => void;
+  onDelete?: () => Promise<void>;
 }) {
   const { t } = useI18n();
+  const [removalVersion, setRemovalVersion] = useState<number | null>(null);
+  const [removing, setRemoving] = useState(false);
+  const [removalError, setRemovalError] = useState("");
   const issues = resourceIssues(resource.config);
   const custom = isCustomProvider(resource.config);
   const status = availabilityStatus(observation, resource.config);
@@ -329,9 +325,6 @@ function ResourceRow({
       <div className="resource-head">
         <div>
           <strong>{reserved ? t("Team default") : resource.name}</strong>
-          <span className="resource-version">
-            {t("Version")} {resource.version}
-          </span>
         </div>
         <div className="resource-actions">
           <span className={`status-badge ${status}`}>
@@ -343,12 +336,67 @@ function ResourceRow({
             </button>
           )}
           {onDelete && (
-            <button type="button" className="text-button" onClick={onDelete}>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => {
+                setRemovalVersion(resource.version);
+                setRemovalError("");
+              }}
+            >
               <Trash2 size={14} /> {t("Remove")}
             </button>
           )}
         </div>
       </div>
+      {onDelete && removalVersion !== null && (
+        <div
+          className="resource-delete-confirm"
+          role="group"
+          aria-label={t("Delete saved resource")}
+        >
+          <span>{t("Delete “{name}”?", { name: resource.name })}</span>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={removing}
+            onClick={() => setRemovalVersion(null)}
+          >
+            {t("Cancel")}
+          </button>
+          <button
+            type="button"
+            className="danger-button"
+            disabled={removing}
+            onClick={async () => {
+              setRemoving(true);
+              try {
+                if (resource.version !== removalVersion)
+                  throw new Error(
+                    t("Resource changed. Reload before deleting."),
+                  );
+                await onDelete();
+              } catch (e) {
+                setRemovalError(
+                  e instanceof ApiError
+                    ? allocationMessage(e.code, e.message)
+                    : (e as Error).message,
+                );
+              } finally {
+                setRemovalVersion(null);
+                setRemoving(false);
+              }
+            }}
+          >
+            {t("Confirm deletion")}
+          </button>
+        </div>
+      )}
+      {removalError && (
+        <p className="form-error" role="alert">
+          {t(removalError)}
+        </p>
+      )}
       {(reserved || resource.description) && (
         <p className="resource-description">
           {reserved ? t("Managed in the Runtime tab.") : resource.description}
@@ -362,6 +410,12 @@ function ResourceRow({
           </div>
         ))}
       </dl>
+      <details className="allocation-details">
+        <summary>{t("Configuration details")}</summary>
+        <p>
+          {t("Resource version")} {resource.version}
+        </p>
+      </details>
       {observation?.checkedAt && (
         <p className="resource-observation">
           {t("Observed at {time}", { time: observation.checkedAt })} ·{" "}
@@ -894,538 +948,6 @@ function ResourceForm({
         </button>
       </div>
     </form>
-  );
-}
-
-function HostAllocation({
-  teamId,
-  workspace,
-  resources,
-}: {
-  teamId: string;
-  workspace: Workspace;
-  resources: ExecutionResource[];
-}) {
-  const { t } = useI18n();
-  const team = workspace.teams.find((item) => item.id === teamId);
-  const branchId =
-    workspace.chats.find((chat) => chat.id === team?.lastChatId)?.branchId ??
-    workspace.projectBranches?.find(
-      (branch) => branch.teamId === teamId && !branch.baseNodeId,
-    )?.id;
-  const [value, setValue] = useState<{
-    allocationRevision: number;
-    selection: ResourceSelection | null;
-    selectionCurrent: boolean;
-  } | null>(null);
-  const [selected, setSelected] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const endpoint = `/teams/${teamId}/branches/${branchId}/host-allocation`;
-  const load = useCallback(async () => {
-    if (!branchId) return;
-    try {
-      const next = await api<NonNullable<typeof value>>(endpoint);
-      setValue(next);
-      setSelected(next.selection?.resourceId ?? "");
-      setError("");
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, [branchId, endpoint]);
-  useEffect(() => {
-    setValue(null);
-    void load();
-  }, [load, resources]);
-  if (!branchId) return null;
-  return (
-    <section
-      className="allocation-section"
-      aria-label={t("Host execution resource")}
-    >
-      <h3>{t("Host execution resource")}</h3>
-      <p className="allocation-note">
-        {t(
-          "Applies to the Host's next turn in this branch. Other branches and running work keep their selections.",
-        )}
-      </p>
-      {value && !value.selectionCurrent && (
-        <p className="form-error" role="alert">
-          {t(
-            "The selected resource changed. Select its current version or return to Team default.",
-          )}
-        </p>
-      )}
-      {error && (
-        <p className="form-error" role="alert">
-          {t(error)}
-        </p>
-      )}
-      <div className="allocation-picker">
-        <FieldSelect
-          aria-label={t("Host execution resource")}
-          value={selected}
-          onValueChange={(value) => setSelected(value)}
-          disabled={busy || !value}
-        >
-          <option value="">{t("Team default")}</option>
-          {resources
-            .filter((resource) => resource.id !== reservedResourceId)
-            .map((resource) => (
-              <option key={resource.id} value={resource.id}>
-                {resource.name} · {resource.config.harness} ·{" "}
-                {resource.config.model ?? t("Choose model")}
-              </option>
-            ))}
-        </FieldSelect>
-        <button
-          className="secondary-button"
-          disabled={busy || !value}
-          onClick={async () => {
-            if (!value) return;
-            setBusy(true);
-            setError("");
-            try {
-              const resource = resources.find((item) => item.id === selected);
-              await api(
-                endpoint,
-                {
-                  expectedRevision: value.allocationRevision,
-                  selection: resource
-                    ? {
-                        resourceId: resource.id,
-                        resourceVersion: resource.version,
-                        reason: "Selected by user",
-                      }
-                    : null,
-                },
-                "PUT",
-              );
-              await load();
-              await product.refresh();
-            } catch (e) {
-              if (e instanceof ApiError && e.code === "version_conflict") {
-                await load();
-                setError(
-                  "Host selection changed. The current choice has been loaded; select a resource and apply again.",
-                );
-              } else setError((e as Error).message);
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          {t("Apply")}
-        </button>
-      </div>
-    </section>
-  );
-}
-
-type MemberAllocationView = {
-  id: string;
-  name: string;
-  harness: string;
-  status: string;
-  selection?: ResourceSelection;
-  allocationVersion?: number;
-};
-
-const workPriority: Record<string, number> = {
-  running: 0,
-  stopping: 1,
-  recovery_required: 2,
-  queued: 3,
-  waiting: 4,
-  yielded: 5,
-  failed: 6,
-  interrupted: 7,
-  submitted: 8,
-  self_checked: 9,
-  accepted: 10,
-  rejected: 11,
-  superseded: 12,
-};
-
-function AllocationBoard({
-  teamId,
-  workspace,
-  resources,
-  onChanged,
-}: {
-  teamId: string;
-  workspace: Workspace;
-  resources: ExecutionResource[];
-  onChanged: () => Promise<void>;
-}) {
-  const { t } = useI18n();
-  const [overrides, setOverrides] = useState<
-    Record<
-      string,
-      {
-        selection?: ResourceSelection;
-        allocationVersion?: number;
-        known?: boolean;
-      }
-    >
-  >({});
-  const [draft, setDraft] = useState<Record<string, string>>({});
-  const [rowError, setRowError] = useState<Record<string, string>>({});
-  const [busyRow, setBusyRow] = useState("");
-  const members = workspace.members.filter(
-    (member) =>
-      member.teamId === teamId &&
-      member.id !== `host:${teamId}` &&
-      !member.removedAt,
-  ) as unknown as MemberAllocationView[];
-  const works = useMemo(() => {
-    const list: Work[] = workspace.executions?.[teamId]?.works ?? [];
-    return [...list]
-      .filter((work) =>
-        workspace.members.some(
-          (member) =>
-            member.teamId === teamId &&
-            member.id === work.memberId &&
-            !member.removedAt,
-        ),
-      )
-      .sort(
-        (left, right) =>
-          (workPriority[left.status] ?? 20) -
-            (workPriority[right.status] ?? 20) ||
-          right.updatedAt.localeCompare(left.updatedAt),
-      )
-      .slice(0, 20);
-  }, [workspace, teamId]);
-  const memberIds = members.map((member) => member.id).join(",");
-  const [loaded, setLoaded] = useState(false);
-  const [reloadCount, setReloadCount] = useState(0);
-  const [readState, setReadState] = useState<
-    "loading" | "ready" | "unavailable"
-  >("loading");
-  useEffect(() => {
-    if (!memberIds) {
-      setLoaded(true);
-      setReadState("ready");
-      return;
-    }
-    let current = true;
-    setReadState("loading");
-    void Promise.all(
-      memberIds.split(",").map(async (memberId) => {
-        try {
-          const result = await product.memberAllocation(teamId, memberId);
-          return [
-            memberId,
-            {
-              selection: result.selection ?? undefined,
-              allocationVersion: result.allocationVersion,
-              known: true,
-            },
-            true,
-          ] as const;
-        } catch {
-          // Unknown, not a fabricated default: never invent a member resource.
-          return [memberId, { known: false }, false] as const;
-        }
-      }),
-    ).then((entries) => {
-      if (!current) return;
-      setOverrides((state) => ({
-        ...state,
-        ...Object.fromEntries(entries.map(([id, value]) => [id, value])),
-      }));
-      setReadState(
-        entries.every((entry) => entry[2]) ? "ready" : "unavailable",
-      );
-      setLoaded(true);
-    });
-    return () => {
-      current = false;
-    };
-  }, [teamId, memberIds, reloadCount]);
-
-  const assign = async (
-    rowKey: string,
-    run: (selection: ResourceSelection) => Promise<unknown>,
-    reason: string,
-    onResult?: (result: unknown) => void,
-  ) => {
-    const resource = resources.find((item) => item.id === draft[rowKey]);
-    setRowError((state) => ({ ...state, [rowKey]: "" }));
-    if (!resource) return;
-    setBusyRow(rowKey);
-    try {
-      const result = await run({
-        resourceId: resource.id,
-        resourceVersion: resource.version,
-        reason,
-      });
-      onResult?.(result);
-      await onChanged();
-    } catch (e) {
-      setRowError((state) => ({
-        ...state,
-        [rowKey]:
-          e instanceof ApiError
-            ? allocationMessage(e.code, e.message)
-            : (e as Error).message,
-      }));
-      if (e instanceof ApiError && e.code === "version_conflict") {
-        // Show the revision the server actually holds instead of the stale one.
-        setReloadCount((value) => value + 1);
-        await onChanged();
-      }
-    } finally {
-      setBusyRow("");
-    }
-  };
-
-  const memberDefault = (member: MemberAllocationView) =>
-    overrides[member.id]?.selection ?? member.selection ?? null;
-  const memberDefaultKnown = (member: MemberAllocationView) =>
-    overrides[member.id]?.known === true;
-
-  return (
-    <section
-      className="allocation-section"
-      aria-label={t("Member and task allocation")}
-    >
-      <h3>{t("Member and task allocation")}</h3>
-      <p className="allocation-note">
-        {t(
-          "A member default seeds future work; a task selection pins one work and always wins.",
-        )}
-      </p>
-      {!resources.length ? (
-        <p>{t("Add a resource before assigning it.")}</p>
-      ) : (
-        <>
-          <h4>{t("Member defaults")}</h4>
-          {readState === "unavailable" && (
-            <p className="allocation-hint">
-              {t(
-                "The member's default resource could not be loaded. Reload to try again.",
-              )}
-            </p>
-          )}
-          {!members.length ? (
-            <p>{t("No members yet.")}</p>
-          ) : (
-            <ul className="allocation-list">
-              {members.map((member) => {
-                const selection = memberDefault(member);
-                const resource = resourceFor(resources, selection);
-                const revision =
-                  overrides[member.id]?.allocationVersion ??
-                  member.allocationVersion;
-                const rowKey = `member:${member.id}`;
-                return (
-                  <li key={member.id}>
-                    <div className="allocation-row">
-                      <div>
-                        <strong>{member.name}</strong>
-                        <small>
-                          {member.harness} ·{" "}
-                          {selection
-                            ? `${resource?.name ?? selection.resourceId} · ${t("Version")} ${selection.resourceVersion}`
-                            : t("No resource selected")}
-                        </small>
-                        <span className="scope-tag member-default">
-                          {t("Member default")}
-                        </span>
-                      </div>
-                      <div className="allocation-picker">
-                        <FieldSelect
-                          value={draft[rowKey] ?? ""}
-                          onValueChange={(value) =>
-                            setDraft((state) => ({
-                              ...state,
-                              [rowKey]: value,
-                            }))
-                          }
-                          aria-label={t("Set member default")}
-                        >
-                          <option value="">{t("Choose resource")}</option>
-                          {resources.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {item.name} · {t("Version")} {item.version}
-                            </option>
-                          ))}
-                        </FieldSelect>
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          disabled={busyRow === rowKey || !draft[rowKey]}
-                          onClick={() =>
-                            void assign(
-                              rowKey,
-                              (value) =>
-                                product.setMemberAllocation(teamId, member.id, {
-                                  expectedRevision: revision ?? 1,
-                                  selection: value,
-                                }),
-                              `Member default set for ${member.name}`,
-                              (result) => {
-                                const updated = result as {
-                                  selection?: ResourceSelection;
-                                  allocationVersion?: number;
-                                };
-                                setOverrides((state) => ({
-                                  ...state,
-                                  [member.id]: {
-                                    selection: updated.selection,
-                                    allocationVersion:
-                                      updated.allocationVersion,
-                                    known: true,
-                                  },
-                                }));
-                                setReadState("ready");
-                              },
-                            )
-                          }
-                        >
-                          {busyRow === rowKey ? (
-                            <LoaderCircle size={14} className="spinner" />
-                          ) : (
-                            <Check size={14} />
-                          )}{" "}
-                          {t("Apply")}
-                        </button>
-                      </div>
-                    </div>
-                    {!loaded ? (
-                      <p className="allocation-hint">
-                        <LoaderCircle size={13} className="spinner" />{" "}
-                        {t("Loading…")}
-                      </p>
-                    ) : (
-                      revision === undefined && (
-                        <p className="allocation-hint">
-                          {t(
-                            "The server did not report this allocation version; saving may conflict.",
-                          )}
-                        </p>
-                      )
-                    )}
-                    {loaded && revision !== undefined && (
-                      <p className="allocation-hint">
-                        {t("Allocation revision {revision}", {
-                          revision,
-                        })}
-                      </p>
-                    )}
-                    {rowError[rowKey] && (
-                      <p className="form-error" role="alert">
-                        {t(rowError[rowKey])}
-                      </p>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          <h4>{t("Task resources")}</h4>
-          {!works.length ? (
-            <p>{t("No work to allocate yet.")}</p>
-          ) : (
-            <ul className="allocation-list">
-              {works.map((work) => {
-                const owner = members.find(
-                  (member) => member.id === work.memberId,
-                );
-                const inherited = owner ? memberDefault(owner) : null;
-                const inheritedKnown = owner
-                  ? memberDefaultKnown(owner)
-                  : false;
-                const effective = effectiveSelection(
-                  inherited,
-                  work.selection ?? null,
-                );
-                const resource = resourceFor(resources, work.selection);
-                const effectiveResource = resourceFor(
-                  resources,
-                  effective.selection,
-                );
-                const rowKey = `work:${work.id}`;
-                return (
-                  <li key={work.id}>
-                    <div className="allocation-row">
-                      <div>
-                        <strong>{work.title}</strong>
-                        <small>
-                          {t(work.status)} · {t("Version")} {work.revision} ·{" "}
-                          {work.selection
-                            ? `${resource?.name ?? work.selection.resourceId} · ${t("Version")} ${work.selection.resourceVersion}`
-                            : t("No task resource")}
-                        </small>
-                        <span className={`scope-tag ${effective.scope}`}>
-                          {effective.scope === "task"
-                            ? t("Task priority")
-                            : inheritedKnown
-                              ? t("Inherited from member default")
-                              : t("Member default unknown")}
-                          {effectiveResource
-                            ? ` · ${effectiveResource.name}`
-                            : ""}
-                        </span>
-                      </div>
-                      <div className="allocation-picker">
-                        <FieldSelect
-                          value={draft[rowKey] ?? ""}
-                          onValueChange={(value) =>
-                            setDraft((state) => ({
-                              ...state,
-                              [rowKey]: value,
-                            }))
-                          }
-                          aria-label={t("Set task resource")}
-                        >
-                          <option value="">{t("Choose resource")}</option>
-                          {resources.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {item.name} · {t("Version")} {item.version}
-                            </option>
-                          ))}
-                        </FieldSelect>
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          disabled={busyRow === rowKey || !draft[rowKey]}
-                          onClick={() =>
-                            void assign(
-                              rowKey,
-                              (value) =>
-                                product.setWorkAllocation(teamId, work.id, {
-                                  expectedRevision: work.revision,
-                                  selection: value,
-                                }),
-                              `Task resource set for ${work.title}`,
-                            )
-                          }
-                        >
-                          {busyRow === rowKey ? (
-                            <LoaderCircle size={14} className="spinner" />
-                          ) : (
-                            <Check size={14} />
-                          )}{" "}
-                          {t("Apply")}
-                        </button>
-                      </div>
-                    </div>
-                    {rowError[rowKey] && (
-                      <p className="form-error" role="alert">
-                        {t(rowError[rowKey])}
-                      </p>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </>
-      )}
-    </section>
   );
 }
 

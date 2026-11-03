@@ -5,6 +5,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { chromium } from '../../teamswarm/node_modules/playwright/index.mjs';
+import { seedAllocationFlow, verifyAllocationFlow } from './task-allocation-flow.mjs';
 import { createApp } from '../../apps/server/dist/app.js';
 import { codexPermissionOptions, claudePermissionOptions } from '../../apps/server/dist/runtime/permission-options.js';
 
@@ -170,6 +171,7 @@ try {
     assert(await memberPermissions.evaluate(el=>el===document.activeElement),'Escape restores permission trigger focus');
   }
   await page.setViewportSize({width:1280,height:900});
+  const allocationFixture=await seedAllocationFlow(service,team.id,member.id,call);
   await page.goto(origin + `/#/team/${team.id}/agent`);
   await permissions().click();
   await page.getByRole('menuitem',{name:'Advanced settings →',exact:true}).click();
@@ -189,6 +191,12 @@ try {
     await page.setViewportSize({width,height:900});
     await assertAligned(editor.getByRole('combobox',{name:'Protocol',exact:true}), editor.getByRole('textbox',{name:/^Effort/}), 'Resource fields with a wrapped hint');
   }
+  await editor.getByRole('button',{name:'Cancel',exact:true}).click();
+  await verifyAllocationFlow(page,settingsDialog,service,team.id,allocationFixture,async()=>{
+    await permissions().click();
+    await page.getByRole('menuitem',{name:'Advanced settings →',exact:true}).click();
+    await settingsDialog.getByRole('tab',{name:'Resources and allocation'}).click();
+  });
   await settingsDialog.getByRole('button',{name:'Close',exact:true}).click();
   await settingsDialog.waitFor({state:'hidden'});
   assert.equal(await page.getByRole('dialog').count(),0,'Closing direct advanced settings returns to the conversation');

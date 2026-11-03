@@ -136,6 +136,8 @@ export interface AcceptanceEvidence {
   evidenceType: "review_judgment" | "native_check" | "unresolved";
 }
 export interface Work {
+  /** Hidden from the allocation list only. Work state, mail and attempts remain addressable. */
+  allocationDismissedAt?: string;
   /** Work-level native grants belong to the member's permission epoch. */
   permissionVersion?: number;
   permissions?: NativePermissions;

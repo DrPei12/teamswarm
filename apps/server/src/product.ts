@@ -1,6 +1,7 @@
 import { permissionCatalog, mergePermissionChoice } from "./runtime/permission-options.js";
 import { nativePermissions, validateNativePermissions } from "./runtime/harness/permissions.js";
 import { setHostConfiguration } from "./runtime/allocation.js";
+import { allocationTaskIds } from "./runtime/allocation-tasks.js";
 import { memberPermissionPreset } from "./runtime/member-permissions.js";
 import { harnessManifest } from "@team/contracts/harness-catalog";
 import express, { Router } from "express";
@@ -343,6 +344,7 @@ export class ProductStore {
       workspace.executions![team.id] = {
         settings,
         works: state.works,
+        allocationTaskIds: allocationTaskIds(state),
         runs: state.runs,
         attempts,
         latestEvent: events.at(-1)?.sequence ?? 0,
@@ -362,6 +364,8 @@ export class ProductStore {
         configurationVersion: hostAllocation?.allocationRevision ?? 1,
         runningConfig: runningHostAttempt?.config,
         memberId: hostMember.id, branchId: activeBranch,
+        selection: hostAllocation?.selection ?? null,
+        selectionCurrent: hostAllocation?.selectionCurrent,
       };
       const latestUsage = attempts
         .filter(
@@ -797,6 +801,7 @@ export class ProductStore {
           executionConfig: nextExecution?.config,
           runningExecutionConfig: attempts.find(a => a.memberId === member.id && ["running", "stopping"].includes(a.status))?.config,
           configurationVersion: nextExecution?.allocationRevision,
+          resourceSelection: nextExecution?.selection ?? null,
           sessionId: latestAttempt?.sessionId ?? undefined,
           workId: work?.id,
           error: work?.error,

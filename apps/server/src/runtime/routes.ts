@@ -28,6 +28,8 @@ import {
   setMemberAllocation,
   setHostAllocation,
   setWorkAllocation,
+  setAllocationListVisibility,
+  requireAllocationTask,
 } from "./allocation.js";
 import { definitionInput, selectionInput } from "./project-history.js";
 import { key, memberInput, parse, runtimeSettings, executionRequirements } from "./validation.js";
@@ -177,11 +179,13 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       .json(createResource(allocationDeps(), param(req.params.teamId), input));
   });
   router.delete("/teams/:teamId/resources/:resourceId", (req, res) => {
+    const input = parse(z.object({ expectedVersion: z.number().int().positive().optional() }).strict(), req.body ?? {});
     res.json(
       deleteResource(
         allocationDeps(),
         param(req.params.teamId),
         param(req.params.resourceId),
+        input.expectedVersion,
       ),
     );
   });
@@ -206,7 +210,8 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
     );
   });
   router.put("/teams/:teamId/works/:workId/allocation", (req, res) => {
-    const input = parse(allocationRequest, req.body);
+    const input = parse(allocationRequest.extend({ fromAllocationList: z.literal(true).optional() }), req.body);
+    if (input.fromAllocationList) requireAllocationTask(store, param(req.params.teamId), param(req.params.workId));
     res.json(
       setWorkAllocation(
         allocationDeps(),
@@ -215,6 +220,10 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
         input,
       ),
     );
+  });
+  router.put("/teams/:teamId/works/:workId/allocation-list", (req, res) => {
+    const input = parse(z.object({ expectedRevision: z.number().int().positive(), hidden: z.boolean() }).strict(), req.body);
+    res.json(setAllocationListVisibility(allocationDeps(), param(req.params.teamId), param(req.params.workId), input.expectedRevision, input.hidden));
   });
   const packageInput = z.object({ package: z.unknown() });
   router.get("/teams/:teamId/allocation-package", (req, res) => {
@@ -795,9 +804,10 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
   );
   router.post("/teams/:teamId/works/:workId/retry", (req, res) => {
     const input = parse(
-      z.object({ expectedRevision: z.number().int().positive() }).strict(),
+      z.object({ expectedRevision: z.number().int().positive(), fromAllocationList: z.literal(true).optional() }).strict(),
       req.body,
     );
+    if (input.fromAllocationList) requireAllocationTask(store, param(req.params.teamId), param(req.params.workId));
     res.json(
       runtime.retry(
         param(req.params.teamId),

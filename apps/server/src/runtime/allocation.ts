@@ -19,9 +19,10 @@ import {
 } from "./allocation-portable.js";
 import { executionConfig } from "./validation.js";
 import { readOnlyPermissions } from "./harness/permissions.js";
+import { allocationTaskIds } from "./allocation-tasks.js";
 import type { TeamCatalog } from "./catalog.js";
 import type { RuntimeStore } from "./store.js";
-import type { Attempt, ExecutionConfig, Member, Work, WorkStatus } from "./types.js";
+import type { Attempt, ExecutionConfig, Member, Requirement, Run, Work, WorkStatus } from "./types.js";
 import type {
   AllocationBoundary,
   AllocationRequest,
@@ -102,6 +103,7 @@ export function deleteResource(
   deps: AllocationDeps,
   teamId: string,
   resourceId: string,
+  expectedVersion?: number,
 ): { id: string; deleted: true } {
   if (resourceId === RESERVED_RESOURCE_ID || resourceId.startsWith("cap_"))
     throw conflict(
@@ -111,6 +113,8 @@ export function deleteResource(
   return deps.store.transaction(() => {
     const current = storedResources(deps, teamId).find((r) => r.id === resourceId);
     if (!current) throw notFound();
+    if (expectedVersion !== undefined && current.version !== expectedVersion)
+      throw conflict("version_conflict", "This resource changed. Reload it before deleting it.");
     // Only live references block deletion. Finished history (accepted,
     // self_checked, superseded) keeps its frozen Attempt snapshot and old
     // selection, but it must not lock the resource forever.
@@ -244,7 +248,8 @@ export function setMemberAllocation(
       "invalid_state",
       "Host execution configuration is managed through Team runtime settings.",
     );
-  const resource = requireResource(deps, teamId, input.selection);
+  const resource = input.selection ? requireResource(deps, teamId, input.selection) : undefined;
+  const next = resource?.config ?? member.config;
   // allocationRequest revisions are positive; the initial member state is revision 1.
   const currentRevision = member.allocationVersion ?? 1;
   const priorHarness = deps.catalog.memberExecution(teamId, member.branchId ?? deps.catalog.history.ensure(teamId).id, member).config.harness;
@@ -253,19 +258,20 @@ export function setMemberAllocation(
     status: memberBoundaryStatus(deps.store, teamId, member.id),
     currentRevision,
     expectedRevision: input.expectedRevision,
-    access: member.config.access === "read-only" ? "read-only" : resource.config.access,
+    access: member.config.access === "read-only" ? "read-only" : next.access,
     maximumAccess: member.config.access,
   });
-  const selection = resourceSelection.parse(input.selection);
+  const selection = input.selection && resourceSelection.parse(input.selection);
   return deps.store.transaction(() => {
-    member.selection = { ...selection };
+    if (selection) member.selection = selection;
+    else delete member.selection;
     member.allocationVersion = currentRevision + 1;
-    if (priorHarness !== resource.config.harness) member.permissionVersion = (member.permissionVersion ?? 1) + 1;
+    if (priorHarness !== next.harness) member.permissionVersion = (member.permissionVersion ?? 1) + 1;
     deps.store.save("members", member);
     deps.store.event(teamId, "member.allocation", {
       memberId: member.id,
-      resourceId: selection.resourceId,
-      resourceVersion: selection.resourceVersion,
+      resourceId: selection?.resourceId ?? null,
+      resourceVersion: selection?.resourceVersion ?? null,
     });
     return member;
   });
@@ -279,18 +285,22 @@ export function setWorkAllocation(
 ): Work {
   const work = deps.store.get<Work>("works", teamId, workId);
   const member = deps.store.get<Member>("members", teamId, work.memberId);
-  const resource = requireResource(deps, teamId, input.selection);
+  const resource = input.selection ? requireResource(deps, teamId, input.selection) : undefined;
+  const next = resource?.config ?? deps.catalog.memberExecution(teamId,
+    deps.catalog.history.forRun(deps.store.get<Run>("runs", teamId, work.runId)).id, member).config;
   assertBoundary({
     status: work.status,
     currentRevision: work.revision,
     expectedRevision: input.expectedRevision,
-    access: member.config.access === "read-only" ? "read-only" : resource.config.access,
+    access: member.config.access === "read-only" ? "read-only" : next.access,
     maximumAccess: member.config.access,
   });
-  const selection = resourceSelection.parse(input.selection);
+  const selection = input.selection && resourceSelection.parse(input.selection);
   return deps.store.transaction(() => {
-    work.selection = { ...selection };
-    if (work.permissions && work.permissions.harness !== resource.config.harness) delete work.permissions;
+    if (selection) work.selection = selection;
+    else delete work.selection;
+    if (work.permissions && (work.permissions.harness !== next.harness ||
+        (work.permissionVersion ?? 1) !== (member.permissionVersion ?? 1))) delete work.permissions;
     work.permissionVersion = member.permissionVersion ?? 1;
     work.updatedAt = timestamp();
     work.revision += 1;
@@ -300,11 +310,40 @@ export function setWorkAllocation(
       "work.allocation",
       {
         workId: work.id,
-        resourceId: selection.resourceId,
-        resourceVersion: selection.resourceVersion,
+        resourceId: selection?.resourceId ?? null,
+        resourceVersion: selection?.resourceVersion ?? null,
       },
       work,
     );
+    return work;
+  });
+}
+
+export function requireAllocationTask(store: RuntimeStore, teamId: string, workId: string, allowHidden = false) {
+  const work = store.get<Work>("works", teamId, workId);
+  const eligible = allocationTaskIds({
+    works: store.list<Work>("works", teamId),
+    members: store.list<Member>("members", teamId),
+    runs: store.list<Run>("runs", teamId),
+    requirements: store.list<Requirement>("requirements", teamId),
+  });
+  if (!eligible.includes(workId) || (!allowHidden && work.allocationDismissedAt))
+    throw conflict("invalid_state", "This task is no longer pending allocation or retry.");
+  return work;
+}
+
+/** List membership is independent from execution state and resource selection. */
+export function setAllocationListVisibility(deps: AllocationDeps, teamId: string, workId: string, expectedRevision: number, hidden: boolean) {
+  const { store } = deps;
+  return store.transaction(() => {
+    const work = requireAllocationTask(store, teamId, workId, true);
+    if (work.revision !== expectedRevision) throw conflict("version_conflict", BOUNDARY_MESSAGES.version_conflict);
+    if (hidden === Boolean(work.allocationDismissedAt)) return work;
+    if (hidden) work.allocationDismissedAt = timestamp();
+    else delete work.allocationDismissedAt;
+    work.revision += 1;
+    store.save("works", work);
+    store.event(teamId, "work.allocation_visibility", { hidden }, work);
     return work;
   });
 }

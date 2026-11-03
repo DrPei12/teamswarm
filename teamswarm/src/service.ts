@@ -1011,10 +1011,14 @@ class ProductClient {
       "DELETE",
     );
   }
-  async deleteResource(teamId: string, resourceId: string) {
+  async deleteResource(
+    teamId: string,
+    resourceId: string,
+    expectedVersion: number,
+  ) {
     return this.command<{ id: string; deleted: true }>(
       `/teams/${encodeURIComponent(teamId)}/resources/${encodeURIComponent(resourceId)}`,
-      {},
+      { expectedVersion },
       "DELETE",
     );
   }
@@ -1033,7 +1037,7 @@ class ProductClient {
   async setMemberAllocation(
     teamId: string,
     memberId: string,
-    input: { expectedRevision: number; selection: ResourceSelection },
+    input: { expectedRevision: number; selection: ResourceSelection | null },
   ) {
     return this.command<{
       selection?: ResourceSelection;
@@ -1047,11 +1051,11 @@ class ProductClient {
   async setWorkAllocation(
     teamId: string,
     workId: string,
-    input: { expectedRevision: number; selection: ResourceSelection },
+    input: { expectedRevision: number; selection: ResourceSelection | null },
   ) {
     return this.command<{ revision: number; selection?: ResourceSelection }>(
       `/teams/${encodeURIComponent(teamId)}/works/${encodeURIComponent(workId)}/allocation`,
-      input,
+      { ...input, fromAllocationList: true },
       "PUT",
     );
   }

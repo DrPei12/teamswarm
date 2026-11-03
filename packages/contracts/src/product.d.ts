@@ -11,10 +11,12 @@ import type {
   TeamExchangeMessage,
 } from "./runtime";
 export type { ProjectNode, ProjectBranch, ProjectDocument } from "./runtime";
+import type { ResourceSelection } from "./allocation";
 export type TeamExecution = {
-  host?: { config: ExecutionConfig; configurationVersion: number; runningConfig?: ExecutionConfig; permissionVersion: number; memberId: string; branchId: string };
+  host?: { config: ExecutionConfig; configurationVersion: number; runningConfig?: ExecutionConfig; permissionVersion: number; memberId: string; branchId: string; selection?: ResourceSelection | null; selectionCurrent?: boolean };
   settings: RuntimeSettings | null;
   works: Work[];
+  allocationTaskIds?: string[];
   runs: Run[];
   attempts: Attempt[];
   latestEvent: number;
@@ -70,6 +72,7 @@ export type Definition = {
   author: "user" | "host";
 };
 export type Member = {
+  resourceSelection?: ResourceSelection | null;
   id: string;
   removedAt?: string;
   purgedAt?: string;

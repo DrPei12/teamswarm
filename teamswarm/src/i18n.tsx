@@ -8,6 +8,25 @@ import {
 
 export type Language = "en" | "zh-CN";
 export const zhCN: Record<string, string> = {
+  "Choose configuration": "选择具体配置",
+  "Resource unavailable": "资源已不可用",
+  "Configuration details": "配置详情",
+  "Resource version": "资源版本",
+  "Task-specific configuration": "任务专用配置",
+  "Remove task override": "删除专用配置",
+  "Remove resource assignment": "移除默认资源",
+  "Restore Team default": "恢复团队默认",
+  "Keep this task and its conversation history.":
+    "保留工作及其会话历史，可从已移除列表恢复。",
+  "Remove from list": "从列表移除",
+  "Restore to list": "恢复到列表",
+  "No tasks need allocation or retry.": "当前没有需要分配或重试的任务。",
+  "Removed from this list ({count})": "已从列表移除（{count}）",
+  "Delete saved resource": "删除自建资源",
+  "Delete “{name}”?": "删除资源“{name}”？",
+  "Confirm deletion": "确认删除",
+  "Resource changed. Reload before deleting.":
+    "资源已变更，请重新加载后再删除。",
   "Wrap lines": "自动换行",
   "Code content": "代码内容",
   "Read and write files across the device and run system commands.":

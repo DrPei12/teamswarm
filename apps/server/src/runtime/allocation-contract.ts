@@ -13,7 +13,7 @@ export const resourceSelection = z.object({
   reason: z.string().trim().min(1).max(2000),
 }).strict();
 export const allocationRequest = z.object({
-  expectedRevision: version, selection: resourceSelection,
+  expectedRevision: version, selection: resourceSelection.nullable(),
 }).strict();
 
 export const checkExecutionCompatibility = executionCompatibility;
@@ -62,7 +62,7 @@ export function allocationBoundary(input: AllocationBoundary):
   if (input.currentRevision !== input.expectedRevision) return "version_conflict";
   if (input.scope !== "member-default") {
     if (["running", "stopping", "recovery_required"].includes(input.status)) return "busy";
-    if (!["waiting", "yielded", "queued", "interrupted", "failed"].includes(input.status)) return "invalid_state";
+    if (!["waiting", "yielded", "queued", "interrupted", "failed", "rejected"].includes(input.status)) return "invalid_state";
   }
   if (input.maximumAccess === "read-only" && input.access !== "read-only") return "access_escalation";
   return null;

@@ -46,7 +46,7 @@ export interface AttemptExecutionSnapshot {
 }
 export interface AllocationRequest {
   expectedRevision: number;
-  selection: ResourceSelection;
+  selection: ResourceSelection | null;
 }
 export type CompatibilityIssue = "unknown_harness" | "incompatible_protocol" |
   "missing_configuration" | "unsupported_effort" | "unsupported_thinking_format" | "unsupported_output_budget" | "unsupported_context_window";

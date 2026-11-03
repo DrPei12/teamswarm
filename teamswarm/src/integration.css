@@ -989,10 +989,70 @@
 .resource-head strong {
   font-size: calc(13px * var(--font-scale));
 }
-.resource-version {
-  margin-left: 8px;
-  font-size: calc(11px * var(--font-scale));
+.resource-delete-confirm,
+.allocation-row-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+.resource-delete-confirm {
+  padding: 8px 0;
+}
+.allocation-subject {
+  flex: 1 1 180px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.allocation-assignment {
+  flex: 0 1 340px;
+  min-width: 0;
+  max-width: 100%;
+}
+.allocation-row-actions:not(:empty) {
+  margin-top: 6px;
+}
+.allocation-row-actions .text-button,
+.allocation-details,
+.allocation-removed > summary {
+  font-size: var(--font-caption-size);
   color: var(--secondary);
+}
+.allocation-details summary,
+.allocation-removed > summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.allocation-details p {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+.task-allocation {
+  display: grid;
+  gap: 10px;
+}
+.allocation-removed > .allocation-list {
+  margin-top: 8px;
+}
+.allocation-empty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--field-radius);
+  color: var(--secondary);
+}
+.menu.allocation-resource-menu {
+  z-index: 350;
+  min-width: 240px;
+  max-height: min(360px, var(--radix-dropdown-menu-content-available-height));
+}
+.catalog-level {
+  justify-content: space-between;
+}
+.allocation-resource-menu .menu-item {
+  overflow-wrap: anywhere;
 }
 .resource-actions {
   display: flex;

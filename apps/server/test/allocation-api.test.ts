@@ -187,6 +187,57 @@ test("resources persist, list, update with optimistic versions and delete safely
   }
 });
 
+test("only actionable formal tasks enter allocation; hide, restore and unpin preserve their history", async () => {
+  const app = await open(fixtureCodex());
+  try {
+    const team = await seedTeam(app, "Allocation list");
+    const worker = await seedMember(app, team, "Writer", "read-only");
+    const resource = await seedResource(app, team, "Task preset", { harness: "codex", access: "read-only" });
+    const { store, history } = app.service.runtime;
+    const chat = history.mainConversation(team);
+    let host!: Work;
+    store.teams.recordMessage(team, chat, "Allocate work", randomUUID(), message => {
+      host = store.enqueueHost(team, chat, message.id, true, false);
+    });
+    const run = store.get<Run>("runs", team, host.runId);
+    const create = (title:string) => store.createWork(run, worker.id, title, title, [], [], []);
+    const task = create("Member conversation"); // The role is structural, never inferred from its title.
+    const mail = create("Custom message title");
+    mail.interaction = { messageIds: [randomUUID()] };store.save("works", mail);
+    const coordination = create("Coordination");coordination.kind="collaboration";store.save("works",coordination);
+    const predecessor = create("Same title"); store.setStatus(predecessor,"failed");
+    const continuation = create("Same title");continuation.continuationOf=predecessor.id;store.setStatus(continuation,"self_checked");
+    const ids = async () => (await api(app,"/api/product")).body.executions[team].allocationTaskIds as string[];
+    assert.deepEqual(await ids(), [task.id]);
+    const snapshot = () => store.get<Work>("works",team,task.id);
+    const endpoint = "/api/teams/"+team+"/works/"+task.id;
+    const update = (suffix:string,params:Record<string,unknown>) => api(app,endpoint+suffix, {method:"PUT",...json({expectedRevision:snapshot().revision,...params})});
+    const selection = {resourceId:resource.id,resourceVersion:resource.version,reason:"Task fixture"};
+    assert.equal((await update("/allocation",{selection,fromAllocationList:true})).status,200);
+    const pinned=snapshot();
+    assert.equal((await update("/allocation-list",{hidden:true})).status,200);
+    assert(snapshot().allocationDismissedAt);assert.equal(snapshot().status,pinned.status);assert.deepEqual(snapshot().selection,pinned.selection);
+    assert.equal((await update("/allocation",{selection:null,fromAllocationList:true})).status,409);
+    assert.equal((await update("/allocation-list",{expectedRevision:pinned.revision,hidden:false})).status,409);
+    const resourceUrl="/api/teams/"+team+"/resources/"+resource.id;
+    assert.equal((await api(app,resourceUrl,{method:"DELETE"})).body.error.code,"resource_in_use");
+    assert.equal((await update("/allocation-list",{hidden:false})).status,200);
+    assert.equal(snapshot().allocationDismissedAt,undefined);
+    const failed=snapshot();store.setStatus(failed,"rejected");
+    assert.deepEqual(await ids(),[task.id]);
+    assert.equal((await update("/allocation",{selection:null,fromAllocationList:true})).status,200);
+    assert.equal(snapshot().selection,undefined);
+    assert.equal((await api(app,resourceUrl,{method:"DELETE",...json({expectedVersion:2})})).body.error.code,"version_conflict");
+    assert.equal((await api(app,resourceUrl,{method:"DELETE",...json({expectedVersion:1})})).status,200);
+    run.state="completed";store.save("runs",run);
+    assert.deepEqual(await ids(),[]);
+    assert.equal((await api(app,endpoint+"/retry",{method:"POST",...json({expectedRevision:snapshot().revision,fromAllocationList:true})})).status,409);
+    assert.equal(store.get<Work>("works",team,mail.id).interaction?.messageIds[0],mail.interaction.messageIds[0]);
+    assert.equal(store.get<Work>("works",team,predecessor.id).status,"failed");
+    assert.equal(store.get<Work>("works",team,continuation.id).status,"self_checked");
+  } finally {await app.close();}
+});
+
 test("member and task allocation use stable contract codes and never half-write", async () => {
   const running = await open(fixtureCodex());
   try {
