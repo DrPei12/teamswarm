@@ -5,7 +5,14 @@ import {
 import type { MemberPermissionPreset } from "@team/contracts/allocation";
 import { permissionsForAccess, permissionsForHarness } from "./permissions";
 import { FieldSelect } from "./FieldSelect";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   AlertCircle,
   Check,
@@ -249,6 +256,7 @@ export function AllocationSettings({
       )}
       {editing && (
         <ResourceForm
+          key={editing === "new" ? "new" : editing.id}
           teamId={teamId}
           resource={editing === "new" ? null : editing}
           onCancel={() => setEditing(null)}
@@ -433,6 +441,23 @@ function ResourceForm({
     setSaveError(error.message),
   );
   const config = resource?.config;
+  const formRef = useRef<HTMLFormElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => {
+    const opener = document.activeElement;
+    const form = formRef.current;
+    form?.scrollIntoView({ block: "start", behavior: "instant" });
+    nameRef.current?.focus({ preventScroll: true });
+    return () => {
+      if (
+        opener instanceof HTMLElement &&
+        opener.isConnected &&
+        form?.contains(document.activeElement)
+      ) {
+        opener.focus();
+      }
+    };
+  }, []);
   const [secret, setSecret] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -500,6 +525,7 @@ function ResourceForm({
   return (
     <form
       className="resource-form"
+      ref={formRef}
       onSubmit={async (event) => {
         event.preventDefault();
         if (saving) return;
@@ -577,6 +603,7 @@ function ResourceForm({
         <label>
           {t("Name")}
           <input
+            ref={nameRef}
             value={name}
             onChange={(event) => setName(event.target.value)}
             required

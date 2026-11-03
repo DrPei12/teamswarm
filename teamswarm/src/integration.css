@@ -101,17 +101,35 @@
   }
 }
 .form-pair {
+  --field-rows: 2;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-  align-items: end;
+  gap: var(--field-label-gap) 18px;
 }
-.form-pair > * {
+.form-pair:has(> :is(label, .model-field) > :is(small, .form-error)) {
+  --field-rows: 3;
+}
+.form-pair > :is(label, .model-field) {
+  display: grid;
+  grid-row: span var(--field-rows);
+  grid-template-rows: subgrid;
+  row-gap: var(--field-label-gap);
+  align-items: start;
   min-width: 0;
+  font: 500 var(--field-font-size) / var(--field-line-height) var(--font-ui);
+  color: var(--secondary);
+}
+.form-pair > :only-child {
+  grid-column: 1 / -1;
 }
 @media (max-width: 640px) {
   .form-pair {
     grid-template-columns: minmax(0, 1fr);
+    row-gap: 18px;
+  }
+  .form-pair > :is(label, .model-field) {
+    grid-row: auto;
+    grid-template-rows: none;
   }
 }
 .connection-inspection {
@@ -154,8 +172,13 @@
   padding-top: 20px;
 }
 .execution-form .form-body {
-  max-height: 65dvh;
+  min-height: 0;
   overflow: auto;
+}
+.execution-modal .execution-form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 .execution-form,
 .capability-modal,
@@ -848,8 +871,17 @@
 }
 
 /* Execution resources, member/task allocation and portable package panels. */
-.execution-modal {
+.modal.execution-modal {
   width: min(760px, calc(100vw - 32px));
+  max-height: min(80dvh, calc(100dvh - 32px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.execution-modal > .modal-header,
+.execution-modal > .modal-tabs,
+.execution-form > .form-footer {
+  flex: none;
 }
 .modal-tabs {
   display: flex;
@@ -875,6 +907,11 @@
   padding: 18px 24px 24px;
   max-height: 70dvh;
   overflow: auto;
+}
+.execution-modal > .allocation-settings {
+  min-height: 0;
+  max-height: none;
+  scrollbar-gutter: stable;
 }
 .allocation-section {
   display: flex;
@@ -930,6 +967,8 @@
   flex-direction: column;
   gap: 8px;
   list-style: none;
+  padding: 0;
+  margin: 0;
 }
 .resource-row {
   border: 1px solid var(--line);
@@ -990,14 +1029,16 @@
 }
 .resource-config {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
   gap: 4px 16px;
+  margin: 0;
   font-size: calc(12px * var(--font-scale));
 }
 .resource-config dt {
   color: var(--secondary);
 }
 .resource-config dd {
+  margin: 0;
   overflow-wrap: anywhere;
 }
 .resource-issues li,
@@ -1018,12 +1059,13 @@
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 16px;
+  scroll-margin-block-start: 18px;
 }
 .resource-form h3 {
   font-size: calc(13px * var(--font-scale));
   font-weight: 600;
 }
-.resource-form label {
+.resource-form > label {
   display: flex;
   flex-direction: column;
   gap: var(--field-label-gap);
@@ -1051,7 +1093,7 @@
   align-items: center;
   gap: 8px;
   min-height: var(--field-height);
-  align-self: end;
+  align-self: flex-start;
 }
 .resource-checkbox input {
   width: 16px;
@@ -1167,12 +1209,7 @@
 }
 .model-picker-trigger.compact {
   color: var(--text);
-  width: auto;
-  min-height: var(--cds-h-control);
   max-width: 220px;
-  background: none;
-  border: 0;
-  padding: 2px 5px;
 }
 .model-picker-trigger svg {
   flex-shrink: 0;

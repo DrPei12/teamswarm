@@ -35,6 +35,12 @@ const call = async (route, body, method = body ? 'POST' : 'GET') => {
   const data = await response.json(); assert(response.ok, JSON.stringify(data)); return data;
 };
 let browser, page;
+async function assertAligned(left, right, name) {
+  const [a, b] = await Promise.all([left.boundingBox(), right.boundingBox()]);
+  assert(a && b, `${name} fields must be visible`);
+  assert(Math.abs(a.y - b.y) <= 1 && Math.abs(a.y + a.height - b.y - b.height) <= 1,
+    `${name} fields do not share top and bottom edges: ${JSON.stringify([a, b])}`);
+}
 try {
   const team = await call('/product/teams', { name: 'Execution permissions fixture', clientRequestId: randomUUID() });
   const settings = service.runtime.store.settings(team.id);
@@ -113,12 +119,13 @@ try {
   await page.getByRole('button', { name: 'Collaboration', exact: true }).click();
   await page.getByRole('button', { name: 'Add member', exact: true }).click();
   const form = page.getByRole('dialog', { name: 'Add member', exact: true });
+  await assertAligned(form.getByRole('button', {name:'Choose harness'}), form.getByRole('button', {name:'Choose model'}), 'New member runtime');
   await form.getByRole('textbox', { name: 'Name', exact: true }).fill('Claude permission member');
   await form.getByRole('textbox', { name: 'Responsibility', exact: true }).fill('Isolated member configuration fixture');
   await form.getByRole('button', { name: 'Choose harness', exact: true }).click();
   await page.getByRole('button', { name: 'Claude Code', exact: true }).click();
   await form.getByRole('button', { name: 'Choose model', exact: true }).click();
-  await page.locator('.model-picker-provider').first().click();
+  await page.getByRole('dialog', {name:'Model providers',exact:true}).locator('.model-picker-list button').first().click();
   await page.getByRole('button', { name: 'Local fixture', exact: true }).click();
   await form.getByRole('button', { name: 'Add member', exact: true }).click();
   await form.waitFor({state:'hidden'});
@@ -168,6 +175,16 @@ try {
   await page.getByRole('menuitem',{name:'Advanced settings →',exact:true}).click();
   const settingsDialog = page.getByRole('dialog',{name:'Advanced settings',exact:true});
   await settingsDialog.waitFor();
+  await assertAligned(settingsDialog.getByRole('combobox',{name:'Harness',exact:true}), settingsDialog.getByRole('button',{name:'Choose model',exact:true}), 'Advanced runtime');
+  await settingsDialog.getByRole('tab',{name:'Resources and allocation'}).click();
+  await settingsDialog.getByRole('button',{name:'Add resource',exact:true}).click();
+  const editor = settingsDialog.locator('.resource-form');
+  assert(await editor.getByRole('textbox',{name:'Name',exact:true}).evaluate(el=>el===document.activeElement), 'Opening a resource puts focus in its editor');
+  await editor.getByRole('button',{name:'API connection',exact:true}).click();
+  for (const width of [1280, 900]) {
+    await page.setViewportSize({width,height:900});
+    await assertAligned(editor.getByRole('combobox',{name:'Protocol',exact:true}), editor.getByRole('textbox',{name:/^Effort/}), 'Resource fields with a wrapped hint');
+  }
   await settingsDialog.getByRole('button',{name:'Close',exact:true}).click();
   await settingsDialog.waitFor({state:'hidden'});
   assert.equal(await page.getByRole('dialog').count(),0,'Closing direct advanced settings returns to the conversation');

@@ -67,7 +67,7 @@
   color: var(--secondary);
   font-size: calc(11px * var(--font-scale));
   border-radius: 5px;
-  max-width: 150px;
+  max-width: min(220px, 100%);
   white-space: nowrap;
   min-height: 32px;
 }
