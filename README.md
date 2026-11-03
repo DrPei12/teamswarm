@@ -21,13 +21,13 @@ TeamSwarm runs locally for a single user. Harnesses use the accounts or API conn
 <a id="install"></a>
 ## Install
 
-Download the Windows x64 installer and `SHA256SUMS.txt` from the same [GitHub Release](https://github.com/DrPei12/teamswarm/releases). The desktop package includes Electron, Node.js, npm and Codex. Additional harnesses are installed separately on your device.
+Download the package for your platform and `SHA256SUMS.txt` from the same release below. Desktop packages include Electron, Node.js, npm and Codex. Additional harnesses are installed separately on your device.
 
 | Platform | Format | Availability |
 |---|---|---|
-| Windows x64 | NSIS `.exe` | Release download |
+| Windows x64 | NSIS `.exe` | [Windows release](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.0) |
 | Linux x64 | AppImage, DEB | Build from source |
-| macOS Apple Silicon | DMG, ZIP | Build from source |
+| macOS Apple Silicon | DMG, ZIP | [macOS pre-release](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.0-macos.1) |
 
 The Windows installer is unsigned and Windows displays an unknown publisher. See the [Code signing policy](#code-signing-policy). Compare its hash with the release checksum file:
 
@@ -36,6 +36,14 @@ Get-FileHash .\TeamSwarm-0.6.0-Windows-x64.exe -Algorithm SHA256
 ```
 
 Run the installer, then open **TeamSwarm** from the Start menu. Installation is per user. For upgrades, close the application, [back up service data](#data-and-recovery), and run the new installer using the same OS account and installation directory. Updates are installed manually. Uninstalling preserves service data and your project files.
+
+**macOS Apple Silicon:** Download the [DMG](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0-macos.1/TeamSwarm-0.6.0-macOS-arm64.dmg) or [ZIP](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0-macos.1/TeamSwarm-0.6.0-macOS-arm64.zip). Open the DMG and copy **TeamSwarm.app** to Applications, or extract the ZIP and copy the app there. Compare the downloaded file with the checksum from the macOS release:
+
+```sh
+shasum -a 256 TeamSwarm-0.6.0-macOS-arm64.dmg
+```
+
+This macOS pre-release has no Developer ID signature or Apple notarization. If macOS blocks its first launch, see [Apple's instructions for approving an individual app](https://support.apple.com/en-gb/102445).
 
 <a id="first-project"></a>
 ## Your first project
@@ -280,7 +288,7 @@ Focused pull requests are welcome. Run checks appropriate to the changed behavio
 <a id="code-signing-policy"></a>
 ## Code signing policy
 
-Windows installers are currently unsigned. TeamSwarm is applying to [SignPath Foundation](https://signpath.org/) for free code signing through [SignPath.io](https://about.signpath.io/), using a certificate issued to SignPath Foundation.
+Windows installers are currently unsigned. The macOS pre-release has no Developer ID signature or Apple notarization. TeamSwarm is applying to [SignPath Foundation](https://signpath.org/) for free Windows code signing through [SignPath.io](https://about.signpath.io/), using a certificate issued to SignPath Foundation.
 
 The project maintainer, contribution reviewer and release approver is [DrPei12](https://github.com/DrPei12). Signing access requires multi-factor authentication, and every signing request requires manual approval by the release approver.
 

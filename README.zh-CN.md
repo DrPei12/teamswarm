@@ -21,13 +21,13 @@ TeamSwarm 面向本地单用户场景。Harness 使用你配置的账号或 API 
 <a id="install"></a>
 ## 安装
 
-从同一个 [GitHub Release](https://github.com/DrPei12/teamswarm/releases) 下载 Windows x64 安装器和 `SHA256SUMS.txt`。桌面包内置 Electron、Node.js、npm 和 Codex，其他 Harness 单独安装到本机。
+从下方对应平台的同一版本 Release 下载软件包和 `SHA256SUMS.txt`。桌面包内置 Electron、Node.js、npm 和 Codex，其他 Harness 单独安装到本机。
 
 | 平台 | 格式 | 可用范围 |
 |---|---|---|
-| Windows x64 | NSIS `.exe` | Release 下载包 |
+| Windows x64 | NSIS `.exe` | [Windows 发布版](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.0) |
 | Linux x64 | AppImage、DEB | 从源码构建 |
-| macOS Apple Silicon | DMG、ZIP | 从源码构建 |
+| macOS Apple Silicon | DMG、ZIP | [macOS 预发布版](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.0-macos.1) |
 
 Windows 安装器未签名，系统会显示未知发布者。签名安排见[代码签名策略](#code-signing-policy)。将文件哈希与同版校验文件比较：
 
@@ -36,6 +36,14 @@ Get-FileHash .\TeamSwarm-0.6.0-Windows-x64.exe -Algorithm SHA256
 ```
 
 运行安装器，从开始菜单打开 **TeamSwarm**。默认按用户安装。升级时先关闭应用、[备份服务数据](#data-and-recovery)，然后在同一系统账号和安装目录运行新版安装器。更新通过手动安装完成，卸载保留服务数据和项目文件。
+
+**macOS Apple Silicon：** 下载 [DMG](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0-macos.1/TeamSwarm-0.6.0-macOS-arm64.dmg) 或 [ZIP](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0-macos.1/TeamSwarm-0.6.0-macOS-arm64.zip)。打开 DMG，将 **TeamSwarm.app** 复制到“应用程序”；使用 ZIP 时，解压后将 App 复制到同一目录。使用 macOS Release 中的校验文件核对下载内容：
+
+```sh
+shasum -a 256 TeamSwarm-0.6.0-macOS-arm64.dmg
+```
+
+本次 macOS 预发布版未使用 Developer ID 签名，也未经过 Apple 公证。如果 macOS 阻止首次打开，可参阅 [Apple 针对单个 App 的批准操作说明](https://support.apple.com/zh-cn/102445)。
 
 <a id="first-project"></a>
 ## 第一个项目
@@ -277,7 +285,7 @@ node tools/offline-audit/audit.mjs events.json --format markdown --team team-id
 <a id="code-signing-policy"></a>
 ## 代码签名策略（Code signing policy）
 
-Windows 安装器目前未签名。TeamSwarm 正在向 [SignPath Foundation](https://signpath.org/) 申请通过 [SignPath.io](https://about.signpath.io/) 提供的免费代码签名，证书签发给 SignPath Foundation。
+Windows 安装器目前未签名。macOS 预发布版未使用 Developer ID 签名，也未经过 Apple 公证。TeamSwarm 正在向 [SignPath Foundation](https://signpath.org/) 申请通过 [SignPath.io](https://about.signpath.io/) 提供的免费 Windows 代码签名，证书签发给 SignPath Foundation。
 
 项目维护者、贡献审查者及发布批准人为 [DrPei12](https://github.com/DrPei12)。签名访问要求多因素认证，每个签名请求均须由发布批准人手动批准。
 
