@@ -108,6 +108,20 @@ export class MemberPermissions {
       return { status: "saved" as const, config, version: member.allocationVersion, appliesTo: "future_attempts" as const };
     });
   }
+  setHostFromUser(teamId:string,branchId:string,expectedVersion:number,preset:"read-only"|"full-access") {
+    this.catalog.history.branch(teamId,branchId);
+    return this.store.transaction(()=>{
+      const host=this.store.list<Member>("members",teamId).find(m=>m.kind === "host");
+      if(!host)throw notFound();
+      const current=this.catalog.memberExecution(teamId,branchId,host);
+      if(current.allocationRevision!==expectedVersion)throw conflict("version_conflict","Host configuration changed. Reload before saving.");
+      const config=this.configuration(teamId,current.config,preset);this.validate(config);
+      host.hostSelections={...host.hostSelections,[branchId]:{revision:expectedVersion+1,selection:null,config,permissionPreset:preset}};
+      host.permissionVersion=(host.permissionVersion??1)+1;
+      this.store.save("members",host);this.store.event(teamId,"host.configuration",{branchId,permissions:true,preset,revision:expectedVersion+1});
+      return {config,version:expectedVersion+1,appliesTo:"future_attempts"};
+    });
+  }
   private explicitInstruction(work: Work, run: Run, authorization: Authorization) {
     if (!authorization.sourceMessageId && !authorization.authorizationQuote) return false;
     const latest = this.store.db.prepare("SELECT id,content FROM messages WHERE conversation_id=? AND role='user' ORDER BY rowid DESC LIMIT 1").get(run.conversationId);

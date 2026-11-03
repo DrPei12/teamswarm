@@ -1,4 +1,4 @@
-import { memberPermissions } from "./permission-options.js";
+import { memberPermissions, hostPermissions } from "./permission-options.js";
 import { readOnlyExecution } from "./harness/permissions.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -204,7 +204,7 @@ export function setHostAllocation(deps: AllocationDeps, teamId: string, branchId
     if (!host) throw notFound();
     if ((host.hostSelections?.[branchId]?.revision ?? 1) !== expectedRevision)
       throw conflict("version_conflict", "Host selection changed. Reload before saving.");
-    host.hostSelections = { ...host.hostSelections, [branchId]: { revision: expectedRevision + 1, selection,
+    host.hostSelections = { ...host.hostSelections, [branchId]: { permissionPreset:host.hostSelections?.[branchId]?.permissionPreset, revision: expectedRevision + 1, selection,
       ...(selection ? {config:{...deps.catalog.resource(teamId,selection.resourceId).config}} : {}) } };
     deps.store.save("members", host);
     deps.store.event(teamId, "host.allocation", { branchId, selection, revision: expectedRevision + 1 });
@@ -224,7 +224,7 @@ export function setHostConfiguration(deps: AllocationDeps, teamId: string, branc
     if (config.access !== current.config.access)
       throw conflict("access_escalation", "Keep Host's existing file access when changing its model.");
     host.hostSelections = { ...host.hostSelections, [branchId]: {
-      revision: expectedRevision + 1, selection: null, config: { ...config },
+      revision: expectedRevision + 1, selection: null, config: { ...config }, permissionPreset:host.hostSelections?.[branchId]?.permissionPreset,
     } };
     deps.store.save("members", host);
     deps.store.event(teamId, "host.configuration", { branchId, revision: expectedRevision + 1 });
@@ -340,7 +340,7 @@ export function resolveExecution(
     );
     const retained = effective.selection.resourceId.startsWith("cap_") && hostChoice?.selection?.resourceId === effective.selection.resourceId && hostChoice.selection.resourceVersion === effective.selection.resourceVersion ? hostChoice.config : undefined;
     if ((!resource || resource.version !== effective.selection.resourceVersion) && retained)
-      return { config: readOnlyExecution(memberPermissions(retained, member)), selection: {...effective.selection}, conflict: null };
+      return { config: hostPermissions(retained, member, branchId!, deps.catalog.harnesses), selection: {...effective.selection}, conflict: null };
     if (!resource)
       return {
         config,
@@ -356,7 +356,7 @@ export function resolveExecution(
     config = { ...resource.config };
     selection = { ...effective.selection };
   }
-  config = memberPermissions(config, member);
+  config = member.kind === "host" ? hostPermissions(config,member,branchId!,deps.catalog.harnesses) : memberPermissions(config, member);
   const workPermissions = (work.permissionVersion ?? 1) === (member.permissionVersion ?? 1) ? work.permissions : undefined;
   const permissions = workPermissions ?? config.permissions;
   if (permissions) {
@@ -366,7 +366,7 @@ export function resolveExecution(
   }
   if (work.reviewOf || work.interaction || work.kind === "collaboration")
     config = readOnlyPermissions({ ...config, permissions: workPermissions });
-  else if (member.config.access === "read-only")
+  else if (member.kind !== "host" && member.config.access === "read-only")
     config = readOnlyPermissions(config);
   if (member.kind !== "host" && !deps.catalog.capabilities.allowed(teamId,config))
     return {config,selection,conflict:"This Harness or model connection is no longer enabled for the Team. Ask Host to choose an enabled combination."};

@@ -1,5 +1,8 @@
-import { PermissionSelect } from "./PermissionSelect";
-import { permissionsForAccess } from "./permissions";
+import {
+  MemberPermissionPicker,
+  currentMemberPreset,
+} from "./MemberPermissionPicker";
+import type { MemberPermissionPreset } from "@team/contracts/allocation";
 import { FieldSelect } from "./FieldSelect";
 import { Disclosure } from "./Disclosure";
 import { useEffect, useState } from "react";
@@ -712,7 +715,7 @@ function ManualExecutionSettings({
                 {t("Effort")}
                 <FieldSelect
                   value={settings.config.effort ?? ""}
-                  disabled={!settings.config.model}
+                  disabled={busy || !settings.config.model}
                   onValueChange={(value) => config({ effort: value || null })}
                 >
                   {settings.config.effort && effortUnavailable && (
@@ -728,34 +731,29 @@ function ManualExecutionSettings({
                 </FieldSelect>
               </label>
               <label>
-                {t("File access")}
-                <FieldSelect
-                  value={settings.config.access}
-                  onValueChange={(value) =>
-                    config({
-                      access: value as "read-only" | "workspace-write",
-                      permissions: permissionsForAccess(
-                        settings.config,
-                        value as "read-only" | "workspace-write",
-                      ),
-                    })
-                  }
-                >
-                  <option value="workspace-write">
-                    {t("Project read and write")}
-                  </option>
-                  <option value="read-only">{t("Read only")}</option>
-                </FieldSelect>
+                {t("Execution permissions")}
+                <MemberPermissionPicker
+                  teamId={teamId}
+                  harness={settings.config.harness}
+                  value={currentMemberPreset(settings.config)}
+                  disabled={busy}
+                  onChange={async (preset) => {
+                    setBusy(true);
+                    try {
+                      config(
+                        await product.resolvePermissionConfiguration(
+                          teamId,
+                          settings.config,
+                          preset as MemberPermissionPreset,
+                        ),
+                      );
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                />
               </label>
             </div>
-            <label>
-              {t("Default execution permissions")}
-              <PermissionSelect
-                config={settings.config}
-                disabled={busy}
-                onChange={(permissions) => config({ permissions })}
-              />
-            </label>
             {!subscriptionMode && !sharedAccount && (
               <div
                 className="advanced-settings"

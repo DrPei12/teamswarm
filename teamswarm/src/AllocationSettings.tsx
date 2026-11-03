@@ -1,3 +1,8 @@
+import {
+  MemberPermissionPicker,
+  currentMemberPreset,
+} from "./MemberPermissionPicker";
+import type { MemberPermissionPreset } from "@team/contracts/allocation";
 import { permissionsForAccess, permissionsForHarness } from "./permissions";
 import { FieldSelect } from "./FieldSelect";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -446,8 +451,12 @@ function ResourceForm({
     config?.contextWindowTokens?.toString() ?? "",
   );
   const [access, setAccess] = useState<"read-only" | "workspace-write">(
-    config?.access ?? "workspace-write",
+    config?.access ?? "read-only",
   );
+  const [permissionPreset, setPermissionPreset] =
+    useState<MemberPermissionPreset>(
+      config ? currentMemberPreset(config) : "read-only",
+    );
   const [protocol, setProtocol] = useState(config?.protocol ?? "");
   const [thinkingFormat, setThinkingFormat] = useState(
     config?.thinkingFormat === "qwen",
@@ -508,7 +517,7 @@ function ResourceForm({
             setCredentialEnv(reference);
             setSecret("");
           }
-          await onSubmit({
+          const submitted: ResourceInput = {
             name: name.trim(),
             description: description.trim(),
             config: {
@@ -545,7 +554,17 @@ function ResourceForm({
                   }
                 : { contextWindowTokens: null, maxOutputTokens: null }),
             },
-          });
+          };
+          if (
+            permissionPreset === "read-only" ||
+            permissionPreset === "full-access"
+          )
+            submitted.config = await product.resolvePermissionConfiguration(
+              teamId,
+              submitted.config,
+              permissionPreset,
+            );
+          await onSubmit(submitted);
         } catch (error) {
           setSaveError((error as Error).message);
         } finally {
@@ -814,18 +833,19 @@ function ResourceForm({
       )}
       <div className="form-pair">
         <label>
-          {t("Access")}
-          <FieldSelect
-            value={access}
-            onValueChange={(value) =>
-              setAccess(value as "read-only" | "workspace-write")
-            }
-          >
-            <option value="workspace-write">
-              {t("Project read and write")}
-            </option>
-            <option value="read-only">{t("Read only")}</option>
-          </FieldSelect>
+          {t("Execution permissions")}
+          <MemberPermissionPicker
+            teamId={teamId}
+            harness={harness}
+            value={permissionPreset}
+            disabled={saving}
+            onChange={(preset) => {
+              setPermissionPreset(preset as MemberPermissionPreset);
+              setAccess(
+                preset === "read-only" ? "read-only" : "workspace-write",
+              );
+            }}
+          />
         </label>
       </div>
       {harness === "pi" && (

@@ -1686,13 +1686,6 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                               !!workspace.executions?.[team.id]?.host
                                 ?.runningConfig
                             }
-                            onPermissionChange={(permissions) =>
-                              product.configurePermissions(
-                                team.id,
-                                `host:${team.id}`,
-                                permissions,
-                              )
-                            }
                             onChange={(runtime, choice) =>
                               product.configure(team.id, runtime, choice)
                             }

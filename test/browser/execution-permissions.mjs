@@ -18,7 +18,7 @@ const harness = {
   validateConfig() {},
   async execute(request) {
     request.onSession(randomUUID()); request.onTurn(randomUUID());
-    assert.equal(request.config.permissions.approvalPolicy, 'untrusted');
+    assert.equal(request.config.access, 'read-only');
     const accepted = (await request.onPermission({ nativeId: 'fixture-request', tool: 'item/commandExecution/requestApproval', input: { command: 'npm test', cwd: root, reason: 'Run project checks', threadId: 'internal-thread', turnId: 'internal-turn' } })) === 'allow';
     answers.push(accepted);
     return { status: 'completed', text: accepted ? 'Approval fixture allowed' : 'Approval fixture declined' };
@@ -45,43 +45,44 @@ try {
   page = await context.newPage();
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto(origin + `/#/team/${team.id}/agent`);
-  const permissions = () => page.getByRole('button', { name: /^Execution permissions:/ });
+  const permissions = () => page.getByRole('button', { name: 'Execution permissions', exact: true });
   const waitForPermissionSave = async action => {
     const [response] = await Promise.all([
-      page.waitForResponse(response => /\/members\/[^/]+\/permissions$/.test(new URL(response.url()).pathname) && response.request().method() === 'PUT'),
+      page.waitForResponse(response => /\/(?:members\/[^/]+|host)\/permission-preset$/.test(new URL(response.url()).pathname) && response.request().method() === 'PUT'),
       action(),
     ]);
     assert(response.ok(), await response.text());
-    await page.locator('.permission-menu').waitFor({state:'hidden'});
+    await page.locator('.member-permission-menu').waitFor({state:'hidden'});
   };
   await permissions().click();
-  assert.deepEqual(await page.getByRole('menuitemradio').allTextContents(), ['Request approval', 'Automatic review', 'Full access']);
-  assert.equal(await page.getByRole('menuitemradio', {name:'Full access',exact:true}).getAttribute('aria-disabled'), 'true');
+  assert.deepEqual(await page.getByRole('menuitemradio').locator('.item-label > span').allTextContents(), ['Read-only', 'Full access']);
+  assert.notEqual(await page.getByRole('menuitemradio', {name:/^Full access/}).getAttribute('aria-disabled'), 'true');
+  const branch = {id:(await call('/product')).executions[team.id].host.branchId};
   // Change from the inherited default before testing an explicit Host override.
-  await waitForPermissionSave(() => page.getByRole('menuitemradio', {name:'Automatic review',exact:true}).click());
+  await waitForPermissionSave(() => page.getByRole('menuitemradio', {name:/^Full access/}).click());
   await permissions().click();
-  await waitForPermissionSave(() => page.getByRole('menuitemradio', { name: 'Request approval', exact: true }).click());
-  await page.waitForFunction(() => document.querySelector('.permission-select')?.textContent.includes('Request approval'));
+  await waitForPermissionSave(() => page.getByRole('menuitemradio', { name: /^Read-only/ }).click());
+  await page.waitForFunction(() => document.querySelector('.member-permission-choice')?.textContent.includes('Read-only'));
   assert.equal(service.runtime.store.settings(team.id).config.permissions, undefined);
   const host = () => service.runtime.store.list('members', team.id).find(m => m.kind === 'host');
-  assert.equal(host().permissionOverride.approvalPolicy, 'untrusted');
+  assert.equal(host().hostSelections[branch.id].permissionPreset, 'read-only');
   // Failure preserves the old selection and offers retry in the same anchored menu.
   let failOnce = true;
-  await page.route('**/members/*/permissions', async route => {
+  await page.route('**/host/permission-preset', async route => {
     if (!failOnce) return route.continue();
     failOnce = false;
     await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'fixture_failure',message:'Permission save fixture failed'}})});
   });
   await permissions().click();
-  await page.getByRole('menuitemradio',{name:'Automatic review',exact:true}).click();
+  await page.getByRole('menuitemradio',{name:/^Full access/}).click();
   await page.getByRole('alert').filter({hasText:'Permission save fixture failed'}).waitFor();
-  assert.match(await permissions().innerText(), /Request approval/);
+  assert.match(await permissions().innerText(), /Read-only/);
   await waitForPermissionSave(() => page.getByRole('button',{name:'Retry',exact:true}).click());
-  await page.waitForFunction(() => document.querySelector('.permission-select')?.textContent.includes('Automatic review'));
-  await page.unroute('**/members/*/permissions');
+  await page.waitForFunction(() => document.querySelector('.member-permission-choice')?.textContent.includes('Full access'));
+  await page.unroute('**/host/permission-preset');
   await permissions().click();
-  await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:'Request approval',exact:true}).click());
-  await page.waitForFunction(() => document.querySelector('.permission-select')?.textContent.includes('Request approval'));
+  await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:/^Read-only/}).click());
+  await page.waitForFunction(() => document.querySelector('.member-permission-choice')?.textContent.includes('Read-only'));
   for (const accepted of [false, true]) {
     await page.locator('.composer textarea').fill(`Approval test ${accepted}`);
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
@@ -91,11 +92,11 @@ try {
     assert.doesNotMatch(await card.innerText(), /internal-thread|internal-turn|requestApproval/);
     if (!accepted) {
       await permissions().click();
-      await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:'Automatic review',exact:true}).click());
-      await page.getByRole('status').filter({hasText:'Applies to the next execution'}).waitFor();
+      await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:/^Full access/}).click());
+      await page.getByRole('status').filter({hasText:'Applies next turn'}).waitFor();
       const attempt = service.runtime.store.list('attempts',team.id).at(-1);
-      assert.equal(attempt.config.permissions.approvalPolicy,'untrusted');
-      assert.equal(host().permissionOverride.approvalPolicy,'on-request');
+      assert.equal(attempt.config.access,'read-only');
+      assert.equal(host().hostSelections[branch.id].permissionPreset,'full-access');
       assert.equal(service.runtime.store.settings(team.id).config.permissions,undefined);
     }
     await page.screenshot({ path: path.join(root, 'approval-request.png') });
@@ -104,8 +105,8 @@ try {
     await page.getByText(accepted ? 'Approval fixture allowed' : 'Approval fixture declined', { exact: true }).waitFor();
     if (!accepted) {
       await permissions().click();
-      await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:'Request approval',exact:true}).click());
-      await page.waitForFunction(() => document.querySelector('.permission-select')?.textContent.includes('Request approval'));
+      await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:/^Read-only/}).click());
+      await page.waitForFunction(() => document.querySelector('.member-permission-choice')?.textContent.includes('Read-only'));
     }
   }
   assert.deepEqual(answers, [false, true]);
@@ -114,31 +115,34 @@ try {
   const form = page.getByRole('dialog', { name: 'Add member', exact: true });
   await form.getByRole('textbox', { name: 'Name', exact: true }).fill('Claude permission member');
   await form.getByRole('textbox', { name: 'Responsibility', exact: true }).fill('Isolated member configuration fixture');
-  await form.getByRole('textbox', { name: 'Harness', exact: true }).fill('Claude Code');
-  await form.getByRole('textbox', { name: 'Model', exact: true }).fill('claude-fixture');
+  await form.getByRole('button', { name: 'Choose harness', exact: true }).click();
+  await page.getByRole('button', { name: 'Claude Code', exact: true }).click();
+  await form.getByRole('button', { name: 'Choose model', exact: true }).click();
+  await page.locator('.model-picker-provider').first().click();
+  await page.getByRole('button', { name: 'Local fixture', exact: true }).click();
   await form.getByRole('button', { name: 'Add member', exact: true }).click();
   await form.waitFor({state:'hidden'});
   const member = service.runtime.store.list('members', team.id).find(m=>m.name==='Claude permission member');
   assert.equal(member.config.harness, 'claude-code');
-  assert.equal(member.config.model, 'claude-fixture');
-  assert.equal(member.config.permissions, undefined);
+  assert.equal(member.config.model, 'fixture');
+  assert.equal(member.config.access, 'read-only');
   assert.equal(member.config.effort, null);
   assert.equal(service.runtime.store.settings(team.id).config.permissions, undefined);
   await page.locator('.react-flow__node').filter({hasText:'Claude permission member'}).getByRole('button').first().click();
-  const memberPermissions = page.getByRole('dialog').getByRole('button',{name:/^Execution permissions:/});
+  const memberPermissions = page.getByRole('dialog').getByRole('button',{name:'Execution permissions',exact:true});
   await memberPermissions.click();
-  assert.deepEqual(await page.getByRole('menuitemradio').allTextContents(), ['Request approval', 'Automatic review', 'Full access']);
-  await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:'Automatic review',exact:true}).click());
-  await page.waitForFunction(() => [...document.querySelectorAll('.permission-select')].some(el=>el.textContent.includes('Automatic review')));
-  assert.equal(service.runtime.store.get('members',team.id,member.id).config.permissions.mode,'auto');
-  assert.equal(host().permissionOverride.approvalPolicy,'untrusted');
+  assert.deepEqual(await page.getByRole('menuitemradio').locator('.item-label > span').allTextContents(), ['Read-only', 'Full access']);
+  await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:/^Full access/}).click());
+  await page.waitForFunction(() => [...document.querySelectorAll('.member-permission-choice')].some(el=>el.textContent.includes('Full access')));
+  assert.equal(service.runtime.store.get('members',team.id,member.id).config.permissions.mode,'bypassPermissions');
+  assert.equal(host().hostSelections[branch.id].permissionPreset,'read-only');
   assert.equal(service.runtime.store.settings(team.id).config.permissions,undefined);
   // The menu geometry stays fixed, and reopening uses the prefetched catalogue.
   let catalogueRequests = 0;
-  page.on('request', r=>{if(r.url().includes('/product/permission-options')) catalogueRequests++;});
+  page.on('request', r=>{if(r.url().includes('member-permission-options')) catalogueRequests++;});
   for(let i=0;i<3;i++) {
     await memberPermissions.click();
-    const menu = page.locator('.permission-menu');
+    const menu = page.locator('.member-permission-menu');
     const before = await menu.boundingBox();
     await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
     const after = await menu.boundingBox();
@@ -150,7 +154,7 @@ try {
   for(const width of [760,390]) {
     await page.setViewportSize({width,height:900});
     await memberPermissions.click();
-    const box=await page.locator('.permission-menu').boundingBox();
+    const box=await page.locator('.member-permission-menu').boundingBox();
     assert(box.x>=0 && box.x+box.width<=width+1);
     await page.screenshot({path:path.join(root,`permissions-${width}.png`)});
     await page.keyboard.press('Escape');
@@ -168,7 +172,7 @@ try {
   await settingsDialog.waitFor({state:'hidden'});
   assert.equal(await page.getByRole('dialog').count(),0,'Closing direct advanced settings returns to the conversation');
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ passed: true, root, checks: ['Host and member scopes stay separate from team defaults', 'failed save retains selection and retries', 'read-only mode disables wider permissions', 'running attempt remains frozen', 'native request visible and answers delivered', 'member creation inherits team defaults', 'three shared choices persist the native Harness mode', 'stable menu bounds and no repeat catalogue request'] }));
+  console.log(JSON.stringify({ passed: true, root, checks: ['Host and member scopes stay separate from team defaults', 'failed save retains selection and retries', 'read-only and full access remain selectable', 'running attempt remains frozen', 'native request visible and answers delivered', 'member creation inherits team defaults', 'two shared choices persist the native Harness mode', 'stable menu bounds and no repeat catalogue request'] }));
 } catch (error) {
   await page?.screenshot({ path: path.join(root, 'failure.png') }).catch(() => {});
   console.log(root);

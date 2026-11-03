@@ -1,10 +1,12 @@
-import { PermissionSelect } from "./PermissionSelect";
 import {
   MemberPermissionPicker,
   currentMemberPreset,
 } from "./MemberPermissionPicker";
 import type { MemberPermissionPreset } from "@team/contracts/allocation";
-import { hasPendingRuntimeConfiguration } from "./runtimeConfiguration";
+import {
+  hasPendingRuntimeConfiguration,
+  hasPendingPermissionConfiguration,
+} from "./runtimeConfiguration";
 import { isComposing } from "./design-system/motion";
 import {
   forwardRef,
@@ -28,7 +30,7 @@ import type { Draft, RuntimeConfig, Team, Workspace } from "./store";
 import { defaultRuntime } from "./store";
 import { useI18n } from "./i18n";
 import { ICON_SCALE, useTooltipContainer } from "./ui";
-import { api } from "./service";
+import { api, product } from "./service";
 import { ModelPicker } from "./ModelPicker";
 import type { ExecutionConfig } from "@team/contracts/runtime";
 import { selectedModelChoice, type ModelChoice } from "./modelCatalog";
@@ -50,7 +52,6 @@ export function RuntimeControls({
   showPermissions = true,
   disabled = false,
   running = false,
-  onPermissionChange,
   onMemberPermissionPreset,
   onChange,
   onSettings,
@@ -65,9 +66,6 @@ export function RuntimeControls({
   running?: boolean;
   onMemberPermissionPreset?: (
     preset: MemberPermissionPreset,
-  ) => Promise<unknown>;
-  onPermissionChange?: (
-    permissions: NonNullable<ExecutionConfig["permissions"]>,
   ) => Promise<unknown>;
   onChange: (
     config: RuntimeConfig,
@@ -282,44 +280,24 @@ export function RuntimeControls({
           </Popover.Root>
         ),
       )}
-      {showPermissions &&
-        executionConfig &&
-        (onMemberPermissionPreset ? (
-          <MemberPermissionPicker
-            compact
-            teamId={team.id}
-            harness={executionConfig.harness}
-            value={currentMemberPreset(executionConfig)}
-            disabled={disabled || saving}
-            running={running}
-            onChange={(preset) =>
-              onMemberPermissionPreset(preset as MemberPermissionPreset)
-            }
-          />
-        ) : (
-          <PermissionSelect
-            compact
-            config={executionConfig}
-            disabled={disabled || saving}
-            running={running}
-            open={!disabled && edit === "permissions"}
-            onOpenChange={(open) =>
-              setEdit((current) =>
-                open
-                  ? "permissions"
-                  : current === "permissions"
-                    ? null
-                    : current,
-              )
-            }
-            onChange={(permissions) =>
-              onPermissionChange
-                ? onPermissionChange(permissions)
-                : onChange({ ...config, permissions })
-            }
-            onAdvanced={() => onSettings("runtime")}
-          />
-        ))}
+      {showPermissions && executionConfig && (
+        <MemberPermissionPicker
+          compact
+          teamId={team.id}
+          harness={executionConfig.harness}
+          value={currentMemberPreset(executionConfig)}
+          disabled={disabled || saving}
+          onChange={(preset) =>
+            onMemberPermissionPreset
+              ? onMemberPermissionPreset(preset as MemberPermissionPreset)
+              : product.configureHostPermissionPreset(
+                  team.id,
+                  preset as MemberPermissionPreset,
+                )
+          }
+          onAdvanced={() => onSettings("runtime")}
+        />
+      )}
       {showContext && (
         <Tooltip.Root>
           <Tooltip.Trigger asChild>
@@ -372,11 +350,16 @@ export function RuntimeControls({
           </Tooltip.Portal>
         </Tooltip.Root>
       )}
-      {hasPendingRuntimeConfiguration(executionConfig, runningConfig) && (
-        <span className="runtime-pending" role="status">
-          {tr("Applies next turn")}
-        </span>
-      )}
+      {running &&
+        (hasPendingRuntimeConfiguration(executionConfig, runningConfig) ||
+          hasPendingPermissionConfiguration(
+            executionConfig,
+            runningConfig,
+          )) && (
+          <span className="runtime-pending" role="status">
+            {tr("Applies next turn")}
+          </span>
+        )}
     </div>
   );
 }

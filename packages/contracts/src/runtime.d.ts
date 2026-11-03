@@ -87,7 +87,7 @@ export interface Member {
   allocationVersion?: number;
   /** Host defaults are branch-scoped and affect future Attempts only.
    * A null selection with config is a composer override; without config it follows Team settings. */
-    hostSelections?: Record<string, { revision: number; selection: ResourceSelection | null; config?: ExecutionConfig }>;
+    hostSelections?: Record<string, { revision: number; selection: ResourceSelection | null; config?: ExecutionConfig; permissionPreset?: "read-only" | "full-access" }>;
 }
 export interface Requirement {
   id: string;

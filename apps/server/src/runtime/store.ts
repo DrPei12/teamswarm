@@ -1,3 +1,4 @@
+import { nativeAccess } from "./permission-options.js";
 import { bindEvidence, evidenceFor, resolvedEvidence, reviewEvidenceContext } from "./acceptance-evidence.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -445,7 +446,7 @@ export class RuntimeStore {
         name: "Host",
         responsibility: "User dialogue, work organization and delivery",
         kind: "host",
-        config: { ...settings.config, access: "read-only" },
+        config: { ...settings.config, access: nativeAccess(settings.config) === "full-access" ? "workspace-write" : "read-only" },
         createdAt: host?.createdAt ?? timestamp(),
         ...(host?.hostSelections ? { hostSelections: host.hostSelections } : {}),
         ...(host?.permissionOverride ? { permissionOverride: host.permissionOverride } : {}),

@@ -774,40 +774,6 @@ class ProductClient {
       throw error;
     }
   }
-  async configurePermissions(
-    teamId: string,
-    memberId: string,
-    permissions: NonNullable<ExecutionConfig["permissions"]>,
-  ) {
-    const workspace = this.state.workspace;
-    const host = workspace?.executions?.[teamId]?.host;
-    const isHost = memberId.startsWith("host:") || memberId === host?.memberId;
-    const member = workspace?.members.find(
-      (m) => m.teamId === teamId && m.id === memberId,
-    );
-    const config = isHost ? host?.config : member?.executionConfig;
-    const version = isHost
-      ? host?.permissionVersion
-      : member?.configurationVersion;
-    if (!host || !config || !version)
-      throw new Error("Execution permissions are not available. Try again.");
-    try {
-      return await this.command(
-        `/product/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(isHost ? host.memberId : memberId)}/permissions`,
-        {
-          permissions,
-          harness: config.harness,
-          expectedVersion: version,
-          branchId: host.branchId,
-        },
-        "PUT",
-      );
-    } catch (error) {
-      if (error instanceof ApiError && error.code === "version_conflict")
-        await this.refresh();
-      throw error;
-    }
-  }
   async configureMember(
     teamId: string,
     memberId: string,
@@ -911,6 +877,34 @@ class ProductClient {
     choice?: ModelChoice,
   ) {
     return this.resolveRuntimeChoice(teamId, previous, config, choice);
+  }
+  async resolvePermissionConfiguration(
+    teamId: string,
+    config: ExecutionConfig,
+    preset: import("@team/contracts/allocation").MemberPermissionPreset,
+  ) {
+    return api<ExecutionConfig>(
+      `/product/teams/${encodeURIComponent(teamId)}/permission-config`,
+      { config, preset },
+    );
+  }
+  async configureHostPermissionPreset(
+    teamId: string,
+    preset: import("@team/contracts/allocation").MemberPermissionPreset,
+  ) {
+    const host = this.state.workspace?.executions?.[teamId]?.host;
+    if (!host) throw new Error("Host configuration is not available.");
+    try {
+      return await this.command(
+        `/product/teams/${encodeURIComponent(teamId)}/branches/${encodeURIComponent(host.branchId)}/host/permission-preset`,
+        { expectedVersion: host.configurationVersion, preset },
+        "PUT",
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "version_conflict")
+        await this.refresh();
+      throw error;
+    }
   }
   async configureMemberPermissionPreset(
     teamId: string,

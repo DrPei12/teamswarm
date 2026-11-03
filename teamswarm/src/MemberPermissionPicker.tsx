@@ -28,10 +28,10 @@ export function MemberPermissionPicker({
   onChange,
   disabled,
   compact,
-  running,
   includeDefault,
   refreshKey = 0,
   onOptions,
+  onAdvanced,
 }: {
   teamId: string;
   harness: string;
@@ -41,10 +41,10 @@ export function MemberPermissionPicker({
   ) => Promise<unknown> | void;
   disabled?: boolean;
   compact?: boolean;
-  running?: boolean;
   includeDefault?: boolean;
   refreshKey?: number;
   onOptions?: (options: MemberPermissionOptions) => void;
+  onAdvanced?: () => void;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -52,7 +52,9 @@ export function MemberPermissionPicker({
   const [options, setOptions] = useState<MemberPermissionOptions | null>(null);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const [feedback, setFeedback] = useState(false);
+  const [retryPreset, setRetryPreset] = useState<
+    MemberPermissionPreset | "team-default" | null
+  >(null);
   const [revision, setRevision] = useState(0);
   const id = harnessId(harness);
   useEffect(() => {
@@ -75,9 +77,6 @@ export function MemberPermissionPicker({
       active = false;
     };
   }, [teamId, id, revision, refreshKey, onOptions]);
-  useEffect(() => {
-    if (!running) setFeedback(false);
-  }, [running]);
   const defaultLabel = options?.options.find(
     (o) => o.id === options.defaultPreset,
   )?.label;
@@ -111,9 +110,10 @@ export function MemberPermissionPicker({
     setError("");
     try {
       await onChange(next);
-      setFeedback(!!running);
+      setRetryPreset(null);
       setOpen(false);
     } catch (error) {
+      setRetryPreset(next);
       setError((error as Error).message);
     } finally {
       lock.current = false;
@@ -137,12 +137,23 @@ export function MemberPermissionPicker({
                 ? "runtime-choice member-permission-choice"
                 : "field-select member-permission-field"
             }
-            aria-label={t("Member permission strategy")}
+            aria-label={t("Execution permissions")}
             disabled={disabled || saving || !options}
             aria-busy={saving || undefined}
           >
             <ShieldCheck size={16} aria-hidden />
-            <span>{selected?.label ?? t("Custom permissions")}</span>
+            <span>
+              {selected?.label ??
+                t(
+                  value === "read-only"
+                    ? "Read-only"
+                    : value === "full-access"
+                      ? "Full access"
+                      : value === "team-default"
+                        ? "Team default"
+                        : "Custom permissions",
+                )}
+            </span>
             <ChevronDown size={compact ? 14 : 16} aria-hidden />
           </button>
         </DropdownMenu.Trigger>
@@ -155,7 +166,7 @@ export function MemberPermissionPicker({
             collisionPadding={12}
           >
             <DropdownMenu.Label className="menu-heading">
-              {t("Member permission strategy")}
+              {t("Execution permissions")}
             </DropdownMenu.Label>
             <DropdownMenu.Separator className="separator" />
             <DropdownMenu.RadioGroup
@@ -182,21 +193,33 @@ export function MemberPermissionPicker({
                 </DropdownMenu.RadioItem>
               ))}
             </DropdownMenu.RadioGroup>
+            {onAdvanced && (
+              <>
+                <DropdownMenu.Separator className="separator" />
+                <DropdownMenu.Item
+                  className="menu-item"
+                  onSelect={() => {
+                    setOpen(false);
+                    onAdvanced();
+                  }}
+                >
+                  {t("Advanced settings")} →
+                </DropdownMenu.Item>
+              </>
+            )}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
-      {feedback && (
-        <span className="runtime-pending" role="status">
-          {t("Applies next turn")}
-        </span>
-      )}
       {error && (
         <span className="form-error" role="alert">
           {t(error)}{" "}
           <button
             type="button"
             className="text-button"
-            onClick={() => setRevision((v) => v + 1)}
+            disabled={saving}
+            onClick={() =>
+              retryPreset ? void save(retryPreset) : setRevision((v) => v + 1)
+            }
           >
             {t("Retry")}
           </button>

@@ -783,13 +783,6 @@ function ConversationThread({
                 runningConfig={member.runningExecutionConfig}
                 showContext={false}
                 running={!!activeWork || member.status === "working"}
-                onPermissionChange={(permissions) =>
-                  product.configurePermissions(
-                    member.teamId,
-                    member.id,
-                    permissions,
-                  )
-                }
                 onMemberPermissionPreset={
                   member.id.startsWith("host:")
                     ? undefined

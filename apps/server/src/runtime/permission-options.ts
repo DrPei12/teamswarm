@@ -1,3 +1,5 @@
+import { readOnlyExecution } from "./harness/permissions.js";
+import { conflict } from "../errors.js";
 import type { ExecutionConfig, Harness, Member, NativePermissions, PermissionOptions } from "./types.js";
 
 export const codexPermissionOptions: PermissionOptions = {
@@ -104,4 +106,17 @@ export function mergePermissionChoice(config: ExecutionConfig, permissions: Nati
   const merged = previous?.harness === "claude-code" && permissions.harness === "claude-code"
     ? { ...previous, ...permissions } : permissions;
   return { ...config, permissions: merged };
+}
+
+/** An explicit Host permission choice belongs to its conversation branch. */
+export function hostPermissions(config: ExecutionConfig, member: Member, branchId: string, harnesses: Map<string,Harness>): ExecutionConfig {
+  const preset=member.hostSelections?.[branchId]?.permissionPreset;
+  if(preset === "read-only") { const {permissions:_old,...model}=config; return readOnlyExecution(model); }
+  if(preset === "full-access") {
+    const policy=harnesses.get(config.harness)?.permissionOptions?.().options.find(o=>o.id === "full-access");
+    if(!policy) throw conflict("permission_choice","This Harness does not provide full access.");
+    return {...config,access:"workspace-write",permissions:{...policy.permissions}};
+  }
+  const current=memberPermissions(config,member);
+  return member.config.access === "read-only" ? readOnlyExecution(current) : current;
 }

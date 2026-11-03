@@ -1,5 +1,5 @@
 import { permissionCatalog, mergePermissionChoice } from "./runtime/permission-options.js";
-import { nativePermissions } from "./runtime/harness/permissions.js";
+import { nativePermissions, validateNativePermissions } from "./runtime/harness/permissions.js";
 import { setHostConfiguration } from "./runtime/allocation.js";
 import { memberPermissionPreset } from "./runtime/member-permissions.js";
 import { harnessManifest } from "@team/contracts/harness-catalog";
@@ -1021,6 +1021,15 @@ export function productRoutes(runtime: TeamRuntime): Router {
     if (!runtime.store.settings(teamId)) throw notFound();
     const harness = parse(z.string().min(1).max(64), req.query.harness);
     res.json(runtime.memberPermissions.options(teamId, harness));
+  });
+  router.post("/product/teams/:teamId/permission-config",(req,res)=>{
+    const teamId=parse(key,req.params.teamId);
+    const input=parse(z.object({config:executionConfig,preset:z.enum(["read-only","full-access"])}).strict(),req.body);
+    const config=runtime.memberPermissions.configuration(teamId,input.config,input.preset);validateNativePermissions(config);res.json(config);
+  });
+  router.put("/product/teams/:teamId/branches/:branchId/host/permission-preset",(req,res)=>{
+    const input=parse(z.object({expectedVersion:z.number().int().positive(),preset:z.enum(["read-only","full-access"])}).strict(),req.body);
+    res.json(runtime.memberPermissions.setHostFromUser(parse(key,req.params.teamId),parse(key,req.params.branchId),input.expectedVersion,input.preset));
   });
   router.put("/product/teams/:teamId/members/:memberId/permission-preset", (req, res) => {
     const input = parse(z.object({ expectedVersion: z.number().int().positive(), preset: memberPermissionPreset }).strict(), req.body);

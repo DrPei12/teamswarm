@@ -215,3 +215,32 @@ test("full device access reaches shared native execution without a workspace san
   assert(checked,"The worker must execute with its full native permissions");
  }finally{await f.close();}
 });
+
+
+test("Host permissions save per branch, survive model changes, and apply only to the next native turn",async()=>{
+ const f=await setup();try{
+ const rt=f.service.runtime,store=rt.store,endpoint=`/product/teams/${f.team.id}/branches/${f.branch.id}/host/permission-preset`;
+ const host=()=>store.list<Member>("members",f.team.id).find(m=>m.kind==='host')!;
+ assert.equal(rt.catalog.memberExecution(f.team.id,f.branch.id,host()).config.access,'read-only');
+ const chosen=await f.api(endpoint,{expectedVersion:1,preset:'full-access'},'PUT');assert.equal(chosen.status,200,JSON.stringify(chosen.body));
+ const current=rt.catalog.memberExecution(f.team.id,f.branch.id,host());assert.equal(current.config.permissions?.sandbox,'danger-full-access');assert.equal(current.config.access,'workspace-write');
+ const otherChat=(await f.api(`/teams/${f.team.id}/conversations`,{title:'Separate branch'})).body;
+ const otherBranch=rt.history.forConversation(f.team.id,otherChat.id);
+ assert.equal(rt.catalog.memberExecution(f.team.id,otherBranch.id,host()).config.access,'read-only');
+ const reloaded=(await f.api('/product')).body.executions[f.team.id];
+ assert.equal(reloaded.host.config.access,'workspace-write');
+ assert.equal(reloaded.host.configurationVersion,2);
+ const changed=await f.api(`/product/teams/${f.team.id}/branches/${f.branch.id}/host/runtime`,{expectedVersion:2,config:{...current.config,effort:'high'}},'PUT');assert.equal(changed.status,200);
+ f.action=async r=>{
+  assert.equal(r.config.access,'workspace-write');assert.equal(r.config.permissions?.sandbox,'danger-full-access');assert.equal(r.workspaceBoundary,undefined);
+  const own=JSON.parse(r.input).work,attempt=store.get<Attempt>('attempts',f.team.id,store.get<Work>('works',f.team.id,own.id).attemptId!);
+  const readonly=await f.api(endpoint,{expectedVersion:3,preset:'read-only'},'PUT');assert.equal(readonly.status,200);
+  assert.deepEqual(store.get<Attempt>('attempts',f.team.id,attempt.id).config,attempt.config);
+  assert.equal(rt.catalog.memberExecution(f.team.id,f.branch.id,host()).config.access,'read-only');
+ };
+ await f.send('Check selected full permission configuration.');
+ f.action=async r=>{assert.equal(r.config.access,'read-only');assert.notEqual(r.config.permissions?.sandbox,'danger-full-access');};
+ await f.send('Check the next read-only turn.');
+ assert.equal((await f.api(endpoint,{expectedVersion:3,preset:'full-access'},'PUT')).status,409);
+ }finally{await f.close();}
+});

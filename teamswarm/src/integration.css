@@ -1794,11 +1794,7 @@
   display: block;
   flex-shrink: 0;
 }
-.permission-control:not(.compact) .permission-select > span {
-  flex: 1;
-  min-width: 0;
-  text-align: left;
-}
+
 .field-select:disabled {
   opacity: 0.5;
   cursor: default;
@@ -1830,71 +1826,6 @@
   opacity: 0.45;
 }
 
-.permission-control {
-  position: relative;
-  display: inline-flex;
-  min-width: 0;
-}
-.permission-control:not(.compact) {
-  width: 100%;
-}
-.permission-control.compact {
-  flex: 0 0 auto;
-}
-.permission-select svg {
-  flex: 0 0 auto;
-}
-.permission-control .permission-select {
-  max-width: none;
-}
-.permission-select[data-full-access],
-.permission-option[data-full-access] {
-  color: var(--accent);
-}
-.permission-menu {
-  z-index: 130;
-  min-width: 240px;
-  animation: none;
-}
-.permission-option-group {
-  display: contents;
-}
-.permission-option {
-  cursor: default;
-  outline: none;
-}
-.permission-option[data-highlighted] {
-  background: var(--hover);
-}
-.permission-option[data-disabled] {
-  color: var(--subtle);
-  opacity: 0.55;
-}
-.permission-settings {
-  color: var(--accent);
-  font-size: 12px;
-}
-.permission-error {
-  padding: 8px 10px;
-  display: grid;
-  gap: 6px;
-  font-size: 12px;
-}
-.permission-feedback {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
-  z-index: 50;
-  padding: 6px 9px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--secondary);
-  box-shadow: var(--shadow);
-  font-size: 12px;
-  white-space: nowrap;
-  pointer-events: none;
-}
 .approval-request {
   margin: 14px 0;
   padding: 14px;
