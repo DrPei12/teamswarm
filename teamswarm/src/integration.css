@@ -876,7 +876,7 @@
   max-height: min(80dvh, calc(100dvh - 32px));
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: clip;
 }
 .execution-modal > .modal-header,
 .execution-modal > .modal-tabs,
@@ -1033,6 +1033,7 @@
   gap: 4px 16px;
   margin: 0;
   font-size: calc(12px * var(--font-scale));
+  line-height: calc(18px * var(--font-scale));
 }
 .resource-config dt {
   color: var(--secondary);

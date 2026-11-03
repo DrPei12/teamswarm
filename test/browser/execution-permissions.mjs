@@ -126,7 +126,7 @@ try {
   await page.getByRole('button', { name: 'Claude Code', exact: true }).click();
   await form.getByRole('button', { name: 'Choose model', exact: true }).click();
   await page.getByRole('dialog', {name:'Model providers',exact:true}).locator('.model-picker-list button').first().click();
-  await page.getByRole('button', { name: 'Local fixture', exact: true }).click();
+  await page.getByRole('button', { name: 'Local fixture · Claude Code', exact: true }).click();
   await form.getByRole('button', { name: 'Add member', exact: true }).click();
   await form.waitFor({state:'hidden'});
   const member = service.runtime.store.list('members', team.id).find(m=>m.name==='Claude permission member');
@@ -180,6 +180,10 @@ try {
   await settingsDialog.getByRole('button',{name:'Add resource',exact:true}).click();
   const editor = settingsDialog.locator('.resource-form');
   assert(await editor.getByRole('textbox',{name:'Name',exact:true}).evaluate(el=>el===document.activeElement), 'Opening a resource puts focus in its editor');
+  assert.equal(await settingsDialog.evaluate(el=>el.scrollTop), 0, 'Only the dialog body may scroll when revealing the editor');
+  const titleBox = await settingsDialog.getByRole('heading',{name:'Advanced settings',exact:true}).boundingBox();
+  const dialogBox = await settingsDialog.boundingBox();
+  assert(titleBox && dialogBox && titleBox.y >= dialogBox.y, 'The advanced settings title remains visible');
   await editor.getByRole('button',{name:'API connection',exact:true}).click();
   for (const width of [1280, 900]) {
     await page.setViewportSize({width,height:900});

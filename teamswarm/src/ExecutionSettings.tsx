@@ -321,10 +321,10 @@ function ManualExecutionSettings({
       ? [configuredEffort]
       : []
     : efforts.map((option) => option.reasoningEffort);
-  const effortUnavailable =
-    !customProvider &&
-    !!configuredEffort &&
-    !efforts.some((option) => option.reasoningEffort === configuredEffort);
+  const savedEffortMissing =
+    !!configuredEffort && !effortChoices.includes(configuredEffort);
+  const effortCatalogReady =
+    !checking && !error && !!(sharedAccount ? sharedInspection : inspection);
   const customCredential = customProvider && !!settings?.config.credentialEnv;
   const connectionNeedsAction = Boolean(
     inspection &&
@@ -718,9 +718,13 @@ function ManualExecutionSettings({
                   disabled={busy || !settings.config.model}
                   onValueChange={(value) => config({ effort: value || null })}
                 >
-                  {settings.config.effort && effortUnavailable && (
-                    <option value={settings.config.effort} disabled>
-                      {effortLabel(settings.config.effort)} · {t("Unavailable")}
+                  {savedEffortMissing && (
+                    <option
+                      value={configuredEffort}
+                      disabled={effortCatalogReady}
+                    >
+                      {effortLabel(configuredEffort)}
+                      {effortCatalogReady && ` · ${t("Unavailable")}`}
                     </option>
                   )}
                   {["", ...effortChoices].map((v) => (
