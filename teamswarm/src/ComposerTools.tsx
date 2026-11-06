@@ -1,3 +1,4 @@
+import { apiEffortPolicy } from "@team/contracts/model-effort";
 import { ContextIndicator } from "./ContextIndicator";
 import {
   MemberPermissionPicker,
@@ -40,7 +41,7 @@ import { clipboardFiles } from "./AttachmentChip";
 import {
   harnessId,
   supportedEfforts,
-  effortLabel,
+  effortChoiceLabel,
   useHarnessCatalog,
 } from "./harnessCatalog";
 
@@ -84,11 +85,17 @@ export function RuntimeControls({
   const selected = executionConfig
     ? selectedModelChoice(catalog.models, executionConfig)
     : undefined;
-  const efforts = executionConfig?.chatgptAccountId
-    ? (selected?.reasoningEfforts ?? [])
-    : executionConfig?.baseUrl || executionConfig?.credentialEnv
-      ? []
-      : supportedEfforts(catalog.inspection, config.model);
+  const policy = apiEffortPolicy(executionConfig);
+  const efforts = policy
+    ? policy.supported.map((reasoningEffort) => ({
+        reasoningEffort,
+        description: undefined,
+      }))
+    : executionConfig?.chatgptAccountId
+      ? (selected?.reasoningEfforts ?? [])
+      : executionConfig?.baseUrl || executionConfig?.credentialEnv
+        ? []
+        : supportedEfforts(catalog.inspection, config.model);
   const [saveError, setSaveError] = useState("");
   const [saving, setSaving] = useState(false);
   const harnesses = useHarnessCatalog((error) => setSaveError(error.message));
@@ -166,8 +173,8 @@ export function RuntimeControls({
                 disabled={disabled || saving || (key === "effort" && !hasModel)}
               >
                 <span>
-                  {key === "effort" && config[key] !== "Default"
-                    ? effortLabel(config[key])
+                  {key === "effort"
+                    ? effortChoiceLabel(config[key], policy, tr)
                     : tr(config[key])}
                 </span>
                 <ChevronDown size={14 * ICON_SCALE} />
@@ -229,8 +236,8 @@ export function RuntimeControls({
                     }}
                   >
                     <span className="item-label">
-                      {key === "effort" && value !== "Default"
-                        ? effortLabel(value)
+                      {key === "effort"
+                        ? effortChoiceLabel(value, policy, tr)
                         : tr(value)}
                     </span>
                     {(key === "harness"
@@ -242,6 +249,7 @@ export function RuntimeControls({
                 ))}
                 <div className="separator" />
                 {key === "effort" &&
+                  !policy &&
                   (error || (checking && !catalog.inspection)) && (
                     <div
                       className="menu-note"
@@ -442,10 +450,15 @@ export const ComposerInput = forwardRef<
     setDismissed(false);
   }, [value]);
   useEffect(() => {
-    if (open)
-      document
-        .getElementById(`command-${index}`)
-        ?.scrollIntoView({ block: "nearest" });
+    if (!open) return;
+    const option = document.getElementById(`command-${index}`);
+    const list = option?.closest<HTMLElement>(".command-menu");
+    if (!option || !list) return;
+    const item = option.getBoundingClientRect(),
+      bounds = list.getBoundingClientRect();
+    if (item.top < bounds.top) list.scrollTop += item.top - bounds.top;
+    else if (item.bottom > bounds.bottom)
+      list.scrollTop += item.bottom - bounds.bottom;
   }, [index, open]);
   const pick = (choice: Choice) => {
     const start = caret - (fragment?.[2].length || 0) - 1;
@@ -469,7 +482,7 @@ export const ComposerInput = forwardRef<
     else if (choice.id === "plugins") onPlugins();
     else
       requestAnimationFrame(() => {
-        input.current?.focus();
+        input.current?.focus({ preventScroll: true });
         input.current?.setSelectionRange(
           start + insertion.length,
           start + insertion.length,

@@ -1,3 +1,4 @@
+import { apiEffortPolicy } from "@team/contracts/model-effort";
 import { conflict } from "../errors.js";
 import { createResource, setHostAllocation, setMemberAllocation, setWorkAllocation } from "./allocation.js";
 import { checkExecutionCompatibility } from "./allocation-contract.js";
@@ -28,12 +29,13 @@ export async function checkResource(runtime: TeamRuntime, teamId: string, id: st
   try { runtime.validateConfig(config); } catch { valid = false; }
   const installed = typeof inspection.installed === "boolean" ? inspection.installed
     : inspection.available === false ? false : inspection.id || inspection.available === true ? true : null;
+  const policy = apiEffortPolicy(config);
   const models = subscription && Array.isArray(inspection.models) ? inspection.models.flatMap((m: any) => {
     if (typeof m.model !== "string") return [];
     return [{ model: m.model, name: typeof m.name === "string" ? m.name : m.model,
       isDefault: m.isDefault === true,
       efforts: Array.isArray(m.reasoningEfforts) ? m.reasoningEfforts.flatMap((e: any) => typeof e.reasoningEffort === "string" ? [e.reasoningEffort] : []) : [] }];
-  }) : [];
+  }) : policy ? [{model:config.model, name:config.model, efforts:policy.supported, defaultEffort:policy.defaultEffort}] : [];
   return {
     resourceId: id, resourceVersion: version, checkedAt: new Date().toISOString(),
     harness: config.harness, model: config.model,

@@ -228,10 +228,6 @@
 .has-chat .composer-position {
   margin-top: 20px;
   margin-bottom: 20px;
-  bottom: 20px;
-}
-.has-chat .composer-position::before {
-  inset: -16px -12px -24px;
 }
 .composer-surface {
   container-type: inline-size;
@@ -921,7 +917,6 @@ html[data-pane-dragging] * {
     width: calc(100% - 28px);
   }
   .has-chat .composer-position {
-    bottom: 10px;
     margin-bottom: 10px;
   }
   .composer-surface textarea {

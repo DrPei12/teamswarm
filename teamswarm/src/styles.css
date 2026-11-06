@@ -425,6 +425,14 @@ svg {
   width: 36px;
   height: 36px;
 }
+.host-conversation {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
 .conversation-area {
   flex: 1;
   min-height: 0;
@@ -1005,15 +1013,14 @@ button.menu-item:hover {
   display: flex;
   flex-direction: column;
   overflow: auto;
-  scroll-padding-bottom: 160px;
+  scroll-padding-bottom: 12px;
 }
 .has-chat .composer-position {
-  position: sticky;
+  position: relative;
   top: auto;
   left: auto;
   transform: none;
-  bottom: 20px;
-  margin: 32px auto 20px;
+  margin: 20px auto;
   flex-shrink: 0;
 }
 .has-chat .messages {
@@ -1327,7 +1334,6 @@ button.menu-item:hover {
     padding-top: 20px;
   }
   .has-chat .composer-position {
-    bottom: 12px;
     margin-bottom: 12px;
   }
   .modal {

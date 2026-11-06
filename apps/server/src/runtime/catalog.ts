@@ -1,3 +1,4 @@
+import { apiEffortPolicy, type ApiEffortPolicy } from "@team/contracts/model-effort";
 import { readOnlyExecution } from "./harness/permissions.js";
 import { memberPermissions, hostPermissions } from "./permission-options.js";
 import { z } from "zod";
@@ -114,16 +115,19 @@ export class TeamCatalog {
         model: string | null;
         resourceIds: string[];
         harnesses: string[];
+        effortPolicy?: ApiEffortPolicy;
       }
     >();
     for (const resource of this.resources(teamId)) {
       if (!this.capabilities.allowed(teamId, resource.config)) continue;
       const { provider, model } = resource.config;
       const id = hash(JSON.stringify([provider, model])).slice(0, 24);
+      const policy = apiEffortPolicy(resource.config);
       const entry = models.get(id) ?? {
         id,
         provider,
         model,
+        ...(policy ? {effortPolicy: policy} : {}),
         resourceIds: [],
         harnesses: [],
       };

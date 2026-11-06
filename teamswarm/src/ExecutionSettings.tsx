@@ -1,3 +1,4 @@
+import { apiEffortPolicy } from "@team/contracts/model-effort";
 import {
   MemberPermissionPicker,
   currentMemberPreset,
@@ -42,6 +43,7 @@ import {
   useHarnessCatalog,
   supportedEfforts,
   effortLabel,
+  effortChoiceLabel,
   type HarnessInspection,
 } from "./harnessCatalog.ts";
 
@@ -324,11 +326,14 @@ function ManualExecutionSettings({
     settings?.config.model,
   );
   const configuredEffort = settings?.config.effort ?? "";
-  const effortChoices = customProvider
-    ? configuredEffort
-      ? [configuredEffort]
-      : []
-    : efforts.map((option) => option.reasoningEffort);
+  const providerEffort = apiEffortPolicy(settings?.config);
+  const effortChoices = providerEffort
+    ? providerEffort.supported
+    : customProvider
+      ? configuredEffort
+        ? [configuredEffort]
+        : []
+      : efforts.map((option) => option.reasoningEffort);
   const savedEffortMissing =
     !!configuredEffort && !effortChoices.includes(configuredEffort);
   const effortCatalogReady =
@@ -741,7 +746,7 @@ function ManualExecutionSettings({
                   )}
                   {["", ...effortChoices].map((v) => (
                     <option key={v} value={v}>
-                      {v ? effortLabel(v) : t("Default")}
+                      {effortChoiceLabel(v, providerEffort, t)}
                     </option>
                   ))}
                 </FieldSelect>

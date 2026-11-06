@@ -1022,6 +1022,8 @@ export const zhCN: Record<string, string> = {
   command: "命令",
   "Choose harness": "选择 Harness",
   "Choose model": "选择模型",
+  "Default · {effort}": "默认 · {effort}",
+  "Thinking off": "关闭思考",
   "Choose effort": "选择推理强度",
   "Custom harness": "自定义 Harness",
   "Custom model": "自定义模型",

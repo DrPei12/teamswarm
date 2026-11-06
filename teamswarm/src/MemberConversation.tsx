@@ -378,6 +378,8 @@ function ConversationThread({
         located.current = requestAnchor ?? "";
         return;
       }
+      if (!requestAnchor && follow.current)
+        container.scrollTop = container.scrollHeight;
     }
     if (
       requestAnchor &&
@@ -404,7 +406,7 @@ function ConversationThread({
         });
         return () => cancelAnimationFrame(frame);
       }
-    } else if (follow.current) container.scrollTop = container.scrollHeight;
+    }
   }, [entries, requestAnchor, reduced, loading, positionKey, anchor]);
   useEffect(() => {
     if (!highlight) return;
@@ -412,10 +414,14 @@ function ConversationThread({
     return () => clearTimeout(timer);
   }, [highlight]);
   useEffect(() => {
-    if (!list.current) return;
+    const content = list.current;
+    if (!content) return;
+    let height = content.getBoundingClientRect().height;
     const observer = new ResizeObserver(() => {
-      if (follow.current && scroller.current)
+      const next = content.getBoundingClientRect().height;
+      if (next !== height && follow.current && scroller.current)
         scroller.current.scrollTop = scroller.current.scrollHeight;
+      height = next;
       if (
         !loading &&
         (!requestAnchor ||
@@ -424,7 +430,7 @@ function ConversationThread({
       )
         syncScrollPosition();
     });
-    observer.observe(list.current);
+    observer.observe(content);
     if (scroller.current) observer.observe(scroller.current);
     return () => observer.disconnect();
   }, [hasNewer, requestAnchor, loading]);

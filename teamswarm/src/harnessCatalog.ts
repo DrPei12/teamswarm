@@ -1,3 +1,4 @@
+import type { ApiEffortPolicy } from "@team/contracts/model-effort";
 export type HarnessInspection = {
   id?: string;
   authenticated?: boolean;
@@ -47,6 +48,21 @@ export function supportedEfforts(
 
 export function effortLabel(value: string) {
   return value ? value[0].toUpperCase() + value.slice(1) : "Default";
+}
+export function effortChoiceLabel(
+  value: string | null | undefined,
+  policy: ApiEffortPolicy | null,
+  translate: (key: string, values?: Record<string, string | number>) => string,
+) {
+  if (!value || value === "Default")
+    return policy
+      ? translate("Default · {effort}", {
+          effort: effortLabel(policy.defaultEffort),
+        })
+      : translate("Default");
+  return policy && value.toLowerCase() === "none"
+    ? translate("Thinking off")
+    : effortLabel(value);
 }
 import { useEffect, useRef, useState } from "react";
 import {

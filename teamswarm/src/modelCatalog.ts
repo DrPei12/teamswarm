@@ -1,3 +1,7 @@
+import {
+  apiEffortPolicy,
+  canonicalApiEffort,
+} from "@team/contracts/model-effort";
 import { permissionsForHarness } from "./permissions";
 import type { ModelAccess, TeamCapabilities } from "@team/contracts/allocation";
 import type { ExecutionConfig } from "@team/contracts/runtime";
@@ -231,19 +235,30 @@ export async function switchHarness(
         Object.values(c.endpoints).includes(config.baseUrl ?? "") &&
         c.models.includes(config.model ?? ""),
     );
-    if (connection && config.model)
+    if (connection && config.model) {
+      const resolved = await resolve(
+        connection,
+        harness,
+        config.model,
+        config.access,
+      );
+      const sameProvider = apiEffortPolicy(config) && apiEffortPolicy(resolved);
       return {
         thinkingFormat: null,
         maxOutputTokens: null,
         contextWindowTokens: null,
-        ...(await resolve(connection, harness, config.model, config.access)),
+        ...resolved,
+        effort: sameProvider
+          ? canonicalApiEffort(sameProvider, config.effort)
+          : resolved.effort,
         permissions: config.permissions,
       };
+    }
     // Advanced manual connections retain their identity; the server checks compatibility.
     return {
       ...config,
       harness,
-      effort: null,
+      effort: canonicalApiEffort(apiEffortPolicy(config), config.effort),
       thinkingFormat: null,
       maxOutputTokens: null,
       contextWindowTokens: null,

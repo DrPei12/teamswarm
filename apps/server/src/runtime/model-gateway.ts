@@ -1,3 +1,4 @@
+import { apiEffortPolicy, canonicalApiEffort } from "@team/contracts/model-effort";
 import { harnessManifest } from "@team/contracts/harness-catalog";
 import {
   createServer,
@@ -38,6 +39,34 @@ const apis = {
   "chat-completions": "openai-completions",
   "anthropic-messages": "anthropic-messages",
 } as const;
+/** Override native/SDK thinking defaults at the upstream boundary using the frozen turn configuration. */
+function applyProviderEffort(payload: Record<string, any>, config: ExecutionConfig, protocol: ConnectionProtocol) {
+  const policy = apiEffortPolicy(config);
+  if (!policy) return;
+  const selected = canonicalApiEffort(policy, config.effort);
+  if (config.effort && !selected) throw new Error("Unsupported provider effort.");
+  if (protocol === "responses") {
+    if (selected) payload.reasoning = { ...payload.reasoning, effort: selected };
+    else if (payload.reasoning) {
+      delete payload.reasoning.effort;
+      if (!Object.keys(payload.reasoning).length) delete payload.reasoning;
+    }
+  } else if (protocol === "chat-completions") {
+    // A thinking toggle inherited from the Harness takes precedence over reasoning_effort at DeepSeek.
+    delete payload.thinking;
+    if (selected) payload.reasoning_effort = selected;
+    else delete payload.reasoning_effort;
+  } else {
+    if (selected) payload.thinking = { type: selected === "none" ? "disabled" : "enabled" };
+    else delete payload.thinking;
+    if (selected && selected !== "none") payload.output_config = { ...payload.output_config, effort: selected };
+    else if (payload.output_config) {
+      delete payload.output_config.effort;
+      if (!Object.keys(payload.output_config).length) delete payload.output_config;
+    }
+  }
+}
+
 async function errorBody(response: Response) {
   let size = 0;
   const parts: Uint8Array[] = [];
@@ -276,13 +305,16 @@ export class ModelGateway {
         : match![2] === "responses"
           ? "responses"
           : "chat-completions";
-      const source = c.chatgptAccountId ? "responses" : c.protocol!;
+      const source: ConnectionProtocol = c.chatgptAccountId ? "responses" : c.protocol ??
+        (new URL(c.baseUrl!).pathname.startsWith("/anthropic") ? "anthropic-messages" : "chat-completions");
       // Read the final serialized payload at the transport boundary. Never retain
       // prompts, tools, endpoints, account IDs, headers or credential material.
       const observeRequest = (payload: any) => {
-        const parameter = source === "responses" ? "reasoning.effort"
+        const policy = apiEffortPolicy(c);
+        const thinkingOff = !!policy && source === "anthropic-messages" && payload.thinking?.type === "disabled";
+        const parameter = thinkingOff ? "thinking.type" : source === "responses" ? "reasoning.effort"
           : source === "chat-completions" ? "reasoning_effort" : "output_config.effort";
-        const effort = source === "responses" ? payload.reasoning?.effort
+        const effort = thinkingOff ? "none" : source === "responses" ? payload.reasoning?.effort
           : source === "chat-completions" ? payload.reasoning_effort : payload.output_config?.effort;
         const receipt: ModelRequestReceipt = {
           id: randomUUID(), at: new Date().toISOString(), source: "model_gateway",
@@ -290,6 +322,11 @@ export class ModelGateway {
           model: typeof payload.model === "string" ? payload.model : null,
           effort: typeof effort === "string" ? effort : null,
           effortParameter: typeof effort === "string" ? parameter : null,
+          ...(policy ? {
+            effectiveEffort: canonicalApiEffort(policy, effort) ?? policy.defaultEffort,
+            effortSource: typeof effort === "string" ? "explicit" as const : "provider_default" as const,
+            effortParameterValue: thinkingOff ? "disabled" : typeof effort === "string" ? effort : null,
+          } : {}),
           status: "prepared",
         };
         route!.onRequest?.(receipt);
@@ -347,6 +384,7 @@ export class ModelGateway {
         if (c.chatgptAccountId) {
           chatGPTPayload(payload);
         }
+        applyProviderEffort(payload, c, source);
         const accepted = observeRequest(payload);
         const upstream = await fetch(url, {
           method: "POST",
@@ -464,6 +502,7 @@ export class ModelGateway {
                       : "auto";
           }
           requestOptions(source, body, payload);
+          applyProviderEffort(payload, c, source);
           return c.chatgptAccountId ? chatGPTPayload(payload) : payload;
         },
       };

@@ -281,6 +281,9 @@ export interface ModelRequestReceipt {
   model: string | null;
   effort: string | null;
   effortParameter: string | null;
+  effortParameterValue?: string | null;
+  effectiveEffort?: string;
+  effortSource?: "explicit" | "provider_default";
   status: "prepared" | "accepted" | "rejected";
   httpStatus?: number;
 }

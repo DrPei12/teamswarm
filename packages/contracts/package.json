@@ -20,6 +20,10 @@
     },
     "./product": {
       "types": "./src/product.d.ts"
+    },
+    "./model-effort": {
+      "types": "./src/model-effort.d.ts",
+      "default": "./src/model-effort.js"
     }
   },
   "license": "Apache-2.0"

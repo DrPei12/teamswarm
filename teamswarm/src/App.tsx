@@ -409,10 +409,8 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
         editor.current.style.height = "0px";
         editor.current.style.height = `${Math.min(Math.max(editor.current.scrollHeight, 24), 260)}px`;
       }
-      if (followHost.current && thread.current)
-        thread.current.scrollTop = thread.current.scrollHeight;
     }
-  }, [draft.text, route]);
+  }, [draft.text, chat?.id]);
   useEffect(() => {
     inspectingHostActivity.current = false;
     const savedReading = chat
@@ -437,14 +435,17 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     const el = thread.current;
     const content = el?.querySelector(".messages");
     if (!el || !content) return;
+    // A growing editor changes the viewport, not the transcript. Only follow
+    // new or reflowed messages; typing and draft saves keep the reading anchor.
+    let height = content.getBoundingClientRect().height;
     const observer = new ResizeObserver(() => {
-      if (followHost.current) el.scrollTop = el.scrollHeight;
+      const next = content.getBoundingClientRect().height;
+      if (next !== height && followHost.current) el.scrollTop = el.scrollHeight;
+      height = next;
       syncHostScroll();
     });
     observer.observe(content);
     observer.observe(el);
-    const composer = el.querySelector(".composer-position");
-    if (composer) observer.observe(composer);
     return () => observer.disconnect();
   }, [chat?.id, view]);
   useEffect(() => {
@@ -1268,244 +1269,253 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                   </Suspense>
                 </ViewBoundary>
               ) : (
-                <div
-                  className="conversation-area"
-                  ref={thread}
-                  onWheel={(event) => {
-                    inspectingHostActivity.current = false;
-                    if (event.deltaY < 0) followHost.current = false;
-                    else syncHostScroll();
-                  }}
-                  onTouchStart={() => {
-                    inspectingHostActivity.current = false;
-                    followHost.current = false;
-                  }}
-                  onKeyDown={(event) => {
-                    if (
-                      [
-                        "PageUp",
-                        "PageDown",
-                        "Home",
-                        "End",
-                        "ArrowUp",
-                        "ArrowDown",
-                      ].includes(event.key)
-                    )
+                <div className="host-conversation">
+                  <div
+                    className="conversation-area"
+                    ref={thread}
+                    onWheel={(event) => {
                       inspectingHostActivity.current = false;
-                  }}
-                  onClickCapture={(event) => {
-                    if (
-                      (event.target as Element).closest(
-                        ".activity-summary, .activity-toggle",
-                      )
-                    ) {
-                      inspectingHostActivity.current = true;
+                      if (event.deltaY < 0) followHost.current = false;
+                      else syncHostScroll();
+                    }}
+                    onTouchStart={() => {
+                      inspectingHostActivity.current = false;
                       followHost.current = false;
-                    }
-                  }}
-                  onScroll={syncHostScroll}
-                  onPointerDownCapture={(event) => {
-                    if (
-                      !(event.target as Element).closest(
-                        ".activity-summary, .activity-toggle",
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        [
+                          "PageUp",
+                          "PageDown",
+                          "Home",
+                          "End",
+                          "ArrowUp",
+                          "ArrowDown",
+                        ].includes(event.key)
                       )
-                    )
-                      inspectingHostActivity.current = false;
-                  }}
-                >
-                  {chat && (
-                    <div
-                      className="messages"
-                      role="log"
-                      aria-live="polite"
-                      aria-relevant="additions text"
-                      aria-label={tr("Conversation")}
-                    >
-                      <ApprovalRequests
-                        teamId={team.id}
-                        workspace={workspace}
-                      />
-                      {chat.historyBefore && (
-                        <button
-                          className="load-older-messages"
-                          disabled={loadingOlder}
-                          onClick={async () => {
-                            const element = thread.current;
-                            const height = element?.scrollHeight ?? 0;
-                            const top = element?.scrollTop ?? 0;
-                            followHost.current = false;
-                            setLoadingOlder(true);
-                            try {
-                              await product.loadOlder(chat.id);
-                              requestAnimationFrame(() => {
-                                if (element)
-                                  element.scrollTop =
-                                    top + element.scrollHeight - height;
-                              });
-                            } catch (error) {
-                              setNotice((error as Error).message);
-                            } finally {
-                              setLoadingOlder(false);
-                            }
-                          }}
-                        >
-                          {tr(
-                            loadingOlder
-                              ? "Loading earlier messages…"
-                              : "Load earlier messages",
-                          )}
-                        </button>
-                      )}
-                      {chat.parent && (
-                        <div className="branch-context">
-                          <GitBranch size={14 * ICON_SCALE} />
-                          <span>{chat.title}</span>
+                        inspectingHostActivity.current = false;
+                    }}
+                    onClickCapture={(event) => {
+                      if (
+                        (event.target as Element).closest(
+                          ".activity-summary, .activity-toggle",
+                        )
+                      ) {
+                        inspectingHostActivity.current = true;
+                        followHost.current = false;
+                      }
+                    }}
+                    onScroll={syncHostScroll}
+                    onPointerDownCapture={(event) => {
+                      if (
+                        !(event.target as Element).closest(
+                          ".activity-summary, .activity-toggle",
+                        )
+                      )
+                        inspectingHostActivity.current = false;
+                    }}
+                  >
+                    {chat && (
+                      <div
+                        className="messages"
+                        role="log"
+                        aria-live="polite"
+                        aria-relevant="additions text"
+                        aria-label={tr("Conversation")}
+                      >
+                        <ApprovalRequests
+                          teamId={team.id}
+                          workspace={workspace}
+                        />
+                        {chat.historyBefore && (
                           <button
-                            onClick={() =>
-                              navigate({ teamId: team.id, view: "history" })
-                            }
+                            className="load-older-messages"
+                            disabled={loadingOlder}
+                            onClick={async () => {
+                              const element = thread.current;
+                              const height = element?.scrollHeight ?? 0;
+                              const top = element?.scrollTop ?? 0;
+                              followHost.current = false;
+                              setLoadingOlder(true);
+                              try {
+                                await product.loadOlder(chat.id);
+                                requestAnimationFrame(() => {
+                                  if (element)
+                                    element.scrollTop =
+                                      top + element.scrollHeight - height;
+                                });
+                              } catch (error) {
+                                setNotice((error as Error).message);
+                              } finally {
+                                setLoadingOlder(false);
+                              }
+                            }}
                           >
-                            {tr("{count} retained", {
-                              count: chat.inheritedDefinitions?.length || 0,
-                            })}
-                            <ArrowUpRight size={12 * ICON_SCALE} />
+                            {tr(
+                              loadingOlder
+                                ? "Loading earlier messages…"
+                                : "Load earlier messages",
+                            )}
                           </button>
-                        </div>
-                      )}
-                      {!!chat.inheritedDefinitions?.length && (
-                        <details className="branch-definitions">
-                          <summary>{tr("Context")}</summary>
-                          {chat.inheritedDefinitions.map((d) => (
-                            <div key={d.id}>
-                              <span>{tr(definitionLabels[d.kind])}</span>
-                              <strong>{d.title}</strong>
-                              <p>{d.text}</p>
-                            </div>
-                          ))}
-                        </details>
-                      )}
-                      {chat.messages.map((m) => (
-                        <article
-                          className={`message message-${m.role} ${focusedHostMessageId === m.id ? "highlighted" : ""}`}
-                          key={m.id}
-                          id={`message-${m.id}`}
-                          tabIndex={-1}
-                        >
-                          <div className="message-heading">
-                            <span className="message-avatar">
-                              {m.role === "host" && <SwarmMark size={16} />}
-                              {m.role === "host" ? "Host" : tr("You")}
-                            </span>
-                            <time
-                              dateTime={new Date(m.createdAt).toISOString()}
-                            >
-                              {new Date(m.createdAt).toLocaleTimeString(
-                                locale,
-                                {
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                },
-                              )}
-                            </time>
-                            <Menu
-                              align="end"
-                              trigger={
-                                <IconButton
-                                  label={tr("Message actions")}
-                                  className="message-save"
-                                >
-                                  <MoreHorizontal size={16 * ICON_SCALE} />
-                                </IconButton>
+                        )}
+                        {chat.parent && (
+                          <div className="branch-context">
+                            <GitBranch size={14 * ICON_SCALE} />
+                            <span>{chat.title}</span>
+                            <button
+                              onClick={() =>
+                                navigate({ teamId: team.id, view: "history" })
                               }
                             >
-                              <MenuItem
-                                icon={<Copy size={14 * ICON_SCALE} />}
-                                onSelect={async () => {
-                                  try {
-                                    await navigator.clipboard.writeText(m.text);
-                                    setNotice(tr("Message copied"));
-                                  } catch {
-                                    setNotice(tr("Copy failed"));
-                                  }
-                                }}
-                              >
-                                {tr("Copy message")}
-                              </MenuItem>
-                              <Separator />
-                              <MenuItem
-                                onSelect={() => {
-                                  setInsightSource(m);
-                                  setRecordsOpen(true);
-                                }}
-                              >
-                                {tr("Save an idea or decision")}
-                              </MenuItem>
-                              {Object.entries(definitionLabels).map(
-                                ([kind, label]) => (
-                                  <MenuItem
-                                    key={kind}
-                                    onSelect={() => {
-                                      setDefinitionKind(kind as DefinitionKind);
-                                      setDefinitionSource(m);
-                                    }}
-                                  >
-                                    {tr(label)}
-                                  </MenuItem>
-                                ),
-                              )}
-                            </Menu>
+                              {tr("{count} retained", {
+                                count: chat.inheritedDefinitions?.length || 0,
+                              })}
+                              <ArrowUpRight size={12 * ICON_SCALE} />
+                            </button>
                           </div>
-                          {m.skill && (
-                            <span className="skill-tag">
-                              <Icon name="skills" />
-                              {m.skill}
-                            </span>
-                          )}
-                          {!!m.activity?.length && (
-                            <ConversationActivity
-                              items={m.activity}
-                              members={workspace.members.filter(
-                                (member) => member.teamId === team.id,
-                              )}
-                              running={m.pending}
-                            />
-                          )}
-                          <MessageContent
-                            text={m.text}
-                            pending={m.pending}
-                            artifacts={(m.artifacts ?? []).map((a) => ({
-                              ...a,
-                              teamId: team.id,
-                            }))}
-                          />
-                          {workspace.definitions
-                            .filter(
-                              (d) =>
-                                d.chatId === chat.id && d.messageId === m.id,
-                            )
-                            .map((d) => (
-                              <button
-                                key={d.id}
-                                className="message-definition"
-                                onClick={() =>
-                                  navigate({ teamId: team.id, view: "history" })
+                        )}
+                        {!!chat.inheritedDefinitions?.length && (
+                          <details className="branch-definitions">
+                            <summary>{tr("Context")}</summary>
+                            {chat.inheritedDefinitions.map((d) => (
+                              <div key={d.id}>
+                                <span>{tr(definitionLabels[d.kind])}</span>
+                                <strong>{d.title}</strong>
+                                <p>{d.text}</p>
+                              </div>
+                            ))}
+                          </details>
+                        )}
+                        {chat.messages.map((m) => (
+                          <article
+                            className={`message message-${m.role} ${focusedHostMessageId === m.id ? "highlighted" : ""}`}
+                            key={m.id}
+                            id={`message-${m.id}`}
+                            tabIndex={-1}
+                          >
+                            <div className="message-heading">
+                              <span className="message-avatar">
+                                {m.role === "host" && <SwarmMark size={16} />}
+                                {m.role === "host" ? "Host" : tr("You")}
+                              </span>
+                              <time
+                                dateTime={new Date(m.createdAt).toISOString()}
+                              >
+                                {new Date(m.createdAt).toLocaleTimeString(
+                                  locale,
+                                  {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  },
+                                )}
+                              </time>
+                              <Menu
+                                align="end"
+                                trigger={
+                                  <IconButton
+                                    label={tr("Message actions")}
+                                    className="message-save"
+                                  >
+                                    <MoreHorizontal size={16 * ICON_SCALE} />
+                                  </IconButton>
                                 }
                               >
-                                <BookmarkPlus size={12 * ICON_SCALE} />
-                                {d.title}
-                                <ArrowUpRight size={11 * ICON_SCALE} />
-                              </button>
-                            ))}
-
-                          {m.files.length > 0 && (
-                            <div className="files-row">
-                              {m.files.map((f) => fileButton(f))}
+                                <MenuItem
+                                  icon={<Copy size={14 * ICON_SCALE} />}
+                                  onSelect={async () => {
+                                    try {
+                                      await navigator.clipboard.writeText(
+                                        m.text,
+                                      );
+                                      setNotice(tr("Message copied"));
+                                    } catch {
+                                      setNotice(tr("Copy failed"));
+                                    }
+                                  }}
+                                >
+                                  {tr("Copy message")}
+                                </MenuItem>
+                                <Separator />
+                                <MenuItem
+                                  onSelect={() => {
+                                    setInsightSource(m);
+                                    setRecordsOpen(true);
+                                  }}
+                                >
+                                  {tr("Save an idea or decision")}
+                                </MenuItem>
+                                {Object.entries(definitionLabels).map(
+                                  ([kind, label]) => (
+                                    <MenuItem
+                                      key={kind}
+                                      onSelect={() => {
+                                        setDefinitionKind(
+                                          kind as DefinitionKind,
+                                        );
+                                        setDefinitionSource(m);
+                                      }}
+                                    >
+                                      {tr(label)}
+                                    </MenuItem>
+                                  ),
+                                )}
+                              </Menu>
                             </div>
-                          )}
-                        </article>
-                      ))}
-                    </div>
-                  )}
+                            {m.skill && (
+                              <span className="skill-tag">
+                                <Icon name="skills" />
+                                {m.skill}
+                              </span>
+                            )}
+                            {!!m.activity?.length && (
+                              <ConversationActivity
+                                items={m.activity}
+                                members={workspace.members.filter(
+                                  (member) => member.teamId === team.id,
+                                )}
+                                running={m.pending}
+                              />
+                            )}
+                            <MessageContent
+                              text={m.text}
+                              pending={m.pending}
+                              artifacts={(m.artifacts ?? []).map((a) => ({
+                                ...a,
+                                teamId: team.id,
+                              }))}
+                            />
+                            {workspace.definitions
+                              .filter(
+                                (d) =>
+                                  d.chatId === chat.id && d.messageId === m.id,
+                              )
+                              .map((d) => (
+                                <button
+                                  key={d.id}
+                                  className="message-definition"
+                                  onClick={() =>
+                                    navigate({
+                                      teamId: team.id,
+                                      view: "history",
+                                    })
+                                  }
+                                >
+                                  <BookmarkPlus size={12 * ICON_SCALE} />
+                                  {d.title}
+                                  <ArrowUpRight size={11 * ICON_SCALE} />
+                                </button>
+                              ))}
+
+                            {m.files.length > 0 && (
+                              <div className="files-row">
+                                {m.files.map((f) => fileButton(f))}
+                              </div>
+                            )}
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <div className="composer-position">
                     {!chat && (
                       <div className="welcome">
