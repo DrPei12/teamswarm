@@ -138,11 +138,11 @@
   width: max-content;
   max-width: min(234px, calc(100vw - 28px));
   padding: 9px 13px 10px;
-  border: 1px solid rgb(255 255 255 / 9%);
+  border: 1px solid var(--line);
   border-radius: 13px;
-  background: #1c1d1f;
-  color: #f8f8f7;
-  box-shadow: 0 5px 18px rgb(0 0 0 / 17%);
+  background: var(--surface-top);
+  color: var(--text);
+  box-shadow: var(--cds-shadow-lg);
   text-align: center;
   font: 500 0.96rem/1.38 var(--font-ui);
   font-variant-numeric: tabular-nums;
@@ -152,7 +152,7 @@
   display: block;
 }
 .context-details .context-details-heading {
-  color: #b8b9bc;
+  color: var(--secondary);
   font-weight: 550;
   margin-bottom: 2px;
 }
@@ -160,7 +160,7 @@
   font-weight: 600;
 }
 .context-details small {
-  color: #b8b9bc;
+  color: var(--secondary);
   font-size: 0.83rem;
   margin-top: 2px;
 }

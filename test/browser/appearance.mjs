@@ -120,6 +120,32 @@ try {
     ),
     "#151515",
   );
+  await page.emulateMedia({ colorScheme: "dark" });
+  await dialog.getByRole("button", { name: "System", exact: true }).click();
+  await dialog.getByRole("button", { name: "Done", exact: true }).click();
+  const ring = page.getByRole("button", {
+    name: "Context window",
+    exact: true,
+  });
+  await ring.hover();
+  await page.getByRole("tooltip").waitFor();
+  const checkTooltipColors = (background, foreground) =>
+    page.waitForFunction(
+      ([bg, fg]) => {
+        const details = document.querySelector(".context-details");
+        return (
+          details &&
+          getComputedStyle(details).backgroundColor === bg &&
+          getComputedStyle(details).color === fg
+        );
+      },
+      [background, foreground],
+    );
+  await checkTooltipColors("rgb(21, 21, 21)", "rgb(245, 245, 245)");
+  await page.emulateMedia({ colorScheme: "light" });
+  await checkTooltipColors("rgb(241, 246, 251)", "rgb(21, 21, 21)");
+  await page.keyboard.press("Escape");
+  await open();
   await dialog.getByRole("button", { name: "Light", exact: true }).click();
   for (const width of [900, 560, 390]) {
     await page.setViewportSize({ width, height: 700 });
@@ -155,6 +181,7 @@ try {
       importedFontReloaded: true,
       background: true,
       darkMode: true,
+      contextTooltipFollowsSystemAndPalette: true,
       widths: [900, 560, 390],
       reset: true,
       errors,
