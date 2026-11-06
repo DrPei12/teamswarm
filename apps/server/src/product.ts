@@ -1,3 +1,4 @@
+import { contextWindowUsage } from "./product-context.js";
 import { permissionCatalog, mergePermissionChoice } from "./runtime/permission-options.js";
 import { nativePermissions, validateNativePermissions } from "./runtime/harness/permissions.js";
 import { setHostConfiguration } from "./runtime/allocation.js";
@@ -367,28 +368,13 @@ export class ProductStore {
         selection: hostAllocation?.selection ?? null,
         selectionCurrent: hostAllocation?.selectionCurrent,
       };
-      const latestUsage = attempts
-        .filter(
-          (a) =>
-            a.usage &&
-            a.memberId === hostId &&
-            (!prefs.lastChatId ||
-              state.runs.find(
-                (r) =>
-                  r.id === state.works.find((w) => w.id === a.workId)?.runId,
-              )?.conversationId === prefs.lastChatId),
-        )
-        .at(-1)?.usage;
-      const last = latestUsage?.last as Record<string, unknown> | undefined;
-      const used = Number(
-        last?.totalTokens ??
-          last?.inputTokens ??
-          latestUsage?.inputTokens ??
-          latestUsage?.input_tokens,
-      );
-      const limit = Number(
-        latestUsage?.contextWindow ?? latestUsage?.modelContextWindow,
-      );
+      const currentChat = prefs.lastChatId ?? mainChatId;
+      const dialogueRunIds = new Set(state.runs.filter(r => r.conversationId === currentChat).map(r => r.id));
+      const dialogueWorks = new Set(state.works.filter(w => dialogueRunIds.has(w.runId) && w.memberId === hostId &&
+        w.kind !== "host-followup" && w.kind !== "collaboration").map(w => w.id));
+      const contextAttempt = attempts.filter(a => a.memberId === hostId && dialogueWorks.has(a.workId)).at(-1);
+      const contextConfig = contextAttempt && ["running", "stopping"].includes(contextAttempt.status) ? contextAttempt.config : hostConfig;
+      const context = contextWindowUsage(this.db, contextConfig, contextAttempt);
       workspace.teams.push({
         ...prefs,
         mainChatId,
@@ -404,9 +390,7 @@ export class ProductStore {
           model: hostAllocation?.selectionCurrent === false && !hostAllocation.selectionRetained ? "Reselect resource" : hostConfig?.model ?? "",
           effort: hostConfig?.effort ?? "Default",
         },
-        ...(Number.isFinite(used) && limit > 0
-          ? { context: { used, limit } }
-          : {}),
+        context,
       });
       const conversations = this.runtime.store.teams.getTeamDetail(
         team.id,

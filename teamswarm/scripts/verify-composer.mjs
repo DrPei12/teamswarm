@@ -68,6 +68,14 @@ const harnesses = [
     requests.push(request.config);
     request.onSession(request.sessionId ?? randomUUID());
     request.onTurn(randomUUID());
+    request.onEvent({
+      type: "context.usage",
+      data: {
+        inputTokens: 260900,
+        outputTokens: 100,
+        contextWindowTokens: 828000,
+      },
+    });
     return { status: "completed", text: "Local regression fixture." };
   },
   async interrupt() {},
@@ -553,6 +561,27 @@ try {
   assert.equal(requests[0].harness, "claude-code");
   assert.equal(requests[0].credentialEnv, "TEST_SECONDARY");
   assert.equal(requests[0].baseUrl, "https://secondary.example/anthropic");
+  const contextRing = page.getByRole("button", {
+    name: "Context window",
+    exact: true,
+  });
+  await contextRing.hover();
+  const contextDetail = page.getByRole("tooltip");
+  await contextDetail
+    .getByText("31% used (69% left)", { exact: true })
+    .waitFor();
+  assert.match(await contextDetail.innerText(), /261k of 828k tokens used/);
+  await page
+    .locator(".context-details")
+    .screenshot({ path: path.join(root, "context-window.png") });
+  await contextRing.click();
+  await page.mouse.move(0, 0);
+  assert(
+    await contextDetail.isVisible(),
+    "Click keeps the context details available without hovering",
+  );
+  await page.keyboard.press("Escape");
+  await contextDetail.waitFor({ state: "hidden" });
   const sentMessage = page
     .getByRole("log", { name: "Conversation" })
     .locator(".message-user")
@@ -589,6 +618,17 @@ try {
       delete navigator.clipboard;
     });
   }
+  await request("/product/preferences", { language: "zh-CN" }, "PATCH");
+  await page.reload();
+  await page.getByRole("button", { name: "上下文窗口", exact: true }).hover();
+  await page
+    .getByRole("tooltip")
+    .getByText("31% 已用（剩余 69%）", { exact: true })
+    .waitFor();
+  await page
+    .locator(".context-details")
+    .screenshot({ path: path.join(root, "context-window-zh.png") });
+  await request("/product/preferences", { language: "en" }, "PATCH");
   const legacyTeam = await request("/product/teams", {
     name: "Legacy catalog regression",
     clientRequestId: randomUUID(),

@@ -1,5 +1,7 @@
 import type { ExecutionConfig } from "./types.js";
 
+export const DEEPSEEK_NATIVE_WINDOW = 131072;
+
 export interface ContextObservation {
   inputTokens?: number;
   outputTokens?: number;

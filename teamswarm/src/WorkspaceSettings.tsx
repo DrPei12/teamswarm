@@ -482,7 +482,7 @@ export function WorkspaceSettings({
                 save((current) => ({ ...defaults(), imports: current.imports }))
               }
             >
-              {t("Reset fonts and background")}
+              {t("Restore defaults")}
             </button>
             <button type="button" className="secondary-button" onClick={close}>
               {t("Done")}

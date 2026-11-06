@@ -1,3 +1,4 @@
+import { ContextIndicator } from "./ContextIndicator";
 import {
   MemberPermissionPicker,
   currentMemberPreset,
@@ -15,7 +16,7 @@ import {
   useState,
   useImperativeHandle,
 } from "react";
-import { Popover, Tooltip } from "radix-ui";
+import { Popover } from "radix-ui";
 import {
   ChevronDown,
   Check,
@@ -29,7 +30,7 @@ import {
 import type { Draft, RuntimeConfig, Team, Workspace } from "./store";
 import { defaultRuntime } from "./store";
 import { useI18n } from "./i18n";
-import { ICON_SCALE, useTooltipContainer } from "./ui";
+import { ICON_SCALE } from "./ui";
 import { api, product } from "./service";
 import { ModelPicker } from "./ModelPicker";
 import type { ExecutionConfig } from "@team/contracts/runtime";
@@ -73,7 +74,7 @@ export function RuntimeControls({
   ) => Promise<unknown> | void;
   onSettings: (tab?: "harnesses" | "connections" | "runtime") => void;
 }) {
-  const { t: tr, locale } = useI18n();
+  const { t: tr } = useI18n();
   const config = runtimeConfig ?? team.runtime ?? defaultRuntime;
   const hasModel = !!config.model && config.model !== "Default model";
   const [edit, setEdit] = useState<string | null>(null);
@@ -111,10 +112,6 @@ export function RuntimeControls({
     (!executionConfig?.baseUrl && !executionConfig?.credentialEnv
       ? (catalog.inspection?.error ?? "")
       : "");
-  const { trigger, container } = useTooltipContainer();
-  const context = team.context;
-  const known = context && context.limit > 0 && context.used >= 0;
-  const fraction = known ? Math.min(1, context.used / context.limit) : 0;
   return (
     <div className="runtime-controls">
       {(["harness", "model", "effort"] as const).map((key) =>
@@ -298,58 +295,7 @@ export function RuntimeControls({
           onAdvanced={() => onSettings("runtime")}
         />
       )}
-      {showContext && (
-        <Tooltip.Root>
-          <Tooltip.Trigger asChild>
-            <button
-              type="button"
-              className="context-ring"
-              ref={trigger}
-              aria-label={
-                known
-                  ? tr("Context {percent}% used", {
-                      percent: Math.round(fraction * 100),
-                    })
-                  : tr("Context usage unavailable")
-              }
-            >
-              <svg
-                width={16 * ICON_SCALE}
-                height={16 * ICON_SCALE}
-                viewBox="0 0 20 20"
-                aria-hidden="true"
-              >
-                <circle
-                  cx="10"
-                  cy="10"
-                  r="7"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  opacity=".18"
-                />
-                <circle
-                  cx="10"
-                  cy="10"
-                  r="7"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  strokeDasharray={`${fraction * 43.982} 43.982`}
-                  transform="rotate(-90 10 10)"
-                />
-              </svg>
-            </button>
-          </Tooltip.Trigger>
-          <Tooltip.Portal container={container}>
-            <Tooltip.Content className="tooltip" side="top" sideOffset={8}>
-              {known
-                ? `${context.used.toLocaleString(locale)} / ${context.limit.toLocaleString(locale)} tokens · ${Math.round(fraction * 100)}%`
-                : tr("Context · —")}
-            </Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
-      )}
+      {showContext && <ContextIndicator usage={team.context} />}
       {running &&
         (hasPendingRuntimeConfiguration(executionConfig, runningConfig) ||
           hasPendingPermissionConfiguration(

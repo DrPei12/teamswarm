@@ -133,9 +133,7 @@ try {
       JSON.stringify({ width, ...metrics }),
     );
   }
-  await dialog
-    .getByRole("button", { name: "Reset fonts and background" })
-    .click();
+  await dialog.getByRole("button", { name: "Restore defaults" }).click();
   assert.equal(
     await page.evaluate(
       () => getComputedStyle(document.documentElement).fontSize,

@@ -22,7 +22,7 @@ import type {
 import { redact } from "../redact.js";
 import { sessionStoreScope } from "./session-scope.js";
 import { NativeUsage } from "./native-usage.js";
-import { contextObservation } from "../context-budget.js";
+import { contextObservation, DEEPSEEK_NATIVE_WINDOW } from "../context-budget.js";
 import { preflight, inspectExecution, type PreflightInput } from "./preflight.js";
 import { prepareExecutionEnvironment } from "./execution-environment.js";
 import { validateNativePermissions, policyFor } from "./permissions.js";
@@ -371,7 +371,7 @@ export class NativeHarness implements Harness {
               apiKeyEnv: "DEEPSEEK_API_KEY",
               thinking: "disabled",
               maxTokens: 8192,
-              models: [{ id: c.model, contextWindow: 131072, maxTokens: 8192 }],
+              models: [{ id: c.model, contextWindow: DEEPSEEK_NATIVE_WINDOW, maxTokens: 8192 }],
               retryPolicy: { mode: "normal", maxRetries: 0 },
             },
           },
@@ -677,12 +677,15 @@ export class NativeHarness implements Harness {
                   .map((b: any) => b.text)
                   .join("");
                 usage(fact.data?.usage);
+                context(fact.data?.usage ?? {});
               }
-              if (fact.type === "request/context")
+              if (fact.type === "request/context") {
+                context({contextWindow: fact.data?.contextWindow});
                 emit("model.observed", {
                   model: fact.data.model,
                   provider: fact.data.provider,
                 });
+              }
               // Raw facts are retained; only an explicit native turn end can establish success.
               if (fact.type === "turn/end") {
                 const reason = fact.data?.reason;

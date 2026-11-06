@@ -213,12 +213,18 @@ export type Plugin = {
   command: string;
   description: string;
 };
+export type ContextWindowUsage = {
+  used: number | null;
+  limit: number | null;
+  estimated?: boolean;
+  limitSource?: "reported" | "configured" | "estimate";
+};
 export type Team = {
   id: string;
   name: string;
   color: string;
   runtime?: RuntimeConfig;
-  context?: { used: number; limit: number };
+  context?: ContextWindowUsage;
   configured?: boolean;
   lastChatId?: string;
   mainChatId?: string;
