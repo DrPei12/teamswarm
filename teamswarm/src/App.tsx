@@ -3,7 +3,7 @@ import { useAppearance } from "./appearance";
 import { NewMemberDialog } from "./NewMemberDialog";
 import { ApprovalRequests } from "./ApprovalRequests";
 import { Disclosure } from "./Disclosure";
-import { AttachmentChip } from "./AttachmentChip";
+import { AttachmentChip, isImageAttachment } from "./AttachmentChip";
 import { ViewBoundary } from "./ViewBoundary";
 import {
   useEffect,
@@ -1386,133 +1386,152 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                             ))}
                           </details>
                         )}
-                        {chat.messages.map((m) => (
-                          <article
-                            className={`message message-${m.role} ${focusedHostMessageId === m.id ? "highlighted" : ""}`}
-                            key={m.id}
-                            id={`message-${m.id}`}
-                            tabIndex={-1}
-                          >
-                            <div className="message-heading">
-                              <span className="message-avatar">
-                                {m.role === "host" && <SwarmMark size={16} />}
-                                {m.role === "host" ? "Host" : tr("You")}
-                              </span>
-                              <time
-                                dateTime={new Date(m.createdAt).toISOString()}
-                              >
-                                {new Date(m.createdAt).toLocaleTimeString(
-                                  locale,
-                                  {
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  },
-                                )}
-                              </time>
-                              <Menu
-                                align="end"
-                                trigger={
-                                  <IconButton
-                                    label={tr("Message actions")}
-                                    className="message-save"
-                                  >
-                                    <MoreHorizontal size={16 * ICON_SCALE} />
-                                  </IconButton>
-                                }
-                              >
-                                <MenuItem
-                                  icon={<Copy size={14 * ICON_SCALE} />}
-                                  onSelect={async () => {
-                                    try {
-                                      await navigator.clipboard.writeText(
-                                        m.text,
-                                      );
-                                      setNotice(tr("Message copied"));
-                                    } catch {
-                                      setNotice(tr("Copy failed"));
-                                    }
-                                  }}
+                        {chat.messages.map((m) => {
+                          const images =
+                            m.role === "host"
+                              ? []
+                              : m.files.filter(isImageAttachment);
+                          const attachments = images.length
+                            ? m.files.filter((file) => !isImageAttachment(file))
+                            : m.files;
+                          return (
+                            <article
+                              className={`message message-${m.role ?? "user"} ${focusedHostMessageId === m.id ? "highlighted" : ""}`}
+                              key={m.id}
+                              id={`message-${m.id}`}
+                              tabIndex={-1}
+                            >
+                              <div className="message-heading">
+                                <span className="message-avatar">
+                                  {m.role === "host" && <SwarmMark size={16} />}
+                                  {m.role === "host" ? "Host" : tr("You")}
+                                </span>
+                                <time
+                                  dateTime={new Date(m.createdAt).toISOString()}
                                 >
-                                  {tr("Copy message")}
-                                </MenuItem>
-                                <Separator />
-                                <MenuItem
-                                  onSelect={() => {
-                                    setInsightSource(m);
-                                    setRecordsOpen(true);
-                                  }}
-                                >
-                                  {tr("Save an idea or decision")}
-                                </MenuItem>
-                                {Object.entries(definitionLabels).map(
-                                  ([kind, label]) => (
-                                    <MenuItem
-                                      key={kind}
-                                      onSelect={() => {
-                                        setDefinitionKind(
-                                          kind as DefinitionKind,
-                                        );
-                                        setDefinitionSource(m);
-                                      }}
+                                  {new Date(m.createdAt).toLocaleTimeString(
+                                    locale,
+                                    {
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                    },
+                                  )}
+                                </time>
+                                <Menu
+                                  align="end"
+                                  trigger={
+                                    <IconButton
+                                      label={tr("Message actions")}
+                                      className="message-save"
                                     >
-                                      {tr(label)}
-                                    </MenuItem>
-                                  ),
-                                )}
-                              </Menu>
-                            </div>
-                            {m.skill && (
-                              <span className="skill-tag">
-                                <Icon name="skills" />
-                                {m.skill}
-                              </span>
-                            )}
-                            {!!m.activity?.length && (
-                              <ConversationActivity
-                                items={m.activity}
-                                members={workspace.members.filter(
-                                  (member) => member.teamId === team.id,
-                                )}
-                                running={m.pending}
-                              />
-                            )}
-                            <MessageContent
-                              text={m.text}
-                              pending={m.pending}
-                              artifacts={(m.artifacts ?? []).map((a) => ({
-                                ...a,
-                                teamId: team.id,
-                              }))}
-                            />
-                            {workspace.definitions
-                              .filter(
-                                (d) =>
-                                  d.chatId === chat.id && d.messageId === m.id,
-                              )
-                              .map((d) => (
-                                <button
-                                  key={d.id}
-                                  className="message-definition"
-                                  onClick={() =>
-                                    navigate({
-                                      teamId: team.id,
-                                      view: "history",
-                                    })
+                                      <MoreHorizontal size={16 * ICON_SCALE} />
+                                    </IconButton>
                                   }
                                 >
-                                  <BookmarkPlus size={12 * ICON_SCALE} />
-                                  {d.title}
-                                  <ArrowUpRight size={11 * ICON_SCALE} />
-                                </button>
-                              ))}
-
-                            {m.files.length > 0 && (
-                              <div className="files-row">
-                                {m.files.map((f) => fileButton(f))}
+                                  <MenuItem
+                                    icon={<Copy size={14 * ICON_SCALE} />}
+                                    onSelect={async () => {
+                                      try {
+                                        await navigator.clipboard.writeText(
+                                          m.text,
+                                        );
+                                        setNotice(tr("Message copied"));
+                                      } catch {
+                                        setNotice(tr("Copy failed"));
+                                      }
+                                    }}
+                                  >
+                                    {tr("Copy message")}
+                                  </MenuItem>
+                                  <Separator />
+                                  <MenuItem
+                                    onSelect={() => {
+                                      setInsightSource(m);
+                                      setRecordsOpen(true);
+                                    }}
+                                  >
+                                    {tr("Save an idea or decision")}
+                                  </MenuItem>
+                                  {Object.entries(definitionLabels).map(
+                                    ([kind, label]) => (
+                                      <MenuItem
+                                        key={kind}
+                                        onSelect={() => {
+                                          setDefinitionKind(
+                                            kind as DefinitionKind,
+                                          );
+                                          setDefinitionSource(m);
+                                        }}
+                                      >
+                                        {tr(label)}
+                                      </MenuItem>
+                                    ),
+                                  )}
+                                </Menu>
                               </div>
-                            )}
-                          </article>
-                        ))}
+                              {m.skill && (
+                                <span className="skill-tag">
+                                  <Icon name="skills" />
+                                  {m.skill}
+                                </span>
+                              )}
+                              {!!m.activity?.length && (
+                                <ConversationActivity
+                                  items={m.activity}
+                                  members={workspace.members.filter(
+                                    (member) => member.teamId === team.id,
+                                  )}
+                                  running={m.pending}
+                                />
+                              )}
+                              {images.length > 0 && (
+                                <div className="files-row sent-images">
+                                  {images.map((file) => fileButton(file))}
+                                </div>
+                              )}
+                              {(m.text.trim() ||
+                                m.pending ||
+                                !m.files.length) && (
+                                <MessageContent
+                                  text={m.text}
+                                  pending={m.pending}
+                                  artifacts={(m.artifacts ?? []).map((a) => ({
+                                    ...a,
+                                    teamId: team.id,
+                                  }))}
+                                />
+                              )}
+                              {workspace.definitions
+                                .filter(
+                                  (d) =>
+                                    d.chatId === chat.id &&
+                                    d.messageId === m.id,
+                                )
+                                .map((d) => (
+                                  <button
+                                    key={d.id}
+                                    className="message-definition"
+                                    onClick={() =>
+                                      navigate({
+                                        teamId: team.id,
+                                        view: "history",
+                                      })
+                                    }
+                                  >
+                                    <BookmarkPlus size={12 * ICON_SCALE} />
+                                    {d.title}
+                                    <ArrowUpRight size={11 * ICON_SCALE} />
+                                  </button>
+                                ))}
+
+                              {attachments.length > 0 && (
+                                <div className="files-row">
+                                  {attachments.map((f) => fileButton(f))}
+                                </div>
+                              )}
+                            </article>
+                          );
+                        })}
                       </div>
                     )}
                   </div>

@@ -1066,6 +1066,13 @@ button.menu-item:hover {
 .message .files-row {
   padding: 10px 0 0;
 }
+.message-user .files-row.sent-images {
+  justify-content: flex-end;
+  padding: 0;
+}
+.message-user .sent-images + .message-text {
+  margin-top: 8px;
+}
 .file-chip {
   display: flex;
   align-items: center;

@@ -108,13 +108,8 @@ export const tools = {
     schema: z.object({ requestId: key, decision: z.enum(["allow", "deny"]), sourceMessageId: key, authorizationQuote: text }).strict(),
   },
   team_device_resources: {
-    description: "Host only. Read fresh device memory, Windows commit headroom, CPU load, process counts, shared reserve policy, per-Harness measured costs and estimated additional starts. This is device-wide across Teams. Forecasts change with load; use them when arranging parallel work.",
+    description: "Host only. Read fresh device memory, Windows commit, CPU load, process counts, CPU target and per-Harness measured costs. Additional start estimates use CPU capacity. This is device-wide across Teams. Forecasts change with load; use them when arranging parallel work.",
     schema: z.object({}).strict(),
-  },
-  team_set_device_reserve: {
-    description: "Host dialogue only. Apply the user's explicit device memory reserve (MiB, 1024 MiB = 1 GiB), or null to remove the memory reserve. Optionally set the CPU utilization target. This affects all Teams on this device, including queued work; running work continues. Read team_device_resources for expectedVersion. Cite the latest user message and its complete verbatim content as authorizationQuote. Preserve the user's reserve until they change it. Explain the applied setting in the conversation.",
-    schema: z.object({expectedVersion:z.number().int().nonnegative(),reserveMemoryMiB:z.number().int().nonnegative().nullable(),
-      cpuTargetPercent:z.number().min(10).max(100).optional(),sourceMessageId:key,authorizationQuote:text}).strict(),
   },
   team_save_insight: {
     description:

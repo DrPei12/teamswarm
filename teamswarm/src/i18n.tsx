@@ -249,7 +249,6 @@ export const zhCN: Record<string, string> = {
   "Requires responses": "需要 Responses 接口",
   "Requires anthropic-messages": "需要 Anthropic Messages 接口",
   "Read device resources": "读取设备资源",
-  "Set device memory reserve": "设置设备内存预留",
   "Context window tokens": "上下文 token 数",
   "Maximum output tokens": "最大输出 token 数",
   "A context window override requires Pi or OpenCode":

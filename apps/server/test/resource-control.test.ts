@@ -332,7 +332,7 @@ for (const harnessId of ["codex", "pi", "grok"] as const) {
         if (phase === "initial") {
           phase = "idle";
           assert.equal(input.current.allocation.memberConcurrencyLimit, undefined);
-          assert.equal(input.current.allocation.deviceResources.policy.reserveMemoryMiB, null);
+          assert.equal("reserveMemoryMiB" in input.current.allocation.deviceResources.policy, false);
           assert.deepEqual(runtime.catalog.resourceSharing(app.team.id, app.branch.id, "team-default"), {
             mode: "shared", selectedMemberCount: 1, activeAttemptCount: 1, scope: "current_branch"});
           await call(r, "team_define_requirements", {content: "Three independent read-only analyses", affectedWorkIds: []});

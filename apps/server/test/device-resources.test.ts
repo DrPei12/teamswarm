@@ -6,11 +6,8 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createApp } from "../src/app.js";
-import { TeamStore } from "../src/store.js";
-import { RuntimeStore } from "../src/runtime/store.js";
 import { executionConfig } from "../src/runtime/validation.js";
 import { RuntimeResources } from "../src/runtime/resources.js";
-import { ResourceNotifications } from "../src/runtime/resource-notifications.js";
 import type { ProcessSample } from "../src/runtime/harness/owned-process.js";
 import type {
   Harness,
@@ -132,75 +129,65 @@ function fixture() {
   };
 }
 
-test("memory reserve is shared, versioned and retained; memory/commit/CPU pressure admit independently", async () => {
+test("memory observations never block starts; CPU targets stay shared and versioned", async () => {
   const f = fixture(),
     r = f.service.runtime.resources;
   try {
     await r.refresh();
-    assert.equal(
-      f.service.runtime.store.settings(f.team.id)!.maxConcurrent,
-      undefined,
-    );
-    assert.equal(r.admission("codex", true).floor.physical, 0);
-    assert.equal(r.admission("codex", false).floor.physical, 0);
-    assert.equal(r.admission("codex", false).floor.commit, 0);
-    r.configure({ expectedVersion: 0, reserveMemoryMiB: 8 * 1024 });
-    assert.equal(r.policy().reserveMemoryMiB, 8192);
+    r.configure({ expectedVersion: 0, cpuTargetPercent: 85 });
     assert.throws(
-      () => r.configure({ expectedVersion: 0, reserveMemoryMiB: 1024 }),
+      () => r.configure({ expectedVersion: 0, cpuTargetPercent: 90 }),
       /changed/,
     );
-    assert.throws(
-      () => r.configure({ expectedVersion: 1, reserveMemoryMiB: 128 * 1024 }),
-      /exceeds/,
+    assert.throws(() =>
+      r.configure({
+        expectedVersion: 1,
+        cpuTargetPercent: 85,
+        reserveMemoryMiB: 8192,
+      } as any),
     );
-    f.sample = { ...f.sample, availablePhysical: 8 * 1024 * MiB };
+    f.sample = { ...ample(), availablePhysical: 1, availableCommit: 0 };
     f.advance();
     await r.refresh();
-    assert.equal(r.admission("codex", false).reason, "physical_memory");
-    f.sample = { ...ample(), availableCommit: 400 * MiB };
-    f.advance();
-    await r.refresh();
-    assert.equal(r.admission("codex", true).reason, "commit_memory");
+    for (let index = 0; index < 20; index++) {
+      assert.equal(r.canStart("codex", false), true);
+      r.reserve(`parallel-${index}`, "codex");
+    }
+    assert.equal(r.canStart("codex", true), true);
+    assert.equal("reserveMemoryMiB" in r.policy(), false);
+    assert.equal("floors" in r.summary(), false);
+    for (let index = 0; index < 20; index++) r.finish(`parallel-${index}`);
     f.sample = { ...ample(), cpuBusyPercent: 96 };
     f.advance();
     await r.refresh();
     assert.equal(r.admission("codex", true).reason, "cpu");
-    f.sample = { ...ample(), cpuCores: 1 };
-    f.advance();
-    await r.refresh();
-    assert.equal(
-      r.canStart("codex", false),
-      true,
-      "one heavy job may run alone on a small device",
-    );
-    r.reserve("one", "codex");
-    assert.equal(r.canStart("codex", false), false);
-    r.finish("one");
-    const other = new RuntimeResources(
+    f.service.runtime.store.db
+      .prepare(
+        "UPDATE runtime_device_policy SET data=json_set(data,'$.reserveMemoryMiB',8192) WHERE id=1",
+      )
+      .run();
+    const reopened = new RuntimeResources(
       f.service.runtime.store,
       new Map(),
       () => {},
       async () => ample(),
-      () => 48 * 1024 * MiB,
+      () => 0,
     );
-    assert.equal(other.policy().reserveMemoryMiB, 8192);
-    await other.close();
-    r.configure({ expectedVersion: 1, reserveMemoryMiB: null });
-    assert.equal(r.policy().reserveMemoryMiB, null);
-    assert.equal(r.admission("codex", false).floor.physical, 0);
+    assert.equal("reserveMemoryMiB" in reopened.policy(), false);
+    assert.equal(reopened.policy().cpuTargetPercent, 85);
+    await reopened.close();
   } finally {
     await f.close();
   }
 });
 
-test("measured native group peaks change future estimates, and reservations prevent an unmeasured startup burst", async () => {
+test("measured native group peaks persist without gating calibration", async () => {
   const f = fixture(),
     r = f.service.runtime.resources;
   try {
     await r.refresh();
     r.reserve("first", "codex");
-    assert.equal(r.admission("codex", false).reason, "calibrating");
+    assert.equal(r.admission("codex", false).reason, "ready");
     f.harness.groups = [{ id: "group", pid: 101, sessions: 1 }];
     f.sample = {
       ...f.sample,
@@ -254,7 +241,7 @@ test("measured native group peaks change future estimates, and reservations prev
   }
 });
 
-test("twelve native members run concurrently; pressure notifies once, preserves active work and resumes without a reply", async () => {
+test("thirteen native members dispatch despite very low observed memory and emit no memory wait notices", async () => {
   const f = fixture(),
     r = f.service.runtime.resources,
     started: string[] = [],
@@ -289,7 +276,7 @@ test("twelve native members run concurrently; pressure notifies once, preserves 
         await r.refresh();
       }
       if (started.length === 12) {
-        f.sample = { ...f.sample, availablePhysical: 1 * MiB };
+        f.sample = { ...f.sample, availablePhysical: 1, availableCommit: 0 };
         f.advance();
         await r.refresh();
       }
@@ -372,50 +359,28 @@ test("twelve native members run concurrently; pressure notifies once, preserves 
   try {
     await r.refresh();
     f.send("并行读取这些内容，资源不足时告知我并默认等待。");
-    await until(() => started.length === 12);
+    await until(() => started.length === 13);
     assert.equal(
       works.filter(
         (w) =>
           f.service.runtime.store.get<Work>("works", f.team.id, w.id).status ===
           "running",
       ).length,
-      12,
+      13,
     );
-    const messages = () =>
-      f.service.store.getConversationDetail(f.team.id, f.chat.id)!.messages;
-    await until(() =>
-      messages().some((m) => m.content.startsWith("等待资源：")),
-    );
-    for (let n = 0; n < 4; n++) {
-      f.advance();
-      await r.refresh();
-    }
+    const messages = f.service.store.getConversationDetail(
+      f.team.id,
+      f.chat.id,
+    )!.messages;
     assert.equal(
-      messages().filter((m) => m.content.startsWith("等待资源：")).length,
-      1,
-    );
-    assert.match(
-      messages().find((m) => m.content.startsWith("等待资源："))!.content,
-      /设备可用内存/,
-    );
-    const notifier = new ResourceNotifications(f.service.runtime.store);
-    notifier.sync(
-      [{ work: works[12], decision: r.admission("codex", false) }],
-      r.summary(),
+      messages.filter((m) => m.content.startsWith("资源提醒：")).length,
+      0,
     );
     assert.equal(
-      messages().filter((m) => m.content.startsWith("等待资源：")).length,
-      1,
-      "restart does not repeat the notice",
-    );
-    f.sample = { ...f.sample, availablePhysical: 48 * 1024 * MiB };
-    f.advance();
-    await r.refresh();
-    await until(() => started.length === 13);
-    await until(() =>
-      messages().some((m) =>
-        m.content.includes("此前排队的 1 项任务已继续执行"),
-      ),
+      f.service.runtime.store
+        .events(f.team.id, 0, 1000)
+        .filter((event) => event.type === "work.resource_wait").length,
+      0,
     );
     releases.forEach((release) => release());
     await until(() =>
@@ -431,135 +396,40 @@ test("twelve native members run concurrently; pressure notifies once, preserves 
   }
 });
 
-test("resource wait and resume flapping updates one persisted notice and waits for actual dispatch", async () => {
-  const f = fixture(),
-    store = f.service.runtime.store;
-  try {
-    await f.service.runtime.resources.refresh();
-    const user = f.service.store.recordMessage(
-      f.team.id,
-      f.chat.id,
-      "读取文件。",
-      randomUUID(),
-    )!.message;
-    const host = store.enqueueHost(f.team.id, f.chat.id, user.id, true);
-    store.setStatus(host, "submitted");
-    const run = store.get<Run>("runs", f.team.id, host.runId);
-    const member = store.createMember(
-      f.team.id,
-      "Reader",
-      "Read",
-      store.settings(f.team.id)!.config,
+test("Host observes processes without a memory reservation tool or policy", async () => {
+  const f = fixture();
+  let observed = false;
+  f.harness.action = async (request) => {
+    assert.equal(
+      request.tools.some((tool) => tool.name === "team_set_device_reserve"),
+      false,
     );
-    const snapshot = f.service.runtime.resources.summary();
-    const decision = {
-      ...f.service.runtime.resources.admission("codex", false),
-      allowed: false,
-      reason: "physical_memory" as const,
-    };
-    const notifier = new ResourceNotifications(store);
-    const notices = () =>
-      f.service.store
-        .getConversationDetail(f.team.id, f.chat.id)!
-        .messages.filter((m) => m.role === "assistant");
-    let noticeId: string | undefined;
-    for (let n = 0; n < 3; n++) {
-      const work = store.createWork(run, member.id, "Read", "Read", [], [], []);
-      notifier.sync([{ work, decision }], snapshot);
-      assert.equal(notices().length, 1);
-      noticeId ??= notices()[0].id;
-      assert.equal(notices()[0].id, noticeId);
-      assert.match(notices()[0].content, /^等待资源：/);
-      assert(!notices()[0].content.includes("预留"));
-      const attempt = store.start(work, store.settings(f.team.id)!.config);
-      notifier.sync([], snapshot);
-      assert.match(
-        notices()[0].content,
-        /^等待资源：/,
-        "prepared is not dispatched",
-      );
-      attempt.dispatch = { ...attempt.dispatch, state: "dispatched" };
-      store.save("attempts", attempt);
-      notifier.sync([], snapshot);
-      assert.match(notices()[0].content, /1 项任务已继续执行/);
-      assert.equal(notices().length, 1);
-      assert.equal(notices()[0].id, noticeId);
-      store.setStatus(work, "submitted");
-    }
-    // Restart retains the same quiet period and the same message.
-    new ResourceNotifications(store).sync([], snapshot);
-    assert.equal(notices().length, 1);
-  } finally {
-    await f.close();
-  }
-});
-
-test("Host can persist the user's reserve and read it back, but a fabricated source cannot change device policy", async () => {
-  const f = fixture(),
-    r = f.service.runtime.resources;
-  let result: any;
-  f.harness.action = async (req) => {
-    const user = f.service.store
-      .getConversationDetail(f.team.id, f.chat.id)!
-      .messages.filter((m) => m.role === "user")
-      .at(-1)!;
-    const snapshot: any = await req.onTool(
+    const value: any = await request.onTool(
       "team_device_resources",
       {},
       randomUUID(),
     );
+    assert.equal("reserveMemoryMiB" in value.policy, false);
+    assert.equal("floors" in value, false);
     await assert.rejects(
-      req.onTool(
+      request.onTool(
         "team_set_device_reserve",
-        {
-          expectedVersion: 0,
-          reserveMemoryMiB: 1024,
-          sourceMessageId: user.id,
-          authorizationQuote: "different request",
-        },
+        { expectedVersion: 0, reserveMemoryMiB: 8192 },
         randomUUID(),
       ),
-      /latest user message/,
     );
-    result = await req.onTool(
-      "team_set_device_reserve",
-      {
-        expectedVersion: snapshot.policy.version,
-        reserveMemoryMiB: 8192,
-        sourceMessageId: user.id,
-        authorizationQuote: user.content,
-      },
-      randomUUID(),
-    );
-    return {
-      status: "completed",
-      text: "已为其他应用预留 8 GiB 内存，适用于这台设备的全部 Team。",
-    };
+    observed = true;
+    return { status: "completed", text: "已读取进程使用情况。" };
   };
   try {
-    await r.refresh();
-    r.configure({
-      expectedVersion: 0,
-      reserveMemoryMiB: 64 * 1024,
-      cpuTargetPercent: 10,
-    });
-    f.sample = { ...f.sample, cpuBusyPercent: 30 };
-    f.advance();
-    await r.refresh();
-    assert.equal(r.canStart("codex", false), false);
-    assert.equal(
-      r.canStart("codex", true),
-      true,
-      "protected Host can change an oversized reserve",
-    );
-    const { work } = f.send("为其他程序预留 8 GiB 内存。");
+    await f.service.runtime.resources.refresh();
+    const { work } = f.send("读取当前进程和内存使用情况。");
     await until(
       () =>
         f.service.runtime.store.get<Work>("works", f.team.id, work.id)
           .status === "submitted",
     );
-    assert.equal(result.reserveMemoryMiB, 8192);
-    assert.equal(r.policy().source!.teamId, f.team.id);
+    assert.equal(observed, true);
   } finally {
     await f.close();
   }
@@ -582,7 +452,7 @@ test("unavailable per-process metrics retain conservative parallel admission wit
   }
 });
 
-test("a heavy member's history does not create a reserve for a light Harness", async () => {
+test("a heavy member's memory observations do not restrict another Harness", async () => {
   const f = fixture(),
     r = f.service.runtime.resources;
   try {
@@ -617,7 +487,7 @@ test("a heavy member's history does not create a reserve for a light Harness", a
     );
     await resources.refresh();
     assert.equal(resources.canStart("pi", false), true);
-    assert.equal(resources.summary().floors.physical, 0);
+    assert.equal("floors" in resources.summary(), false);
     await resources.close();
   } finally {
     await f.close();
@@ -696,76 +566,126 @@ test("shared executor memory retained by a member does not become the Host contr
   }
 });
 
-test("resource recovery waits for actual dispatch and reports preflight failure accurately", async () => {
-  const root = mkdtempSync(path.join(tmpdir(), "teamswarm-device-notice-")),
-    workspace = path.join(root, "project");
-  mkdirSync(workspace);
-  const teams = new TeamStore({ dataDir: path.join(root, "data") }),
-    store = new RuntimeStore(teams);
-  const resources = new RuntimeResources(
-    store,
-    new Map(),
-    () => {},
-    async () => ample(),
-    () => 48 * 1024 * MiB,
-  );
+test("CPU waits and dispatch recovery stay in runtime events, outside the user conversation", async () => {
+  const f = fixture(),
+    r = f.service.runtime.resources,
+    store = f.service.runtime.store;
   try {
-    const team = teams.createTeam("Notices", ""),
-      chat = teams.createConversation(team.id, "Control", null)!;
-    const config = executionConfig.parse({
-      harness: "codex",
-      access: "read-only",
+    await r.refresh();
+    f.advance();
+    f.sample = { ...ample(), cpuBusyPercent: 100 };
+    await r.refresh();
+    assert.equal(r.admission("codex", true).reason, "cpu");
+    const { work } = f.send("Run when the CPU is free");
+    await until(() =>
+      store
+        .events(f.team.id, 0, 1000)
+        .some(
+          (e) =>
+            e.type === "work.resource_wait" &&
+            e.workId === work.id &&
+            e.data.reason === "cpu",
+        ),
+    );
+    assert.equal(store.get<Work>("works", f.team.id, work.id).status, "queued");
+    const noticeCount = () =>
+      store.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM messages WHERE conversation_id=? AND role='assistant' AND (client_request_id GLOB 'runtime:resource-*' OR client_request_id GLOB 'runtime:cpu-*')",
+        )
+        .get(f.chat.id)?.n;
+    assert.equal(noticeCount(), 0);
+    f.advance();
+    f.sample = { ...ample(), availablePhysical: 1, availableCommit: 0 };
+    await r.refresh();
+    await until(
+      () => store.get<Work>("works", f.team.id, work.id).status === "submitted",
+    );
+    assert.equal(noticeCount(), 0);
+    assert(
+      store
+        .events(f.team.id, 0, 1000)
+        .some((e) => e.type === "attempt.allocated" && e.workId === work.id),
+    );
+    assert(
+      f.service.store
+        .getConversationDetail(f.team.id, f.chat.id)!
+        .messages.some((m) => m.content === "Complete"),
+    );
+    f.harness.action = async () => ({
+      status: "failed",
+      text: "",
+      error: "Synthetic execution failure",
     });
-    store.configure(
-      team.id,
-      { workspace, config, maxWorksPerRun: 20, timeoutSeconds: 60 },
-      0,
+    const failed = f.send("Failure remains inspectable").work;
+    await until(
+      () => store.get<Work>("works", f.team.id, failed.id).status === "failed",
     );
-    const message = teams.recordMessage(
-      team.id,
-      chat.id,
-      "请执行任务。",
-      randomUUID(),
-    )!.message;
-    const work = store.enqueueHost(team.id, chat.id, message.id),
-      notices = new ResourceNotifications(store);
-    await resources.refresh();
-    notices.sync(
-      [
-        {
-          work,
-          decision: {
-            ...resources.admission("codex", false),
-            allowed: false,
-            reason: "physical_memory",
-          },
-        },
-      ],
-      resources.summary(),
+    assert.match(
+      store.get<Work>("works", f.team.id, failed.id).error ?? "",
+      /Synthetic execution failure/,
     );
-    const attempt = store.start(work, config);
-    attempt.dispatch = { state: "preparing" };
-    store.save("attempts", attempt);
-    notices.sync([], resources.summary());
-    assert.equal(
-      teams
-        .getConversationDetail(team.id, chat.id)!
-        .messages.filter((m) => m.role === "assistant").length,
-      1,
-    );
-    store.setStatus(work, "failed", "Preflight failed");
-    attempt.status = "failed";
-    store.save("attempts", attempt);
-    notices.sync([], resources.summary());
-    const text = teams
-      .getConversationDetail(team.id, chat.id)!
-      .messages.at(-1)!.content;
-    assert.match(text, /启动失败/);
-    assert.doesNotMatch(text, /已继续执行/);
+    assert.equal(noticeCount(), 0);
   } finally {
-    await resources.close();
-    store.close();
-    teams.close();
-    rmSync(root, { recursive: true, force: true });
+    await f.close();
+  }
+});
+
+test("paged conversation and model history omit only retired scheduler receipts and preserve originals", async () => {
+  const f = fixture(),
+    store = f.service.runtime.store;
+  try {
+    const { work } = f.send("Inspect this history");
+    await until(
+      () => store.get<Work>("works", f.team.id, work.id).status === "submitted",
+    );
+    const run = store.get<Run>("runs", f.team.id, work.runId);
+    const list = () =>
+      f.service.store.getConversationDetail(f.team.id, f.chat.id)!.messages;
+    const previous = list().map((m) => m.id),
+      same = "资源等待已结束，此前排队的 1 项任务已继续执行。";
+    store.appendAssistant(run, same, "resource-wait:" + randomUUID());
+    const user = f.service.store.recordMessage(
+      f.team.id,
+      f.chat.id,
+      same,
+      "runtime:resource-wait:" + randomUUID(),
+    )!.message;
+    for (const kind of ["resource-resumed", "cpu-wait", "cpu-resumed"])
+      store.appendAssistant(run, same, kind + ":" + randomUUID());
+    store.appendAssistant(run, same, "normal-result:" + randomUUID());
+    const normal = list().at(-1)!;
+    assert.equal(normal.role, "assistant");
+    assert.equal(normal.content, same);
+    const expected = [...previous, user.id, normal.id];
+    assert.deepEqual(
+      list().map((m) => m.id),
+      expected,
+    );
+    const paged: string[] = [];
+    let before: string | undefined;
+    do {
+      const detail = f.service.store.getConversationDetail(
+        f.team.id,
+        f.chat.id,
+        { limit: 1, before },
+      )!;
+      paged.unshift(...detail.messages.map((m) => m.id));
+      before = detail.historyBefore;
+    } while (before);
+    assert.deepEqual(paged, expected);
+    const history = f.service.runtime.hostContext.materials.messages(run, {
+      limit: 100,
+    });
+    assert.equal(history.total, expected.length);
+    assert.deepEqual(history.items.map((m) => m.id).reverse(), expected);
+    assert.equal(
+      store.db
+        .prepare("SELECT count(*) AS n FROM messages WHERE conversation_id=?")
+        .get(f.chat.id)?.n,
+      expected.length + 4,
+    );
+  } finally {
+    await f.close();
   }
 });

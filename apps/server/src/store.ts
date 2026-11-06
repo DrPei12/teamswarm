@@ -1,3 +1,4 @@
+import { conversationMessageSql } from "./runtime/resource-notifications.js";
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -424,13 +425,13 @@ export class TeamStore {
       const cursor = page.before ? this.one('SELECT created_at, rowid AS seq FROM messages WHERE id=? AND conversation_id=?', page.before, conversationId) : undefined;
       if (page.before && !cursor) return undefined;
       const rows = cursor
-        ? this.all('SELECT * FROM messages WHERE conversation_id=? AND (created_at < ? OR (created_at=? AND rowid < ?)) ORDER BY created_at DESC, rowid DESC LIMIT ?', conversationId, String(cursor.created_at), String(cursor.created_at), Number(cursor.seq), limit + 1)
-        : this.all('SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at DESC, rowid DESC LIMIT ?', conversationId, limit + 1);
+        ? this.all(`SELECT * FROM messages WHERE conversation_id=? AND ${conversationMessageSql} AND (created_at < ? OR (created_at=? AND rowid < ?)) ORDER BY created_at DESC, rowid DESC LIMIT ?`, conversationId, String(cursor.created_at), String(cursor.created_at), Number(cursor.seq), limit + 1)
+        : this.all(`SELECT * FROM messages WHERE conversation_id=? AND ${conversationMessageSql} ORDER BY created_at DESC, rowid DESC LIMIT ?`, conversationId, limit + 1);
       const messages = rows.slice(0, limit).reverse().map(mapMessage);
       return { conversation: mapConversation(conversation), messages, ...(rows.length > limit ? { historyBefore: messages[0].id } : {}) };
     }
     const messages = this.all(
-      'SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, rowid ASC',
+      `SELECT * FROM messages WHERE conversation_id = ? AND ${conversationMessageSql} ORDER BY created_at ASC, rowid ASC`,
       conversationId,
     ).map(mapMessage);
     return { conversation: mapConversation(conversation), messages };

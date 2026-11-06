@@ -134,7 +134,6 @@ const toolLabels: Record<string, string> = {
   team_save_insight: "Preserve an idea",
   team_state: "Read team progress",
   team_device_resources: "Read device resources",
-  team_set_device_reserve: "Set device memory reserve",
   team_submit_result: "Submit work result",
   team_read_artifact: "Read submitted file",
   team_accept_work: "Record independent review",

@@ -93,13 +93,9 @@ Open **Results and reasoning**, open **Current results**, expand a file and use 
 
 ## Device resources and queued tasks
 
-The Host receives device memory, CPU, process usage, active work and resource settings when planning work. The runtime recalculates admission before each start. Team and service concurrency follow available resources and measured execution costs.
+The runtime measures available memory, Windows commit, CPU load and process usage. Memory figures help the Host inspect device usage. The scheduler uses CPU measurements and pending starts to decide when to dispatch more native work. A queued task can start when CPU capacity becomes available. Queue transitions are recorded as runtime events. Actual execution failures appear in the task status.
 
-Ask in the conversation to “reserve 8 GiB for other apps” or “restore automatic reservation.” Settings persist on this device and apply across all Teams in the service. Windows checks physical memory and commit headroom separately, alongside a CPU budget. Per-harness estimates adapt to measured execution, and starting tasks reserve their expected cost before the next sample.
-
-When resources delay tasks, the conversation shows the reason, affected tasks and default action. Running work continues. Users can change the reserve or task plan; without new instructions, tasks stay queued and resume when resources recover. A follow-up notice confirms actual execution. Notices are grouped during one continuous wait, with queue and notification state preserved across service restarts. One Host control turn remains available within actual device headroom so users can reduce an oversized reserve.
-
-Windows provides process-level sampling and owned process-group totals. Other systems currently use device memory and CPU samples with conservative startup estimates; process-level cost learning requires a sampler for that platform.
+Windows provides process-level sampling and owned process-group totals. Other platforms use the measurements supported by their sampler.
 
 <a id="harnesses-and-models"></a>
 ## Harnesses and models

@@ -12,8 +12,7 @@ import { prepareExecutionEnvironment } from "./harness/execution-environment.js"
 import { badRequest, conflict, notFound, ServiceError } from "../errors.js";
 import { TeamStore } from "../store.js";
 import { CodexHarness } from "./harness/codex.js";
-import { RuntimeResources, type Admission, type ResourceSampling } from "./resources.js";
-import { ResourceNotifications } from "./resource-notifications.js";
+import { RuntimeResources, type ResourceSampling } from "./resources.js";
 import { MemberWorkspaces } from "./member-workspaces.js";
 import { NativePermissions } from "./native-permissions.js";
 import { validateNativePermissions } from "./harness/permissions.js";
@@ -90,7 +89,6 @@ export class TeamRuntime {
   readonly workspaces: MemberWorkspaces;
   readonly nativePermissions: NativePermissions;
   readonly memberPermissions: MemberPermissions;
-  private readonly resourceNotifications: ResourceNotifications;
   private resourceWaiting = new Set<string>();
   private active = new Map<
     string,
@@ -123,7 +121,6 @@ export class TeamRuntime {
     this.memberPermissions = new MemberPermissions(this.store, this.catalog, this.harnesses, config => this.validateConfig(config));
     this.resources = new RuntimeResources(this.store, this.harnesses, () => this.requestPump(), sampling.sample, sampling.availablePhysical, sampling.now);
     this.hostContext = new HostContext(this.store, this.history, this.catalog, () => this.resources.summary());
-    this.resourceNotifications = new ResourceNotifications(this.store);
     this.unsubscribeChanges = this.store.changes.subscribe(() => {
       if (this.store.changes.pending().length) this.requestPump();
     });
@@ -617,7 +614,7 @@ export class TeamRuntime {
             Number(b.title === "Host") - Number(a.title === "Host") ||
             a.updatedAt.localeCompare(b.updatedAt),
         );
-      const resourceWaits: {work: Work; decision: Admission}[] = [];
+      const cpuWaits = new Set<string>();
       for (const work of all) {
         if (work.status === "stopping") {
           void this.interrupt(work);
@@ -717,7 +714,7 @@ export class TeamRuntime {
         const hostControl = member.kind === "host" && !["host-followup","collaboration"].includes(work.kind ?? "");
         const admission = this.resources.admission(resolved.config.harness, hostControl);
         if (!admission.allowed) {
-          resourceWaits.push({work,decision:admission});
+          cpuWaits.add(work.id);
           if (!this.resourceWaiting.has(work.id)) {
             this.resourceWaiting.add(work.id);
             this.store.event(work.teamId, "work.resource_wait", { reason: admission.reason, harness: resolved.config.harness }, work);
@@ -758,9 +755,8 @@ export class TeamRuntime {
             this.requestPump();
           });
       }
-      this.resourceWaiting = new Set(resourceWaits.map(item=>item.work.id));
-      this.resources.setWaiting(resourceWaits.length > 0);
-      this.resourceNotifications.sync(resourceWaits,this.resources.summary());
+      this.resourceWaiting = cpuWaits;
+      this.resources.setWaiting(cpuWaits.size > 0);
     } catch (error) {
       this.schedulerFault(error);
     } finally {
@@ -2115,15 +2111,6 @@ export class TeamRuntime {
         return this.memberPermissions.has(teamId,input.requestId)
           ? this.memberPermissions.answerFromHost(work,run,input.requestId,input.decision === "allow",input)
           : this.nativePermissions.answer(run, input.requestId, input.decision, input.sourceMessageId, input.authorizationQuote);
-      }
-      if (name === "team_set_device_reserve") {
-        this.history.assertCurrent(work, attemptId);
-        const source = this.store.db.prepare("SELECT id,content FROM messages WHERE conversation_id=? AND role='user' ORDER BY rowid DESC LIMIT 1").get(run.conversationId);
-        if (work.kind === "host-followup" || work.kind === "collaboration" || !source ||
-            source.id !== input.sourceMessageId || String(source.content).trim() !== input.authorizationQuote.trim())
-          throw conflict("user_request_required", "Use the latest user message in this Host conversation to change the device reserve.");
-        const {expectedVersion,reserveMemoryMiB,cpuTargetPercent} = input;
-        return this.resources.configure({expectedVersion,reserveMemoryMiB,cpuTargetPercent}, {teamId,messageId:input.sourceMessageId});
       }
       if (name === "team_directory")
         return this.catalog.list(
