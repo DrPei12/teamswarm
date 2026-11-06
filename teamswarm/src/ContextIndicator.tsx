@@ -8,7 +8,12 @@ function tokens(value: number, locale: string) {
   const scale = value >= 1_000_000 ? 1_000_000 : value >= 1_000 ? 1_000 : 1;
   return (
     (value / scale).toLocaleString(locale, {
-      maximumFractionDigits: scale > 1 && value / scale < 10 ? 1 : 0,
+      maximumFractionDigits:
+        scale === 1_000_000 && value / scale < 10
+          ? 2
+          : scale > 1 && value / scale < 10
+            ? 1
+            : 0,
     }) + (scale === 1_000_000 ? "M" : scale === 1_000 ? "k" : "")
   );
 }
@@ -43,16 +48,18 @@ export function ContextIndicator({ usage }: { usage?: ContextWindowUsage }) {
   const percent = fraction === null ? null : Math.floor(fraction * 100);
   const approximate = usage?.estimated || usage?.limitSource === "estimate";
   const summary =
-    percent !== null
-      ? t(
-          approximate
-            ? "About {used}% used ({remaining}% left)"
-            : "{used}% used ({remaining}% left)",
-          { used: percent, remaining: 100 - percent },
-        )
-      : hasUsed
-        ? t("Window size unavailable")
-        : t("No usage for this model yet");
+    fraction !== null && fraction > 0 && percent === 0
+      ? t("Less than 1% used (over 99% left)")
+      : percent !== null
+        ? t(
+            approximate
+              ? "About {used}% used ({remaining}% left)"
+              : "{used}% used ({remaining}% left)",
+            { used: percent, remaining: 100 - percent },
+          )
+        : hasUsed
+          ? t("Window size unavailable")
+          : t("No usage for this model yet");
   const detail =
     hasUsed && hasLimit
       ? t("{used} of {total} tokens used", {
@@ -65,11 +72,16 @@ export function ContextIndicator({ usage }: { usage?: ContextWindowUsage }) {
           ? t("{used} tokens used", { used: tokens(used, locale) })
           : t("Usage appears when the Harness reports it.");
   const source =
-    usage?.limitSource === "estimate"
-      ? t("Estimated window")
-      : usage?.limitSource === "configured"
-        ? t("Configured window")
-        : null;
+    usage?.rawLimit && hasLimit && usage.rawLimit > limit
+      ? t("Nominal {raw} · reserved {reserve}", {
+          raw: tokens(usage.rawLimit, locale),
+          reserve: tokens(usage.rawLimit - limit, locale),
+        })
+      : usage?.limitSource === "estimate"
+        ? t("Estimated window")
+        : usage?.limitSource === "configured"
+          ? t("Configured window")
+          : null;
   return (
     <Tooltip.Root
       delayDuration={160}
@@ -136,6 +148,13 @@ export function ContextIndicator({ usage }: { usage?: ContextWindowUsage }) {
           <strong>{summary}</strong>
           <span>{detail}</span>
           {source && <small>{source}</small>}
+          {usage?.nextLimit != null && (
+            <small>
+              {t("Next turn: {count} tokens available", {
+                count: tokens(usage.nextLimit, locale),
+              })}
+            </small>
+          )}
         </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip.Root>

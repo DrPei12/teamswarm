@@ -318,3 +318,10 @@
     gap: 2px;
   }
 }
+
+.context-preset-field small {
+  font-size: 0.88rem;
+  line-height: 1.45;
+  font-weight: 400;
+  color: var(--secondary);
+}

@@ -1,3 +1,5 @@
+import {windowBinding} from "../context-window.js";
+import { ClaudeTurnUsage } from "../claude-turn-usage.js";
 import { nativeAccess, deepseekPermissionOptions, grokPermissionOptions, piPermissionOptions, claudePermissionOptions, openCodePermissionOptions, openCodePermissions, withDefaultPermissions } from "../permission-options.js";
 import { conversationInput } from "./conversation-input.js";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -192,6 +194,7 @@ export class NativeHarness implements Harness {
     const binding = JSON.stringify({
       workspace: path.resolve(request.workspace),
       config: request.modelRoute?.sourceConfig ?? c,
+      ...(request.contextWindow ? {contextWindow:windowBinding(request.contextWindow)} : {}),
       ...(request.workspaceBoundary ? { workspaceBoundary: request.workspaceBoundary } : {}),
       ...(subscription ? { accountScope: subscriptionScope(this.id as "claude-code" | "grok") } : {}),
     });
@@ -215,6 +218,7 @@ export class NativeHarness implements Harness {
     let args = command === process.execPath ? [entry] : [];
     let stdin = "";
     const spec = {
+      contextWindow: request.contextWindow,
       entry,
       home,
       workspace: request.workspace,
@@ -248,6 +252,11 @@ export class NativeHarness implements Harness {
           configPath,
         ];
       } else if (this.id === "claude-code") {
+        if (request.contextWindow?.overrideNative) {
+          env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(request.contextWindow.rawTokens);
+          if (request.contextWindow.usableTokens >= 100000)
+            env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(Math.min(1000000,request.contextWindow.usableTokens));
+        }
         env.CLAUDE_CONFIG_DIR = subscription ? accountHome("claude-code") : home;
         if (!subscription) {
           env.ANTHROPIC_API_KEY = env[c.credentialEnv!];
@@ -313,6 +322,7 @@ export class NativeHarness implements Harness {
         env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           share: "disabled",
+          ...(request.contextWindow?.overrideNative ? {compaction:{auto:true,reserved:request.contextWindow.rawTokens-request.contextWindow.usableTokens}} : {}),
           model: `teamswarm/${c.model}`,
           default_agent: "teamswarm",
           autoupdate: false,
@@ -336,7 +346,7 @@ export class NativeHarness implements Harness {
               models: {
                 [c.model!]: {
                   name: c.model,
-                  limit: { context: c.contextWindowTokens ?? 131072, output: c.maxOutputTokens ?? 8192 },
+                  limit: { context: request.contextWindow?.rawTokens ?? c.contextWindowTokens ?? 131072, output: c.maxOutputTokens ?? 8192 },
                 },
               },
             },
@@ -363,6 +373,10 @@ export class NativeHarness implements Harness {
         env.DSH_MAX_TOKENS_AS_SUCCESS = "false";
         // JSON is a YAML subset. No raw credential is written into the native patch.
         const patch = [
+          ...(request.contextWindow?.overrideNative ? [{id:"compaction-basic",config:{
+            thresholdRatio:request.contextWindow.effectivePercent/100,
+            headroomTokens:Math.min(65536,Math.floor(request.contextWindow.rawTokens/2))
+          }}] : []),
           { id: "approval", config: { policy: c.permissions?.harness === "deepseek-harness" ? policyFor(c, "deepseek-harness")!.approval : "never" } },
           {
             id: "llm-deepseek",
@@ -371,7 +385,7 @@ export class NativeHarness implements Harness {
               apiKeyEnv: "DEEPSEEK_API_KEY",
               thinking: "disabled",
               maxTokens: 8192,
-              models: [{ id: c.model, contextWindow: DEEPSEEK_NATIVE_WINDOW, maxTokens: 8192 }],
+              models: [{ id: c.model, contextWindow: request.contextWindow?.rawTokens ?? DEEPSEEK_NATIVE_WINDOW, maxTokens: 8192 }],
               retryPolicy: { mode: "normal", maxRetries: 0 },
             },
           },
@@ -518,6 +532,7 @@ export class NativeHarness implements Harness {
         const observation = usageTotal.observe(u, replace);
         if (observation) emit("usage", observation);
       };
+      const claudeUsage = new ClaudeTurnUsage();
       const context = (u: any) => {
         const observation = contextObservation(this.id, u);
         if (observation) emit("context.usage", { ...observation });
@@ -588,13 +603,14 @@ export class NativeHarness implements Harness {
                   response: decision === "allow" && !permissionAbort.signal.aborted ? { behavior: "allow", updatedInput: r.input } : { behavior: "deny", message: "Permission was denied or the task ended." } } }) + "\n");
               })();
             }
+            const perRequest = claudeUsage.observe(event,c.model);
+            if (perRequest) emit("context.usage", { ...perRequest });
             if (event.type === "system" && event.subtype === "compact_boundary") emit("context.compacted", {});
             if (event.type === "system" && event.subtype === "init") {
               nativeSession = event.session_id;
               emit("model.observed", { model: event.model });
             }
             if (event.type === "assistant") {
-              context(event.message?.usage ?? {});
               text += (event.message?.content ?? [])
                 .filter((b: any) => b.type === "text")
                 .map((b: any) => b.text)
@@ -677,7 +693,9 @@ export class NativeHarness implements Harness {
                   .map((b: any) => b.text)
                   .join("");
                 usage(fact.data?.usage);
-                context(fact.data?.usage ?? {});
+                const stepUsage=contextObservation(this.id,fact.data?.usage??{});
+                if (stepUsage && ((stepUsage.inputTokens??0)>0 || (stepUsage.outputTokens??0)>0))
+                  emit("context.usage",{...stepUsage});
               }
               if (fact.type === "request/context") {
                 context({contextWindow: fact.data?.contextWindow});

@@ -91,6 +91,10 @@ Open **Results and reasoning**, open **Current results**, expand a file and use 
 
 **Removed members** in **Collaboration** retains their conversations and work as read-only history. Removed members cannot receive new messages. If a message fails because its execution configuration changed, correct the configuration and retry the original message; the retry preserves its message and work identity.
 
+## Conversation context
+
+Settings → General → Context window offers Automatic, 128K, 256K, 512K and 1M. The selection applies to new Host and member turns in this workspace. The runtime limits the requested window by available model metadata and reserves space for compaction. The context ring shows the usable budget and the latest request's token count. When a previous turn used a different window, its figures and the next turn's budget are shown separately.
+
 ## Device resources and queued tasks
 
 The runtime measures available memory, Windows commit, CPU load and process usage. Memory figures help the Host inspect device usage. The scheduler uses CPU measurements and pending starts to decide when to dispatch more native work. A queued task can start when CPU capacity becomes available. Queue transitions are recorded as runtime events. Actual execution failures appear in the task status.

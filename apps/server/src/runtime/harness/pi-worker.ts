@@ -44,7 +44,7 @@ try {
             }
           : {}),
         input: ["text"],
-        contextWindow: spec.config.contextWindowTokens ?? 131072,
+        contextWindow: spec.contextWindow?.rawTokens ?? spec.config.contextWindowTokens ?? 131072,
         maxTokens: spec.config.maxOutputTokens ?? 8192,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
@@ -119,7 +119,7 @@ try {
     resourceLoader,
     sessionManager: manager,
     settingsManager: pi.SettingsManager.inMemory({
-      compaction: { enabled: true },
+      compaction: { enabled: true, ...(spec.contextWindow?.overrideNative ? {reserveTokens:spec.contextWindow.rawTokens-spec.contextWindow.usableTokens}: {}) },
       retry: { enabled: false },
     }),
     tools: [

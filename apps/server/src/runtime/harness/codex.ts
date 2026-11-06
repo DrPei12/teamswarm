@@ -694,6 +694,10 @@ export class CodexHarness implements Harness {
       "features.memories": false,
       "features.plugins": false,
       "features.apps": false,
+      ...(request.contextWindow?.overrideNative ? {
+        model_context_window: request.contextWindow.rawTokens,
+        model_auto_compact_token_limit: request.contextWindow.usableTokens,
+      } : {}),
     };
     const verificationDirectory = request.verificationDirectory;
     let environment = request.executionEnvironment;

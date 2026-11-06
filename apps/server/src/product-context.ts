@@ -1,3 +1,6 @@
+import type { ContextWindowPlan } from "@team/contracts/context-window";
+import { effectiveWindow } from "./runtime/context-window.js";
+import { previousClaudeUsage } from "./runtime/claude-turn-usage.js";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { ContextWindowUsage } from "@team/contracts/product";
@@ -25,6 +28,7 @@ export function contextWindowUsage(
   db: DatabaseSync,
   config?: ExecutionConfig,
   attempt?: Attempt,
+  next?: ContextWindowPlan,
 ): ContextWindowUsage | undefined {
   if (!config) return undefined;
   const configured =
@@ -35,7 +39,18 @@ export function contextWindowUsage(
     limit: configured,
     ...(configured ? { limitSource: "configured" as const } : {}),
   };
-  if (!attempt || !isDeepStrictEqual(config, attempt.config)) return empty;
+  const upcoming = next
+    ? {
+        used: null,
+        limit: next.usableTokens,
+        rawLimit: next.rawTokens,
+        limitSource:
+          next.source === "estimate"
+            ? ("estimate" as const)
+            : ("configured" as const),
+      }
+    : empty;
+  if (!attempt || !isDeepStrictEqual(config, attempt.config)) return upcoming;
   // Extract counters in SQLite without copying a conversation's full saved prompt into the product snapshot.
   const frame = db
     .prepare(
@@ -45,6 +60,7 @@ export function contextWindowUsage(
     json_extract(data,'$.context.outputTokens') AS output,
     json_extract(data,'$.context.estimatedGrowthTokens') AS growth,
     json_extract(data,'$.sessionEstimatedTokens') AS estimate,
+    json_extract(data,'$.inputTokensEstimate') AS preparedEstimate,
     json_extract(data,'$.budget.windowTokens') AS plannedWindow,
     json_extract(data,'$.budget.windowSource') AS windowSource,
     json_extract(data,'$.compacted') AS compacted
@@ -64,6 +80,26 @@ export function contextWindowUsage(
     capacity(
       raw?.modelContextWindow ?? raw?.contextWindowTokens ?? raw?.contextWindow,
     );
+  if (
+    config.harness === "claude-code" &&
+    (used === null || used === 0 || (!limit && !attempt.contextWindow))
+  ) {
+    const recovered = previousClaudeUsage(
+      db,
+      attempt.teamId,
+      attempt.id,
+      config.model,
+    );
+    if (recovered?.inputTokens !== undefined && (used === null || used === 0)) {
+      used = recovered.inputTokens + (recovered.outputTokens ?? 0);
+      estimated = false;
+    } else if (
+      used === 0 &&
+      (Number(frame?.preparedEstimate) > 0 || raw?.cumulative === true)
+    )
+      used = null;
+    limit ??= capacity(recovered?.contextWindowTokens);
+  }
   if (used === null && !frame?.compacted) {
     used = reportedTotal(raw?.last as Record<string, unknown> | undefined);
     // Old DeepSeek adapters retained last-step native facts but published only cumulative usage.
@@ -87,16 +123,50 @@ export function contextWindowUsage(
     }
     if (used === null && raw?.cumulative !== true) used = reportedTotal(raw);
   }
-  if (used === null && count(frame?.estimate) !== null) {
-    used = Number(frame!.estimate);
+  const estimate =
+    Number(frame?.estimate) ||
+    (!frame?.compacted ? Number(frame?.preparedEstimate) : 0);
+  if (used === null && estimate > 0) {
+    used = estimate;
     estimated = true;
   }
+  const plan = attempt.contextWindow;
+  const addNext = (value: ContextWindowUsage): ContextWindowUsage =>
+    next &&
+    next.usableTokens !== value.limit &&
+    (!attempt.contextWindow ||
+      next.rawTokens !== attempt.contextWindow.rawTokens ||
+      next.usableTokens !== attempt.contextWindow.usableTokens)
+      ? { ...value, nextLimit: next.usableTokens }
+      : value;
+  if (plan)
+    return addNext({
+      used,
+      estimated,
+      limit: effectiveWindow(plan, limit, config.harness === "codex"),
+      rawLimit:
+        config.harness === "codex" &&
+        limit !== null &&
+        limit < plan.usableTokens
+          ? undefined
+          : config.harness === "codex"
+            ? plan.rawTokens
+            : Math.min(plan.rawTokens, limit ?? Infinity),
+      limitSource:
+        plan.source === "estimate" && !limit ? "estimate" : "configured",
+    });
   if (limit !== null)
-    return { used, limit, estimated, limitSource: "reported" };
+    return addNext({ used, limit, estimated, limitSource: "reported" });
   if (configured !== null)
-    return { used, limit: configured, estimated, limitSource: "configured" };
+    return addNext({
+      used,
+      limit: configured,
+      estimated,
+      limitSource: "configured",
+    });
+  if (used === null && next) return upcoming;
   const planned = capacity(frame?.plannedWindow);
-  return {
+  return addNext({
     used,
     limit: planned,
     estimated,
@@ -110,5 +180,5 @@ export function contextWindowUsage(
                 : "estimate",
         }
       : {}),
-  };
+  });
 }

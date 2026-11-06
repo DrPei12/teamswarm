@@ -1,3 +1,4 @@
+import type { ContextWindowPlan, ContextWindowPreset } from "./context-window";
 import type {
   RuntimeSettings,
   ExecutionConfig,
@@ -13,7 +14,7 @@ import type {
 export type { ProjectNode, ProjectBranch, ProjectDocument } from "./runtime";
 import type { ResourceSelection } from "./allocation";
 export type TeamExecution = {
-  host?: { config: ExecutionConfig; configurationVersion: number; runningConfig?: ExecutionConfig; permissionVersion: number; memberId: string; branchId: string; selection?: ResourceSelection | null; selectionCurrent?: boolean };
+  host?: { nextContextWindow?: ContextWindowPlan; config: ExecutionConfig; configurationVersion: number; runningConfig?: ExecutionConfig; permissionVersion: number; memberId: string; branchId: string; selection?: ResourceSelection | null; selectionCurrent?: boolean };
   settings: RuntimeSettings | null;
   works: Work[];
   allocationTaskIds?: string[];
@@ -218,6 +219,8 @@ export type ContextWindowUsage = {
   limit: number | null;
   estimated?: boolean;
   limitSource?: "reported" | "configured" | "estimate";
+  rawLimit?: number;
+  nextLimit?: number;
 };
 export type Team = {
   id: string;
@@ -250,6 +253,7 @@ export type Workspace = {
   version: 1;
   name: string;
   theme: "light" | "dark" | "system";
+  contextWindowPreset?: ContextWindowPreset;
   language: "en" | "zh-CN";
   teams: Team[];
   chats: Chat[];

@@ -1,3 +1,5 @@
+import {contextWindowPresetIds,type ContextWindowPreset} from "@team/contracts/context-window";
+import {memberContextWindow} from "./runtime/context-window.js";
 import { contextWindowUsage } from "./product-context.js";
 import { permissionCatalog, mergePermissionChoice } from "./runtime/permission-options.js";
 import { nativePermissions, validateNativePermissions } from "./runtime/harness/permissions.js";
@@ -52,6 +54,7 @@ import {
 } from "./member-conversation.js";
 
 type Preferences = {
+  contextWindowPreset?: ContextWindowPreset;
   name: string;
   theme: Workspace["theme"];
   language: Workspace["language"];
@@ -66,6 +69,7 @@ type Preferences = {
 };
 const freshPreferences = (): Preferences => ({
   name: "TeamSwarm",
+  contextWindowPreset: "auto",
   theme: "light",
   language: "en",
   teams: {},
@@ -292,6 +296,7 @@ export class ProductStore {
       name: p.name,
       theme: p.theme,
       language: p.language,
+      contextWindowPreset: p.contextWindowPreset ?? "auto",
       teams: [],
       chats: [],
       skills: p.skills,
@@ -360,8 +365,9 @@ export class ProductStore {
       const runningHostAttempt = attempts.find(a => a.memberId === hostMember?.id &&
         ["running", "stopping"].includes(a.status) &&
         state.runs.some(r => r.id === state.works.find(w => w.id === a.workId)?.runId && this.runtime.history.forRun(r).id === activeBranch));
+      const nextContextWindow=hostMember && hostConfig ? memberContextWindow(this.db,team.id,hostMember.id,hostConfig,p.contextWindowPreset??"auto") : undefined;
       if (hostMember && hostConfig) workspace.executions![team.id].host = {
-        config: hostConfig, permissionVersion: hostMember.permissionVersion ?? 1,
+        nextContextWindow, config: hostConfig, permissionVersion: hostMember.permissionVersion ?? 1,
         configurationVersion: hostAllocation?.allocationRevision ?? 1,
         runningConfig: runningHostAttempt?.config,
         memberId: hostMember.id, branchId: activeBranch,
@@ -374,7 +380,7 @@ export class ProductStore {
         w.kind !== "host-followup" && w.kind !== "collaboration").map(w => w.id));
       const contextAttempt = attempts.filter(a => a.memberId === hostId && dialogueWorks.has(a.workId)).at(-1);
       const contextConfig = contextAttempt && ["running", "stopping"].includes(contextAttempt.status) ? contextAttempt.config : hostConfig;
-      const context = contextWindowUsage(this.db, contextConfig, contextAttempt);
+      const context = contextWindowUsage(this.db, contextConfig, contextAttempt, nextContextWindow);
       workspace.teams.push({
         ...prefs,
         mainChatId,
@@ -1240,6 +1246,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
               name: z.string().min(1).max(80),
               theme: z.enum(["light", "dark", "system"]),
               language: z.enum(["en", "zh-CN"]).default("en"),
+              contextWindowPreset: z.enum(contextWindowPresetIds).optional(),
               teams: z
                 .array(
                   z
@@ -1349,6 +1356,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
           p.name = raw.name;
           p.theme = raw.theme;
           p.language = raw.language;
+          if(raw.contextWindowPreset) p.contextWindowPreset=raw.contextWindowPreset;
           p.drafts = raw.drafts;
           p.skills = raw.skills;
           p.plugins = raw.plugins;
@@ -1433,6 +1441,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
           name: z.string().trim().min(1).max(80).optional(),
           theme: z.enum(["light", "dark", "system"]).optional(),
           language: z.enum(["en", "zh-CN"]).optional(),
+          contextWindowPreset: z.enum(contextWindowPresetIds).optional(),
           drafts: z
             .record(z.string().max(200), draftInput.nullable())
             .optional(),
@@ -1494,6 +1503,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
         "name",
         "theme",
         "language",
+        "contextWindowPreset",
         "skills",
         "plugins",
         "readDeliveries",

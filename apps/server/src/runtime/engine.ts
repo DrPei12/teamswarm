@@ -1,3 +1,4 @@
+import { savedWindowPreset, memberContextWindow, windowBinding } from "./context-window.js";
 import { nativeAccess } from "./permission-options.js";
 import { ExecutionApprovals } from "./approvals.js";
 import { bindEvidence, evidenceFor, reviewRequirements, reviewEvidenceContext } from "./acceptance-evidence.js";
@@ -724,7 +725,7 @@ export class TeamRuntime {
         this.resourceWaiting.delete(work.id);
         this.records.bindOutputs(work);
         const attempt = this.store.transaction(() => {
-          const started = this.store.start(work, resolved.config);
+          const started = this.store.start(work, resolved.config, memberContextWindow(this.store.db,work.teamId,member.id,resolved.config,savedWindowPreset(this.store.db)));
           applyAttemptAllocation(this.store, started, resolved);
           this.store.event(
             work.teamId,
@@ -986,7 +987,7 @@ export class TeamRuntime {
             (t.name !== "team_review_evidence" || !!work.reviewOf || work.verification === "self-check")),
       );
       // A native session may only resume with the same actually exposed tools.
-      attempt.toolContractVersion = hash(JSON.stringify({ tools: executionTools, writePaths: writePaths ?? null, workspace, permissions: attempt.config.permissions ?? null, hostMode: member.kind === "host" ? hostMode(work.kind) : null, dialogueContract: 5 }));
+      attempt.toolContractVersion = hash(JSON.stringify({ tools: executionTools, writePaths: writePaths ?? null, workspace, permissions: attempt.config.permissions ?? null, hostMode: member.kind === "host" ? hostMode(work.kind) : null, dialogueContract: 5, contextWindow: windowBinding(attempt.contextWindow) }));
       attempt.nativeSessionScope = harness.sessionScope;
       this.store.save("attempts", attempt);
       let previous =
@@ -1075,6 +1076,7 @@ export class TeamRuntime {
       starting.dispatch = { state: harness.capabilities.dispatchTracking === true ? "preparing" : "dispatched" };
       this.store.save("attempts", starting);
       const result = await harness.execute({
+        contextWindow: attempt.contextWindow,
         workspace: this.store.workspace(work),
         isolatedWorkspace: work.workspaceMode === "isolated",
         executionRequirements: requirements,

@@ -1,3 +1,5 @@
+import {previousClaudeUsage} from "./claude-turn-usage.js";
+import {windowBinding} from "./context-window.js";
 import { hostMode } from "./host-communication.js";
 import { executionConfiguration } from "./execution-status.js";
 import { conflict, notFound } from "../errors.js";
@@ -255,6 +257,16 @@ export class HostContext {
       .get(teamId, previous.id);
     return row ? JSON.parse(String(row.data)) : undefined;
   }
+  private observation(frame:any,attempt?:Attempt): ContextObservation|undefined {
+    const value = frame?.context as ContextObservation|undefined;
+    if (attempt?.config.harness==="claude-code" && frame && !frame.compacted &&
+        value?.inputTokens===0 && !value.outputTokens) {
+      const last=previousClaudeUsage(this.store.db,attempt.teamId,attempt.id,attempt.config.model);
+      if(last?.inputTokens) return {...value,...last};
+      return {contextWindowTokens:last?.contextWindowTokens??value.contextWindowTokens};
+    }
+    return value;
+  }
   canResume(
     teamId: string,
     branchId: string,
@@ -269,7 +281,8 @@ export class HostContext {
     )
       return false;
     const budget = planContext(previous.config, {
-      observation: frame.context,
+      windowPlan: previous.contextWindow,
+      observation: this.observation(frame,previous),
       estimatedSessionTokens: frame.sessionEstimatedTokens,
       nativeCompaction:
         this.catalog.harnesses.get(previous.config.harness)?.capabilities
@@ -311,12 +324,13 @@ export class HostContext {
       );
     const snapshot =
       prior ?? (snapshotRow ? JSON.parse(String(snapshotRow.data)) : undefined);
-    const configIdentity = hash(JSON.stringify(attempt.config));
-    const context = (prior?.context ??
+    const configIdentity = hash(JSON.stringify(attempt.contextWindow ? [attempt.config,windowBinding(attempt.contextWindow)] : attempt.config));
+    const context = (this.observation(prior,previous) ??
       (snapshot?.configIdentity === configIdentity
         ? { contextWindowTokens: snapshot.context?.contextWindowTokens }
         : undefined)) as ContextObservation | undefined;
     const budgetOptions = {
+      windowPlan: attempt.contextWindow,
       observation: context,
       estimatedSessionTokens: prior?.sessionEstimatedTokens,
       overheadTokens,
@@ -364,7 +378,7 @@ export class HostContext {
         harnessRef: `harness:${attempt.config.harness}`, permissions: attempt.config.permissions ?? null,
         workspace: this.store.workspace(work) },
       execution: {
-        currentExecution: { ...executionConfiguration(attempt.config), attemptId: attempt.id, modelRequest: attempt.modelRequest ?? null },
+        currentExecution: { ...executionConfiguration(attempt.config), ...(attempt.contextWindow ? {contextWindow:attempt.contextWindow} : {}), attemptId: attempt.id, modelRequest: attempt.modelRequest ?? null },
         nextExecution: { ...executionConfiguration(nextExecution.config), available: nextExecution.selectionCurrent || nextExecution.selectionRetained },
       },
       work: work.selection ? { ...work, selection: this.catalog.selections.active(work.teamId, "work", work.id, work) ?? undefined } : work,
@@ -725,7 +739,7 @@ export class HostContext {
         (prior?.sessionInputBytes ?? 0) + Buffer.byteLength(text),
       sessionToolBytes: prior?.sessionToolBytes ?? 0,
       sessionEstimatedTokens:
-        (prior?.sessionEstimatedTokens ?? 0) + estimateTokens(text),
+        (prior?.sessionEstimatedTokens ?? (attempt.contextWindow ? overheadTokens : 0)) + estimateTokens(text),
       budgetSettingsVersion: (this.store.settings(work.teamId) ?? run.settings)
         .version,
       inputBytes: Buffer.byteLength(text),
@@ -822,6 +836,7 @@ export class HostContext {
     }
     if (observation.compacted) {
       frame.compacted = true;
+      frame.usageObserved = false;
       frame.deliveredMaterials = {};
       frame.materialReads = {};
       frame.context = {

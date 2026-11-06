@@ -1,3 +1,4 @@
+import type { ContextWindowPreset } from "@team/contracts/context-window";
 import { harnessManifests } from "@team/contracts/harness-catalog";
 import {
   PreferencesOutbox,
@@ -962,6 +963,13 @@ class ProductClient {
     if (config.permissions !== undefined && harness === previous.harness)
       next = { ...next, permissions: config.permissions };
     return next;
+  }
+  async saveContextWindow(preset: ContextWindowPreset, name?: string) {
+    await this.command(
+      "/product/preferences",
+      { contextWindowPreset: preset, name },
+      "PATCH",
+    );
   }
   async resources(teamId: string) {
     return api<{ resources: ExecutionResource[] }>(

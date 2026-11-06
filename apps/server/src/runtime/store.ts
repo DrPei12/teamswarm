@@ -1,3 +1,4 @@
+import type { ContextWindowPlan } from "@team/contracts/context-window";
 import { nativeAccess } from "./permission-options.js";
 import { bindEvidence, evidenceFor, resolvedEvidence, reviewEvidenceContext } from "./acceptance-evidence.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -736,7 +737,7 @@ export class RuntimeStore {
     );
     return requirement;
   }
-  start(work: Work, config: ExecutionConfig): Attempt {
+  start(work: Work, config: ExecutionConfig, contextWindow?: ContextWindowPlan): Attempt {
     if (work.status !== "queued")
       throw conflict("invalid_state", "Only queued work can start.");
     const attempt: Attempt = {
@@ -745,6 +746,7 @@ export class RuntimeStore {
       workId: work.id,
       memberId: work.memberId,
       config,
+      ...(contextWindow ? {contextWindow} : {}),
       sessionId: null,
       turnId: null,
       dispatch: { state: "prepared" },

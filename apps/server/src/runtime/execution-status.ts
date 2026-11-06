@@ -25,6 +25,7 @@ export function attemptExecution(attempt: Attempt) {
       effectiveEffort: receipt.effectiveEffort ?? canonicalApiEffort(config.effortPolicy, receipt.effort),
       effortSource: receipt.effortSource ?? (receipt.effort ? "explicit" : "not_observed"),
     } : {}),
+    ...(attempt.contextWindow ? {contextWindow: attempt.contextWindow} : {}),
     source: "attempt" as const,
     attemptId: attempt.id, workId: attempt.workId, status: attempt.status,
     modelRequest: attempt.modelRequest ?? null,

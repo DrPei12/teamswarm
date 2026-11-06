@@ -1,3 +1,5 @@
+import {windowBinding} from "./context-window.js";
+import type {ContextWindowPlan} from "@team/contracts/context-window";
 import { apiEffortPolicy, canonicalApiEffort } from "@team/contracts/model-effort";
 import { harnessManifest } from "@team/contracts/harness-catalog";
 import {
@@ -105,6 +107,7 @@ function nativeConfig(
   };
 }
 type Route = {
+  contextWindow?:ContextWindowPlan;
   config: ExecutionConfig;
   token: string;
   controllers: Set<AbortController>;
@@ -112,6 +115,7 @@ type Route = {
   metadata: ModelMetadata;
   sessionId?: string;
   onRequest?: (receipt: ModelRequestReceipt) => void;
+  onUsage?: (data:{inputTokens:number;outputTokens:number})=>void;
 };
 function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -165,12 +169,13 @@ export class ModelGateway {
       );
     }));
   }
-  async lease(config: ExecutionConfig) {
+  async lease(config: ExecutionConfig, contextWindow?:ContextWindowPlan) {
     const base = await this.open(),
       id = randomUUID();
     if (this.closed) throw new Error("Model connection service is closing.");
     const route: Route = {
       config: structuredClone(config),
+      contextWindow,
       token: randomBytes(32).toString("base64url"),
       controllers: new Set(),
       active: 0,
@@ -180,6 +185,7 @@ export class ModelGateway {
     return {
       config: nativeConfig(config, `${base}/${id}/v1`),
       token: route.token,
+      observeUsage: (observer: NonNullable<Route["onUsage"]>) => {route.onUsage=observer;},
       observe: (observer: (receipt: ModelRequestReceipt) => void) => { route.onRequest = observer; },
       acquire: () => {
         if (this.closed) throw new Error("Model connection service is closing.");
@@ -198,6 +204,7 @@ export class ModelGateway {
       },
       release: () => {
         route.onRequest = undefined;
+        route.onUsage = undefined;
         this.routes.delete(id);
         for (const controller of route.controllers) controller.abort();
       },
@@ -440,7 +447,7 @@ export class ModelGateway {
         reasoning: !!c.effort || source === "responses",
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: c.contextWindowTokens ?? 128000,
+        contextWindow: route.contextWindow?.rawTokens ?? c.contextWindowTokens ?? 128000,
         maxTokens: c.maxOutputTokens ?? 32768,
       };
       const decoded = decodeRequest(wire, body, model);
@@ -601,6 +608,8 @@ export class ModelGateway {
         if (event.type === "done") final = event.message;
       }
       if (!final) throw new Error("The model stream ended before completion.");
+      const inputTokens=final.usage.input+final.usage.cacheRead+final.usage.cacheWrite;
+      if(Number.isFinite(inputTokens)&&inputTokens>0)route.onUsage?.({inputTokens,outputTokens:final.usage.output});
       if (!body.stream) {
         res.writeHead(200, {
           "content-type": "application/json",
@@ -684,12 +693,13 @@ export class ModelGateway {
             if (!needsModelRoute(request.config))
               return target.execute(request);
             const reusable = target.id === "codex" && !request.verificationDirectory;
-            const binding = JSON.stringify([request.workspace, request.config]);
+            const binding = JSON.stringify([request.workspace, request.config, windowBinding(request.contextWindow)]);
             const previous = reusable && request.sessionId ? sessions.get(request.sessionId) : undefined;
             if (previous && previous.binding !== binding)
               throw new Error("Session configuration or workspace changed.");
-            const lease = previous?.lease ?? await gateway.lease(request.config);
+            const lease = previous?.lease ?? await gateway.lease(request.config,request.contextWindow);
             if (previous) lease.acquire();
+            lease.observeUsage(data => request.onEvent({type:"context.usage",data}));
             lease.observe(receipt => request.onEvent({ type: "model.request", data: { ...receipt } }));
             let resourceId: unknown;
             if (request.sessionId)

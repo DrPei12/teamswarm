@@ -103,7 +103,7 @@ test("Codex idle reclamation closes the owned process and resumes the same nativ
   writeFileSync(entry,`const fs=require('node:fs');const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(r)+'\\n');if(r.id===undefined)return;const result=r.method==='thread/start'||r.method==='thread/resume'?{thread:{id:'kept-session'},sandbox:{type:'readOnly'}}:r.method==='thread/read'?{thread:{turns:[]}}:r.method==='config/read'?{config:{mcp_servers:{unused:{}}}}:r.method==='turn/start'?{turn:{id:'turn'}}:{};send({id:r.id,result});if(r.method==='turn/start')setTimeout(()=>send({method:'turn/completed',params:{threadId:'kept-session',turn:{id:'turn',status:'completed'}}}),30);});`);
   const prior=process.env.TEAM_CODEX_BIN;process.env.TEAM_CODEX_BIN=entry;
   const harness=new CodexHarness(),events:any[]=[];
-  const request:HarnessRequest={workspace:root,config:{harness:"codex",model:"fixture",provider:null,baseUrl:null,credentialEnv:null,effort:null,access:"read-only"},instructions:"Read",input:"Work",tools:[],onSession:()=>{},onTurn:()=>{},onEvent:e=>events.push(e),onTool:async()=>({})};
+  const request:HarnessRequest={workspace:root,config:{harness:"codex",model:"fixture",provider:null,baseUrl:null,credentialEnv:null,effort:null,access:"read-only"},contextWindow:{preset:"1m",rawTokens:872000,usableTokens:828400,modelMaxTokens:872000,effectivePercent:95,source:"model",overrideNative:true},instructions:"Read",input:"Work",tools:[],onSession:()=>{},onTurn:()=>{},onEvent:e=>events.push(e),onTool:async()=>({})};
   try {
     assert.equal((await harness.execute(request)).status,"completed");
     const first=harness.resources()[0];assert.ok(first.pid);
@@ -115,6 +115,8 @@ test("Codex idle reclamation closes the owned process and resumes the same nativ
     const requests=readFileSync(calls,"utf8").trim().split("\n").map(JSON.parse as any);
     const resumed=requests.find(r=>r.method==="thread/resume");assert.equal(resumed.params.threadId,"kept-session");
     for(const r of requests.filter(r=>["thread/start","thread/resume"].includes(r.method))) {
+      assert.equal(r.params.config.model_context_window,872000);
+      assert.equal(r.params.config.model_auto_compact_token_limit,828400);
       assert.equal(r.params.config["features.plugins"],false);assert.equal(r.params.config["mcp_servers.unused.enabled"],false);
     }
   } finally {await harness.close();if(prior===undefined)delete process.env.TEAM_CODEX_BIN;else process.env.TEAM_CODEX_BIN=prior;rmSync(root,{recursive:true,force:true});}

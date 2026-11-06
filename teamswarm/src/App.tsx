@@ -2192,6 +2192,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
       {screen === "settings" && (
         <WorkspaceSettings
           workspace={workspace}
+          nextWindow={workspace.executions?.[team.id]?.host?.nextContextWindow}
           appearance={appearance}
           close={() => setScreen(null)}
           update={update}

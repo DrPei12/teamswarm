@@ -1,3 +1,9 @@
+import {
+  contextWindowPresetIds,
+  type ContextWindowPlan,
+  type ContextWindowPreset,
+} from "@team/contracts/context-window";
+import { product } from "./service";
 import { useRef, useState } from "react";
 import { Popover, Tabs } from "radix-ui";
 import {
@@ -237,17 +243,26 @@ function FontPicker({
 
 export function WorkspaceSettings({
   workspace,
+  nextWindow,
   appearance,
   close,
   update,
 }: {
   workspace: Workspace;
+  nextWindow?: ContextWindowPlan;
   appearance: ReturnType<typeof useAppearance>;
   close: () => void;
   update: (change: (old: Workspace) => Workspace) => boolean;
 }) {
   const { t } = useI18n();
   const { value, save, error } = appearance;
+  const [windowChoice, setWindowChoice] = useState<ContextWindowPreset | null>(
+    null,
+  );
+  const savedWindow = workspace.contextWindowPreset ?? "auto";
+  const changedWindow = windowChoice !== null && windowChoice !== savedWindow;
+  const [savingWindow, setSavingWindow] = useState(false),
+    [windowError, setWindowError] = useState("");
   const [families, setFamilies] = useState<string[] | null>(null),
     [scanning, setScanning] = useState(false);
   const scan = async () => {
@@ -279,7 +294,7 @@ export function WorkspaceSettings({
     <Modal
       open
       onOpenChange={(next) => {
-        if (!next) close();
+        if (!next && !savingWindow) close();
       }}
       title={t("Settings")}
       className="workspace-settings"
@@ -291,13 +306,36 @@ export function WorkspaceSettings({
         </Tabs.List>
         <Tabs.Content value="general" forceMount className="settings-pane">
           <form
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
               e.preventDefault();
+              if (savingWindow) return;
               const name = String(
                 new FormData(e.currentTarget).get("name") || "",
               ).trim();
-              if (update((old) => ({ ...old, name: name || old.name })))
+              if (!changedWindow) {
+                if (
+                  !name ||
+                  name === workspace.name ||
+                  update((old) => ({ ...old, name }))
+                )
+                  close();
+                return;
+              }
+              setSavingWindow(true);
+              setWindowError("");
+              try {
+                await product.saveContextWindow(
+                  windowChoice,
+                  name && name !== workspace.name ? name : undefined,
+                );
                 close();
+              } catch {
+                setWindowError(
+                  t("Could not save the context window. Try again."),
+                );
+              } finally {
+                setSavingWindow(false);
+              }
             }}
           >
             <div className="form-body">
@@ -323,16 +361,63 @@ export function WorkspaceSettings({
                   <option value="zh-CN">简体中文</option>
                 </FieldSelect>
               </label>
+              <label className="context-preset-field">
+                {t("Context window")}
+                <FieldSelect
+                  name="context-window-preset"
+                  aria-label={t("Context window preset")}
+                  value={windowChoice ?? savedWindow}
+                  disabled={savingWindow}
+                  onValueChange={(id) => {
+                    setWindowChoice(id as ContextWindowPreset);
+                    setWindowError("");
+                  }}
+                >
+                  {contextWindowPresetIds.map((id) => (
+                    <option key={id} value={id}>
+                      {id === "auto"
+                        ? t("Automatic (by model)")
+                        : id.toUpperCase()}
+                    </option>
+                  ))}
+                </FieldSelect>
+                <small>
+                  {t(
+                    "Applies to new Host and member turns. Space is reserved for context compaction.",
+                  )}
+                </small>
+                {nextWindow && !changedWindow && (
+                  <small>
+                    {t(
+                      nextWindow.source === "estimate"
+                        ? "Estimated for Host: {raw} tokens before reserve, {usable} available."
+                        : "Host: {raw} tokens before reserve, {usable} available.",
+                      {
+                        raw: nextWindow.rawTokens.toLocaleString(),
+                        usable: nextWindow.usableTokens.toLocaleString(),
+                      },
+                    )}
+                  </small>
+                )}
+              </label>
+              {windowError && (
+                <p className="form-error" role="alert">
+                  {windowError}
+                </p>
+              )}
             </div>
             <div className="form-footer">
               <button
                 type="button"
                 className="secondary-button"
+                disabled={savingWindow}
                 onClick={close}
               >
                 {t("Cancel")}
               </button>
-              <button className="primary-button">{t("Save changes")}</button>
+              <button className="primary-button" disabled={savingWindow}>
+                {t("Save changes")}
+              </button>
             </div>
           </form>
         </Tabs.Content>

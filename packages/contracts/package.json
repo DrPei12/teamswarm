@@ -24,6 +24,10 @@
     "./model-effort": {
       "types": "./src/model-effort.d.ts",
       "default": "./src/model-effort.js"
+    },
+    "./context-window": {
+      "types": "./src/context-window.d.ts",
+      "default": "./src/context-window.js"
     }
   },
   "license": "Apache-2.0"

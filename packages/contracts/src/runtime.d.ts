@@ -1,3 +1,4 @@
+import type { ContextWindowPlan } from "./context-window";
 import type { AttemptExecutionSnapshot, ResourceSelection } from "./allocation.js";
 
 export type Access = "read-only" | "workspace-write";
@@ -288,6 +289,7 @@ export interface ModelRequestReceipt {
   httpStatus?: number;
 }
 export interface Attempt {
+  contextWindow?: ContextWindowPlan;
   modelRequest?: ModelRequestReceipt;
   reviewEvidenceContext?: string;
   reviewInstructionsRevision?: number;
@@ -434,6 +436,7 @@ export interface ToolSpec {
   inputSchema: Record<string, unknown>;
 }
 export interface HarnessRequest {
+  contextWindow?: ContextWindowPlan;
   onPermission?: (request: NativePermissionRequest, signal?: AbortSignal) => Promise<"allow" | "deny">;
   /** Native tools may work in this private copy; publication still checks ownership. */
   isolatedWorkspace?: boolean;

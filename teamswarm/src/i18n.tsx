@@ -875,6 +875,19 @@ export const zhCN: Record<string, string> = {
   Command: "命令",
   Connections: "协作关系",
   Context: "上下文",
+  "Less than 1% used (over 99% left)": "已用不足 1%（剩余超过 99%）",
+  "Context window preset": "上下文窗口预设",
+  "Automatic (by model)": "自动（按模型）",
+  "Applies to new Host and member turns. Space is reserved for context compaction.":
+    "新设置从 Host 和成员的下一轮生效，并为上下文整理预留空间。",
+  "Host: {raw} tokens before reserve, {usable} available.":
+    "当前 Host 额定 {raw} 个标记，预留后可用 {usable} 个。",
+  "Estimated for Host: {raw} tokens before reserve, {usable} available.":
+    "预计 Host 窗口为 {raw} 个标记，预留后可用约 {usable} 个。",
+  "Could not save the context window. Try again.":
+    "上下文窗口保存失败，请重试。",
+  "Nominal {raw} · reserved {reserve}": "额定 {raw} · 预留 {reserve}",
+  "Next turn: {count} tokens available": "下一轮可用 {count} 个标记",
   "Context window": "上下文窗口",
   "{used}% used ({remaining}% left)": "{used}% 已用（剩余 {remaining}%）",
   "About {used}% used ({remaining}% left)":

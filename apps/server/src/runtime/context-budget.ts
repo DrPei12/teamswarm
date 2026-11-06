@@ -1,3 +1,5 @@
+import type {ContextWindowPlan} from "@team/contracts/context-window";
+import {effectiveWindow} from "./context-window.js";
 import type { ExecutionConfig } from "./types.js";
 
 export const DEEPSEEK_NATIVE_WINDOW = 131072;
@@ -12,6 +14,7 @@ export interface ContextObservation {
 
 export interface ContextBudget {
   windowTokens: number;
+  compactAtTokens?: number;
   windowSource: "native" | "configuration" | "estimate";
   occupiedTokens: number;
   occupancySource: "native" | "estimate" | "native+estimate";
@@ -79,6 +82,7 @@ export function planContext(
     observation?: ContextObservation;
     estimatedSessionTokens?: number;
     overheadTokens?: number;
+    windowPlan?: ContextWindowPlan;
     nativeCompaction?: boolean;
     requiredInputTokens?: number;
   } = {},
@@ -88,12 +92,14 @@ export function planContext(
     positive(config.contextWindowTokens) ??
     (["pi", "opencode"].includes(config.harness) ? 131072 : undefined);
   // This fallback is a planning envelope, not a claim about an unknown provider model.
-  const windowTokens = observed ?? configured ?? 32768;
-  const outputReserve = Math.min(
-    positive(config.maxOutputTokens) ?? 8192,
-    Math.floor(windowTokens / 4),
-  );
-  const toolReserve = Math.max(Math.ceil(windowTokens * 0.12), 1024);
+  const plan=options.windowPlan;
+  const windowTokens = plan?.rawTokens ?? observed ?? configured ?? 32768;
+  const compactAt = plan ? effectiveWindow(plan,observed,config.harness==="codex") : undefined;
+  const outputReserve = Math.min(positive(config.maxOutputTokens) ?? 8192, Math.floor(windowTokens / 4),
+    compactAt===undefined ? Infinity : windowTokens-compactAt);
+  // The preset already reserves output and compaction space. Do not charge it a second time.
+  const toolReserve = compactAt===undefined ? Math.max(Math.ceil(windowTokens * 0.12), 1024)
+    : windowTokens-compactAt-outputReserve;
   const occupiedTokens =
     options.observation?.inputTokens !== undefined
       ? options.observation.inputTokens +
@@ -103,15 +109,16 @@ export function planContext(
   const nativeCompaction = options.nativeCompaction === true;
   const fresh = Math.max(
     0,
-    windowTokens - outputReserve - toolReserve - (options.overheadTokens ?? 0),
+    Math.min(compactAt ?? Infinity,windowTokens - outputReserve - toolReserve) - (options.overheadTokens ?? 0),
   );
   // Observed input already includes the native system prompt and tool schemas.
   const remaining = occupiedTokens
-    ? windowTokens - outputReserve - toolReserve - occupiedTokens
+    ? Math.min(compactAt ?? Infinity,windowTokens - outputReserve - toolReserve) - occupiedTokens
     : fresh;
   return {
     windowTokens,
-    windowSource: observed
+    ...(compactAt ? {compactAtTokens:compactAt}:{}),
+    windowSource: plan ? (plan.source==="estimate"?"estimate":"configuration") : observed
       ? "native"
       : configured
         ? "configuration"
@@ -132,7 +139,7 @@ export function planContext(
       Math.floor(
         Math.min(
           Math.min(fresh, Math.max(fresh * 0.6, options.requiredInputTokens ?? 0)),
-          nativeCompaction && remaining < fresh * 0.15
+          !plan && nativeCompaction && remaining < fresh * 0.15
             ? fresh
             : remaining,
         ),
@@ -142,6 +149,7 @@ export function planContext(
 }
 
 export function pressureRequiresRebuild(budget: ContextBudget): boolean {
+  if (budget.compactAtTokens) return budget.occupiedTokens >= budget.compactAtTokens;
   return (
     !budget.nativeCompaction &&
     budget.occupiedTokens + budget.outputReserve + budget.toolReserve >=
