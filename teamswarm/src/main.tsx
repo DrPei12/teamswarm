@@ -21,3 +21,5 @@ import "./visuals.css";
 import "./conversation.css";
 import "./design-system/tokens.css";
 import "./design-system/workspace.css";
+
+import "./appearance.css";

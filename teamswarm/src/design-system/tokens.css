@@ -8,8 +8,8 @@
   --field-padding-block: 10px;
   --field-padding-inline: 12px;
   --field-radius: 8px;
-  --cds-surface-0: #f2f1ed;
-  --cds-surface-1: #faf9f6;
+  --cds-surface-0: var(--light-sidebar, #f2f1ed);
+  --cds-surface-1: var(--light-page, #faf9f6);
   --cds-surface-2: #ffffff;
   --cds-surface-3: #ffffff;
   --cds-clay: #d97757;
@@ -29,8 +29,8 @@
   --cds-radius-dialog: 16px;
   --cds-radius-bubble: 18px;
   --cds-radius-composer: 18px;
-  --composer-font-size: 16px;
-  --composer-line-height: 24px;
+  --composer-font-size: calc(16px * var(--content-scale));
+  --composer-line-height: calc(24px * var(--content-scale));
   --cds-h-control-xs: 20px;
   --cds-h-control-sm: 28px;
   --cds-h-control: 24px;

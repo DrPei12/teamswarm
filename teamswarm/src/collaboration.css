@@ -32,7 +32,7 @@
   padding: 5px 8px;
   border-radius: var(--cds-radius-control);
   text-align: left;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 .work-thread-trigger > span:first-child {
   overflow: hidden;
@@ -69,8 +69,8 @@
 }
 .work-thread-picker small {
   color: var(--secondary);
-  font-size: 11px;
-  line-height: 18px;
+  font-size: calc(11px * var(--font-scale));
+  line-height: calc(18px * var(--font-scale));
 }
 .project-records select,
 .record-editor input,
@@ -109,7 +109,7 @@
   opacity: 0.6;
 }
 .record-hint {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   line-height: 1.6;
   opacity: 0.65;
 }
@@ -135,11 +135,11 @@
   line-height: 1.5;
 }
 .record-heading strong {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   overflow-wrap: anywhere;
 }
 .record-heading span {
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   opacity: 0.65;
   flex-shrink: 0;
 }
@@ -162,7 +162,7 @@
   gap: 12px;
   align-items: center;
   margin-top: 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 .record-actions button:not(.primary-button) {
   text-decoration: underline;
@@ -187,11 +187,11 @@
 }
 .record-error {
   color: #bd4949;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   overflow-wrap: anywhere;
 }
 .output-content {
-  font: 12px/1.7 var(--font-mono, monospace);
+  font: calc(12px * var(--code-scale))/1.7 var(--font-mono, monospace);
   max-height: 320px;
   overflow: auto;
   white-space: pre-wrap;
@@ -203,13 +203,13 @@
 .record-download {
   display: inline-block;
   margin: 12px 0 4px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 .insight-record .markdown {
-  font-size: 13px;
+  font-size: calc(13px * var(--content-scale));
 }
 .insight-sources {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   line-height: 1.6;
 }
 .insight-sources blockquote {

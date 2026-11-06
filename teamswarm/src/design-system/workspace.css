@@ -34,7 +34,7 @@
   gap: 2px;
 }
 .workspace-switch {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   font-weight: 600;
   gap: 8px;
 }
@@ -81,13 +81,13 @@
 }
 .sidebar-action kbd {
   margin-left: auto;
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale));
 }
 .group-heading {
   height: 28px;
   font-family: var(--font-ui);
   font-size: var(--font-caption-size);
-  line-height: 16px;
+  line-height: calc(16px * var(--font-scale));
   font-weight: 500;
   letter-spacing: 0;
 }
@@ -132,7 +132,7 @@
 }
 .recent-chats .nav-row {
   padding-left: 10px;
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   color: var(--secondary);
 }
 .recent-chats .nav-row > span {
@@ -150,7 +150,7 @@
 }
 .sidebar-bottom > span {
   color: var(--subtle);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   flex: 1;
 }
 .help-button {
@@ -192,7 +192,7 @@
   margin-right: 4px;
 }
 .chat-switch {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   font-weight: 600;
 }
 .chat-switch > .host-heading-mark {
@@ -208,7 +208,7 @@
   padding-right: 12px;
 }
 .statusbar .agent-footer {
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   height: 26px;
 }
 .statusbar > .icon-button {
@@ -256,7 +256,7 @@
 }
 .composer-surface textarea {
   display: block;
-  font-family: var(--font-ui);
+  font-family: var(--preferred-conversation, var(--font-ui));
   font-size: var(--composer-font-size);
   line-height: var(--composer-line-height);
   font-weight: 400;
@@ -355,8 +355,8 @@
   min-height: var(--cds-h-control);
   padding: 4px 8px;
   border-radius: var(--cds-radius-control);
-  font-size: 14px;
-  line-height: 20px;
+  font-size: calc(14px * var(--font-scale));
+  line-height: calc(20px * var(--font-scale));
 }
 .runtime-controls {
   flex-wrap: wrap;
@@ -364,8 +364,8 @@
 }
 .runtime-pending {
   color: var(--secondary);
-  font-size: 12px;
-  line-height: 20px;
+  font-size: calc(12px * var(--font-scale));
+  line-height: calc(20px * var(--font-scale));
   white-space: nowrap;
   padding-inline: 4px;
 }
@@ -396,8 +396,8 @@
   align-items: center;
 }
 .member-permission-option small {
-  font-size: 12px;
-  line-height: 18px;
+  font-size: calc(12px * var(--font-scale));
+  line-height: calc(18px * var(--font-scale));
   color: var(--secondary);
 }
 .new-member-runtime {
@@ -473,7 +473,7 @@
   color: var(--text);
 }
 .composer-chin .model-picker-trigger.compact {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   font-weight: 500;
 }
 .composer-chin .effort-choice {
@@ -485,16 +485,16 @@
 .message-text,
 .markdown {
   font-family: var(--font-conversation);
-  font-size: 16px;
-  line-height: 24px;
+  font-size: calc(16px * var(--content-scale));
+  line-height: calc(24px * var(--content-scale));
   font-weight: 400;
   letter-spacing: 0;
 }
 .messages .message-user > .message-text,
 .member-entry.incoming .message-text {
-  font-family: var(--font-ui);
-  font-size: 14px;
-  line-height: 20px;
+  font-family: var(--preferred-conversation, var(--font-ui));
+  font-size: calc(16px * var(--content-scale));
+  line-height: calc(24px * var(--content-scale));
   background: var(--bubble);
   border-radius: var(--cds-radius-bubble);
   padding: 12px 16px;
@@ -503,11 +503,11 @@
   margin-right: 8%;
 }
 .message-avatar {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   font-weight: 550;
 }
 .message-heading time {
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale));
   font-variant-numeric: tabular-nums;
 }
 .message-host .message-heading {
@@ -528,7 +528,7 @@
   justify-content: space-between;
   padding: 9px 14px;
   border-bottom: var(--cds-hairline) solid var(--line);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   color: var(--secondary);
 }
 .code-actions {
@@ -554,8 +554,8 @@
 .code-block pre {
   padding: 16px;
   margin: 0;
-  font-size: 15px;
-  line-height: 24px;
+  font-size: calc(15px * var(--code-scale));
+  line-height: calc(24px * var(--code-scale));
   max-height: min(560px, 60dvh);
   overflow: auto;
 }
@@ -595,8 +595,8 @@
 .welcome p {
   margin-top: 10px;
   color: var(--secondary);
-  font-size: 14px;
-  line-height: 22px;
+  font-size: calc(14px * var(--font-scale));
+  line-height: calc(22px * var(--font-scale));
 }
 .welcome-actions {
   display: flex;
@@ -609,7 +609,7 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   color: var(--secondary);
   border-radius: 8px;
   padding: 8px 12px;
@@ -637,7 +637,7 @@
 }
 .menu-item {
   min-height: 34px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   border-radius: 6px;
 }
 .menu-heading {
@@ -726,7 +726,7 @@
   min-height: 34px;
   padding: 8px 16px;
   background: transparent;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 .canvas-tools {
   border: 0;
@@ -782,7 +782,7 @@
   padding-bottom: 20px;
 }
 .member-entry-meta {
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   margin-bottom: 8px;
 }
 .member-composer {
@@ -821,11 +821,11 @@
 .activity-summary,
 .activity-toggle,
 .activity-context {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 .activity-readable {
-  font-size: 12px;
-  line-height: 20px;
+  font-size: calc(12px * var(--font-scale));
+  line-height: calc(20px * var(--font-scale));
 }
 .activity-summary {
   padding-bottom: 6px;
@@ -846,7 +846,7 @@
   padding: 6px 12px;
   border-radius: 999px;
   color: var(--secondary);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   white-space: nowrap;
 }
 .segmented-control button[aria-checked="true"] {
@@ -925,13 +925,13 @@ html[data-pane-dragging] * {
     margin-bottom: 10px;
   }
   .composer-surface textarea {
-    font-size: 16px;
+    font-size: calc(16px * var(--content-scale));
   }
   .welcome {
     padding-bottom: 22px;
   }
   .welcome h2 {
-    font-size: 24px;
+    font-size: calc(24px * var(--font-scale));
   }
   .welcome p {
     max-width: 270px;
@@ -941,7 +941,7 @@ html[data-pane-dragging] * {
     gap: 6px;
   }
   .welcome-actions button {
-    font-size: 11px;
+    font-size: calc(11px * var(--font-scale));
     padding: 7px 9px;
   }
   .statusbar {
@@ -994,8 +994,8 @@ html[data-pane-dragging] * {
   gap: 6px;
   min-width: 0;
   color: var(--subtle);
-  font-size: 11px;
-  line-height: 16px;
+  font-size: calc(11px * var(--font-scale));
+  line-height: calc(16px * var(--font-scale));
 }
 .status-dot {
   width: 6px;
@@ -1178,7 +1178,7 @@ html[data-pane-dragging] * {
 }
 .group-heading {
   color: var(--subtle);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   letter-spacing: 0.01em;
 }
 .team-views {
@@ -1224,7 +1224,7 @@ html[data-pane-dragging] * {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 .canvas-title > span:nth-child(2) {
   color: var(--subtle);
@@ -1282,7 +1282,7 @@ html[data-pane-dragging] * {
 }
 .messages .message-user .message-avatar {
   color: var(--subtle);
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale));
   font-weight: 500;
 }
 .messages .message-user .message-heading time {
@@ -1411,14 +1411,14 @@ html[data-pane-dragging] * {
   color: var(--text);
 }
 .welcome h2 {
-  font-size: 30px;
+  font-size: calc(30px * var(--font-scale));
   font-weight: 600;
   letter-spacing: -0.03em;
 }
 .welcome p {
   color: var(--secondary);
-  font-size: 13px;
-  line-height: 20px;
+  font-size: calc(13px * var(--font-scale));
+  line-height: calc(20px * var(--font-scale));
 }
 .welcome-actions button {
   border: var(--cds-hairline) solid var(--cds-border);
@@ -1480,7 +1480,7 @@ html[data-pane-dragging] * {
   background: var(--cds-surface-1);
 }
 .collaboration-view .graph-copy strong {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 .graph-symbol {
   width: 38px;
@@ -1495,20 +1495,20 @@ html[data-pane-dragging] * {
   color: var(--accent-ink);
 }
 .graph-copy strong {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 .graph-copy > span {
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 .member-caption {
   background: var(--cds-surface-1);
   border-top: var(--cds-hairline) solid var(--cds-border);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 .member-result-line {
   border-top: var(--cds-hairline) solid var(--cds-border);
   color: var(--subtle);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 .member-presence {
   width: 6px;
@@ -1645,8 +1645,8 @@ html[data-pane-dragging] * {
 .file-empty small {
   max-width: 240px;
   color: var(--subtle);
-  font-size: 11px;
-  line-height: 17px;
+  font-size: calc(11px * var(--font-scale));
+  line-height: calc(17px * var(--font-scale));
 }
 
 /* Menus and dialogs ------------------------------------------------------- */
@@ -1664,7 +1664,7 @@ html[data-pane-dragging] * {
 }
 .popover-heading {
   color: var(--subtle);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   letter-spacing: 0.01em;
 }
 

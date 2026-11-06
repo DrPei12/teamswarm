@@ -1234,7 +1234,7 @@ body:has(.detail-resize-handle[data-dragging]) * {
 }
 .plugin-config code {
   color: var(--secondary);
-  font-size: calc(11px * var(--font-scale));
+  font-size: calc(11px * var(--code-scale));
 }
 .delivery-summary {
   color: var(--secondary);

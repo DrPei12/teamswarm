@@ -1,5 +1,6 @@
+import { WorkspaceSettings } from "./WorkspaceSettings";
+import { useAppearance } from "./appearance";
 import { NewMemberDialog } from "./NewMemberDialog";
-import { FieldSelect } from "./FieldSelect";
 import { ApprovalRequests } from "./ApprovalRequests";
 import { Disclosure } from "./Disclosure";
 import { AttachmentChip } from "./AttachmentChip";
@@ -15,13 +16,12 @@ import {
   type ReactNode,
   type CSSProperties,
 } from "react";
-import { LanguageProvider, useI18n, type Language } from "./i18n";
+import { LanguageProvider, useI18n } from "./i18n";
 import { Dialog, Tooltip, Popover } from "radix-ui";
 import {
   ChevronDown,
   Plus,
   Settings2,
-  Check,
   PanelLeft,
   PanelRight,
   X,
@@ -30,9 +30,6 @@ import {
   Pencil,
   ArrowUpRight,
   ArrowDown,
-  Monitor,
-  Sun,
-  Moon,
   Hash,
   Search,
   Keyboard,
@@ -158,6 +155,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     location.hash = `/team/${next.teamId}${target}`;
   };
   const [screen, setScreen] = useState<Screen>(null);
+  const appearance = useAppearance();
   const [executionSettings, setExecutionSettings] = useState(false);
   const [executionTab, setExecutionTab] = useState<
     "harnesses" | "connections" | "runtime"
@@ -388,12 +386,15 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           : workspace.theme;
       window.teamswarmDesktop?.setTheme(
         document.documentElement.dataset.theme === "dark",
+        getComputedStyle(document.documentElement)
+          .getPropertyValue("--cds-surface-1")
+          .trim(),
       );
     };
     apply();
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);
-  }, [workspace.theme]);
+  }, [workspace.theme, appearance.value.palette]);
   useEffect(() => {
     document.title = chat ? `${chat.title} · TeamSwarm` : "TeamSwarm";
   }, [chat]);
@@ -2159,93 +2160,14 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           </div>
         </form>
       </Modal>
-      <Modal
-        open={screen === "settings"}
-        onOpenChange={(open) => !open && setScreen(null)}
-        title={tr("Settings")}
-      >
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            const data = new FormData(e.currentTarget);
-            if (
-              update((old) => ({
-                ...old,
-                name: String(data.get("name")).trim() || old.name,
-              }))
-            )
-              setScreen(null);
-          }}
-        >
-          <div className="form-body">
-            <label>
-              {tr("Workspace name")}
-              <input
-                name="name"
-                defaultValue={workspace.name}
-                required
-                maxLength={60}
-              />
-            </label>
-            <label>
-              {tr("Language")}
-              <FieldSelect
-                name="language"
-                value={workspace.language}
-                onValueChange={(value) =>
-                  update((old) => ({
-                    ...old,
-                    language: value as Language,
-                  }))
-                }
-              >
-                <option value="en">English</option>
-                <option value="zh-CN">简体中文</option>
-              </FieldSelect>
-            </label>
-            <label>{tr("Appearance")}</label>
-            <div className="theme-options">
-              {(["light", "dark", "system"] as const).map((value) => (
-                <button
-                  type="button"
-                  key={value}
-                  className={workspace.theme === value ? "selected" : ""}
-                  aria-pressed={workspace.theme === value}
-                  onClick={() => update((old) => ({ ...old, theme: value }))}
-                >
-                  <span
-                    className={`theme-preview ${value}`}
-                    aria-hidden="true"
-                  />
-                  <span className="theme-label">
-                    {value === "light" ? (
-                      <Sun size={18 * ICON_SCALE} />
-                    ) : value === "dark" ? (
-                      <Moon size={18 * ICON_SCALE} />
-                    ) : (
-                      <Monitor size={18 * ICON_SCALE} />
-                    )}
-                    <span>{tr(value[0].toUpperCase() + value.slice(1))}</span>
-                  </span>
-                  {workspace.theme === value && (
-                    <Check size={13 * ICON_SCALE} />
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="form-footer">
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => setScreen(null)}
-            >
-              {tr("Cancel")}
-            </button>
-            <button className="primary-button">{tr("Save changes")}</button>
-          </div>
-        </form>
-      </Modal>
+      {screen === "settings" && (
+        <WorkspaceSettings
+          workspace={workspace}
+          appearance={appearance}
+          close={() => setScreen(null)}
+          update={update}
+        />
+      )}
       <Modal
         open={screen === "team"}
         onOpenChange={(open) => !open && setScreen(null)}

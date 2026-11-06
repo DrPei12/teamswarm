@@ -430,25 +430,13 @@ export class HostContext {
           items: [],
         },
       },
-      history: host && !previous
-        ? this.materials.messages(run, { boundary, limit: 3 }).items
-            .filter(message => message.id !== run.sourceMessageId)
-            .map(message => message.content.length <= 1600 ? message : {
-              ...message, content: excerpt(message.content, work.instructions, 1600),
-              partial: true, characters: message.content.length,
-            })
-        : [],
+      history: [],
       historyAccess: {
         conversationId: run.conversationId,
         totalMessages: 0,
         omittedMessages: 0,
       },
-      ...(work.interaction ? { conversationHistory: !previous
-        ? ((conversationHistory ?? []) as any[]).slice(-2).map(message => message.content.length <= 1600 ? message : {
-            ...message, content: excerpt(message.content, work.instructions, 1600),
-            partial: true, characters: message.content.length,
-          })
-        : [] } : {}),
+      ...(work.interaction ? { conversationHistory: [] } : {}),
       retainedInsights: [],
       retainedInsightCount: collaborationInput.retainedInsightCount ?? 0,
       currentOutputs: [],
@@ -459,32 +447,33 @@ export class HostContext {
         ? "Answer the incoming messages and finish the turn. No artifact submission or yield checkpoint is needed. File changes require assigned production work."
         : "Handle useful messages at work boundaries. Preserve responsibility and shared interface agreements. End the turn after delegation or submission; use team_yield only to save unfinished work and wait for a specific event.",
     };
-    // Keep a bounded set of unresolved decisions alongside the latest exchange.
-    // Both must precede optional navigation when a fresh session is reconstructed.
-    if (host) {
-      let noteTokens = 0;
-      for (const { material: m } of this.materials.rank(all.filter(m => m.kind === "note" && !m.stale), work)) {
-        if (seen[m.ref] === m.revision) continue;
-        const tokens = estimateTokens(m.data) + 2;
-        if (noteTokens + tokens > budget.inputTokens * 0.15) continue;
-        input.current.notes.push(m.data);
-        seen[m.ref] = m.revision;
-        noteTokens += tokens;
-      }
-    }
-    // The 60% fresh-input target reserves space for optional context. Required
-    // work/inbox data may use the rest after system, output and tool reserves.
-    const requiredTokens = estimateTokens(input) + 100;
-    if (requiredTokens > budget.inputTokens)
-      budget = planContext(attempt.config, {...budgetOptions, requiredInputTokens: requiredTokens});
-    if (estimateTokens(input) > budget.inputTokens)
+    // A model switch starts a fresh native session. The assignment and inbox
+    // are required; the preceding exchange and sourced notes can be excerpted.
+    const recentHost = host && !previous
+      ? this.materials.messages(run, { boundary, limit: 3 }).items.filter(m => m.id !== run.sourceMessageId)
+      : [];
+    const recentMember = work.interaction && !previous
+      ? ((conversationHistory ?? []) as any[]).slice(-2).reverse()
+      : [];
+    const preview = (message: any) => message.content.length <= 1600 ? message : {
+      ...message, content: excerpt(message.content, work.instructions, 1600),
+      partial: true, characters: message.content.length,
+    };
+    const recentHostPreviews = recentHost.map(preview);
+    const recentMemberPreviews = recentMember.map(preview);
+    const priorityNotes = host
+      ? this.materials.rank(all.filter(m => m.kind === "note" && !m.stale && seen[m.ref] !== m.revision), work)
+      : [];
+    let used = estimateTokens(input) + 100; // Leave room for counts and JSON delimiters.
+    const desired = used + estimateTokens(recentHostPreviews) + estimateTokens(recentMemberPreviews)
+      + Math.min(budget.inputTokens * 0.15, priorityNotes.reduce((n, {material}) => n + estimateTokens(material.data) + 2, 0));
+    if (desired > budget.inputTokens)
+      budget = planContext(attempt.config, { ...budgetOptions, requiredInputTokens: desired });
+    if (used > budget.inputTokens)
       throw conflict(
         "context_capacity",
         "The current assignment and incoming messages exceed the available context. Use a model with a larger context window or split the assignment.",
       );
-    let used = estimateTokens(input) + 100;
-    const baseTokens = used;
-    const ceiling = (share: number) => baseTokens + Math.max(0, budget.inputTokens - baseTokens) * share;
     const add = (
       target: any[],
       value: unknown,
@@ -497,7 +486,7 @@ export class HostContext {
       return true;
     };
     const addExcerpt = (target: any[], message: any, limit = budget.inputTokens) => {
-      const preview = {...message, content: excerpt(message.content, work.instructions), partial: true, characters: message.content.length};
+      const preview = {...message, content: excerpt(message.content, work.instructions), partial: true, characters: message.characters ?? message.content.length};
       // Fit the actual serialized message, including its identifiers, to the
       // remaining budget. Originals remain available through historyAccess.
       let length = preview.content.length;
@@ -507,6 +496,18 @@ export class HostContext {
       }
       return false;
     };
+    const noteLimit = used + Math.min(budget.inputTokens * 0.15, (budget.inputTokens - used) * 0.3);
+    for (const {material} of priorityNotes)
+      if (add(input.current.notes, material.data, noteLimit)) seen[material.ref] = material.revision;
+    const addRecent = (target: any[], messages: typeof recentHostPreviews) => {
+      for (const message of messages) {
+        if (!add(target, message)) addExcerpt(target, message);
+      }
+    };
+    addRecent(input.history, recentHostPreviews);
+    if (work.interaction) addRecent(input.conversationHistory, recentMemberPreviews);
+    const baseTokens = used;
+    const ceiling = (share: number) => baseTokens + Math.max(0, budget.inputTokens - baseTokens) * share;
     // Put stale-note references ahead of optional navigation: the Host must see
     // that a previously retained decision needs rechecking before reusing it.
     const staleNotes = new Set<string>();

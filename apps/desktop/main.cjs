@@ -12,6 +12,7 @@ const {
 const fs = require("node:fs");
 const path = require("node:path");
 const net = require("node:net");
+const {createHash, randomUUID} = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { once } = require("node:events");
 const { installCredentialBridge } = require("./credential-bridge.cjs");
@@ -45,6 +46,7 @@ let windowState = readJSON(stateFile, {}),
   connection,
   quitting = false,
   saving;
+if (typeof windowState.surface !== "string" || !/^#[a-f0-9]{6}$/i.test(windowState.surface)) delete windowState.surface;
 let restarting;
 let healthTimer,
   healthBusy = false,
@@ -53,6 +55,7 @@ const clientStateFile = path.join(userDirectory, "pending-input.json");
 const clientState = readJSON(clientStateFile, {});
 const storageKeys = new Set([
   "teamswarm.workspace",
+  "teamswarm.appearance.v1",
   "teamswarm.preferences.pending",
   "teamswarm.messages.pending",
   "teamswarm.create-team.pending",
@@ -72,6 +75,7 @@ function saveWindow() {
     zoom: mainWindow.webContents.getZoomFactor(),
     hash: /^#\/team\//.test(hash || "") ? hash : "",
     dark: windowState.dark === true,
+    surface: windowState.surface,
   };
   fs.mkdirSync(userDirectory, { recursive: true });
   const temporary = stateFile + ".tmp";
@@ -380,10 +384,10 @@ async function createWindow() {
     minHeight: 650,
     show: false,
     title: "TeamSwarm",
-    backgroundColor: windowState.dark ? "#151515" : "#faf9f6",
+    backgroundColor: windowState.surface || (windowState.dark ? "#151515" : "#faf9f6"),
     titleBarStyle: process.platform === "darwin" ? "default" : "hidden",
     titleBarOverlay: process.platform === "darwin" ? undefined : {
-      color: windowState.dark ? "#151515" : "#faf9f6",
+      color: windowState.surface || (windowState.dark ? "#151515" : "#faf9f6"),
       symbolColor: windowState.dark ? "#f5f5f5" : "#50504b",
       height: 40,
     },
@@ -401,12 +405,16 @@ async function createWindow() {
     },
   });
   session.defaultSession.setPermissionRequestHandler(
-    (_webContents, permission, callback) =>
-      callback(permission === "clipboard-sanitized-write"),
+    (contents, permission, callback, details) =>
+      callback(permission === "clipboard-sanitized-write" ||
+        (permission === "local-fonts" && contents === mainWindow?.webContents &&
+          details.isMainFrame && localURL(details.requestingUrl))),
   );
   session.defaultSession.setPermissionCheckHandler(
-    (_webContents, permission, requestingOrigin) =>
-      localURL(requestingOrigin) && permission === "clipboard-sanitized-write",
+    (contents, permission, requestingOrigin, details) =>
+      localURL(requestingOrigin) && (permission === "clipboard-sanitized-write" ||
+        (permission === "local-fonts" && contents === mainWindow?.webContents &&
+          (!details.embeddingOrigin || localURL(details.embeddingOrigin)))),
   );
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const headers = { ...details.responseHeaders };
@@ -533,11 +541,34 @@ ipcMain.handle("choose-directory", async (event) => {
   });
   return selection.canceled ? null : selection.filePaths[0] || null;
 });
-ipcMain.on("theme", (event, dark) => {
+const importedFontDirectory = path.join(userDirectory, "appearance-fonts");
+ipcMain.handle("appearance-font-save", async (event, bytes) => {
+  if (!trustedIPC(event) || !(bytes instanceof Uint8Array) || bytes.length < 12 || bytes.length > 32 * 1024 * 1024)
+    throw new Error("Invalid font file.");
+  const data = Buffer.from(bytes);
+  if (![0x00010000, 0x4f54544f, 0x774f4646, 0x774f4632, 0x74727565].includes(data.readUInt32BE(0)))
+    throw new Error("Unsupported font format.");
+  const id = createHash("sha256").update(data).digest("hex");
+  await fs.promises.mkdir(importedFontDirectory, {recursive:true});
+  const temporary = path.join(importedFontDirectory, randomUUID() + ".tmp");
+  try {
+    await fs.promises.writeFile(temporary, data, {flag:"wx"});
+    await fs.promises.rename(temporary, path.join(importedFontDirectory, id));
+  } finally {
+    await fs.promises.rm(temporary, {force:true});
+  }
+  return id;
+});
+ipcMain.handle("appearance-font-read", async (event, id) => {
+  if (!trustedIPC(event) || typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id)) throw new Error("Invalid font.");
+  return fs.promises.readFile(path.join(importedFontDirectory, id));
+});
+ipcMain.on("theme", (event, dark, surface) => {
   if (!trustedIPC(event) || typeof dark !== "boolean") return;
   windowState.dark = dark;
+  windowState.surface = typeof surface === "string" && /^#[a-f0-9]{6}$/i.test(surface) ? surface : dark ? "#151515" : "#faf9f6";
   if (process.platform !== "darwin") mainWindow.setTitleBarOverlay({
-    color: dark ? "#151515" : "#faf9f6",
+    color: windowState.surface,
     symbolColor: dark ? "#f5f5f5" : "#50504b",
     height: 40,
   });

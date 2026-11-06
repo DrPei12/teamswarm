@@ -6,8 +6,11 @@
 }
 :root {
   --font-scale: 1;
+  --content-scale: 1;
+  --code-scale: 1;
   --icon-scale: 1;
-  --font-ui:
+  --font-ui: var(--preferred-ui, var(--base-font-ui));
+  --base-font-ui:
     "Inter Variable", "Noto Sans SC Variable", ui-sans-serif, -apple-system,
     BlinkMacSystemFont, "Segoe UI", "PingFang SC", "PingFang TC",
     "Hiragino Sans", "Apple SD Gothic Neo", "Kohinoor Devanagari",
@@ -20,7 +23,11 @@
     "Noto Sans Malayalam UI", "Noto Sans Malayalam", Thonburi, "Leelawadee UI",
     "Noto Sans Thai UI", "Noto Sans Thai", Kefa, Ebrima, "Noto Sans Ethiopic",
     "Abyssinica SIL", sans-serif;
-  --font-conversation:
+  --font-conversation: var(
+    --preferred-conversation,
+    var(--base-font-conversation)
+  );
+  --base-font-conversation:
     "Source Serif 4 Variable", "Noto Sans SC Variable", ui-serif, Georgia,
     "Times New Roman", "Kohinoor Devanagari", "Kohinoor Bangla",
     "Kohinoor Telugu", "Tamil Sangam MN", "Kohinoor Gujarati",
@@ -32,10 +39,11 @@
     "Noto Sans Malayalam", Thonburi, "Leelawadee UI", "Noto Sans Thai UI",
     "Noto Sans Thai", Kefa, Ebrima, "Noto Sans Ethiopic", "Abyssinica SIL",
     serif;
-  --font-mono:
+  --font-mono: var(--preferred-mono, var(--base-font-mono));
+  --base-font-mono:
     SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
     "Noto Sans SC Variable", ui-monospace, monospace;
-  --font-caption-size: 13px;
+  --font-caption-size: calc(13px * var(--font-scale));
   font-family: var(--font-ui);
   font-optical-sizing: auto;
   font-feature-settings: "dlig" 0;
@@ -819,7 +827,7 @@ button.menu-item:hover {
   transition: filter 0.1s;
   min-height: 38px;
   gap: 8px;
-  line-height: 20px;
+  line-height: calc(20px * var(--font-scale));
 }
 .primary-button {
   background: var(--accent-solid);
@@ -1037,8 +1045,8 @@ button.menu-item:hover {
 .message-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: 24px;
-  font-size: 15px;
+  line-height: calc(24px * var(--content-scale));
+  font-size: calc(15px * var(--content-scale));
   font-weight: 450;
 }
 .files-row {
@@ -1189,7 +1197,7 @@ button.menu-item:hover {
   padding: 24px;
   color: var(--secondary);
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
 }
 .view-feedback p {
   margin: 0;
