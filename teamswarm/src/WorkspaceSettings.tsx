@@ -35,7 +35,7 @@ const labels = {
 };
 const defaultNames = {
   ui: "Default · Inter",
-  content: "Default · Source Serif 4",
+  content: "Default text pairing",
   code: "Default · Monospace",
 };
 
@@ -71,7 +71,9 @@ function FontPicker({
       name: "Bundled fonts",
       items: [
         ["", t(defaultNames[role])],
-        ...Object.entries(bundled).map(([key, f]) => [key, f.name]),
+        ...Object.entries(bundled)
+          .filter(([key]) => role !== "ui" || key !== "inter")
+          .map(([key, f]) => [key, f.name]),
       ],
     },
     {

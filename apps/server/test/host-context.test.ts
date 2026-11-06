@@ -293,6 +293,12 @@ test("a fresh Host excerpts earlier CJK text to fit the new model while keeping 
     const oldText = "旧模型中的阅读材料".repeat(900);
     app.harness.action = async () => ({ status: "completed", text: oldText });
     await app.send("读取文章");
+    const nextConfig = { ...app.config, model: "deepseek-flash" };
+    const settings = app.service.runtime.store.settings(app.team.id);
+    const changed = await app.request(`/teams/${app.team.id}/runtime`, {
+      expectedVersion: settings.version, workspace: app.workspace, config: nextConfig,
+    }, "PUT");
+    assert.equal(changed.status, 200);
     const original = app.service.runtime.hostContext.assemble.bind(app.service.runtime.hostContext);
     app.service.runtime.hostContext.assemble = (...args) => {
       args[7] = 17500;
@@ -300,6 +306,8 @@ test("a fresh Host excerpts earlier CJK text to fit the new model while keeping 
     };
     app.harness.action = async (request) => {
       const input = JSON.parse(request.input);
+      assert.equal(request.config.model, "deepseek-flash");
+      assert.equal(input.execution.currentExecution.model, request.config.model);
       assert.equal(input.work.instructions, "汇报你现在的配置");
       const excerpt = input.history.find((m: any) => m.role === "assistant" && m.partial);
       assert(excerpt && excerpt.content.length < oldText.length);
