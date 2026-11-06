@@ -216,13 +216,16 @@
   width: 28px;
 }
 .conversation-area {
-  scrollbar-gutter: stable;
+  scrollbar-gutter: stable both-edges;
 }
 .composer-position {
   width: min(760px, calc(100% - 64px));
 }
+.has-chat .composer-position,
 .has-chat .messages {
-  width: min(760px, calc(100% - 64px));
+  width: min(760px, calc(100cqw - 64px));
+}
+.has-chat .messages {
   padding-top: 32px;
 }
 .has-chat .composer-position {
@@ -912,9 +915,12 @@ html[data-pane-dragging] * {
     height: 48px;
     flex-basis: 48px;
   }
-  .composer-position,
-  .has-chat .messages {
+  .composer-position {
     width: calc(100% - 28px);
+  }
+  .has-chat .composer-position,
+  .has-chat .messages {
+    width: calc(100cqw - 28px);
   }
   .has-chat .composer-position {
     margin-bottom: 10px;

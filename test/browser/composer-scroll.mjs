@@ -170,6 +170,22 @@ try {
         .querySelector(".composer textarea")
         .getBoundingClientRect().height,
     }));
+  const columns = [];
+  for (const width of desktop ? [null] : [1230, 760, 390, 1230]) {
+    if (width) await page.setViewportSize({ width, height: 858 });
+    const difference = await page.evaluate(() => {
+      const a = document.querySelector(".messages").getBoundingClientRect(),
+        b = document
+          .querySelector(".composer-position")
+          .getBoundingClientRect();
+      return {
+        width: innerWidth,
+        left: a.left - b.left,
+        right: a.right - b.right,
+      };
+    });
+    columns.push(difference);
+  }
   const phases = [];
   const step = async (name, fn) => {
     await fn();
@@ -274,11 +290,16 @@ try {
     root,
     mode: desktop ? "installed-electron" : "browser",
     phases,
+    columns,
     anchorDelta: delta,
     memberDelta,
   };
   writeFileSync(path.join(root, "result.json"), JSON.stringify(out, null, 2));
   console.log(JSON.stringify(out));
+  assert(
+    columns.every((c) => Math.abs(c.left) <= 1 && Math.abs(c.right) <= 1),
+    JSON.stringify(columns),
+  );
   assert(
     memberDelta <= 1,
     "Typing moved the member conversation by " + memberDelta + "px",

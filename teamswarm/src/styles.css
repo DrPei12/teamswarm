@@ -426,6 +426,7 @@ svg {
   height: 36px;
 }
 .host-conversation {
+  container-type: inline-size;
   position: relative;
   display: flex;
   flex: 1 1 0;
