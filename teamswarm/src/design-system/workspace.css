@@ -981,3 +981,736 @@ html[data-pane-dragging] * {
     transition: none;
   }
 }
+
+/* ==========================================================================
+   Client polish pass — status language, chat rhythm, canvas and workspace
+   Adapted from Caho1/open-claude-ui (MIT). See licenses/open-claude-ui-MIT.txt.
+   ========================================================================== */
+
+/* Shared status vocabulary ------------------------------------------------ */
+.status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--subtle);
+  font-size: 11px;
+  line-height: 16px;
+}
+.status-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--cds-status-idle);
+}
+.status-indicator[data-kind="running"] .status-dot {
+  background: var(--cds-status-running);
+  box-shadow: 0 0 0 4px
+    color-mix(in srgb, var(--cds-status-running) 14%, transparent);
+  animation: cds-status-blink 1.6s ease-in-out infinite;
+}
+.status-indicator[data-kind="waiting"] .status-dot {
+  background: var(--cds-status-waiting);
+}
+.status-indicator[data-kind="done"] .status-dot {
+  background: var(--cds-status-done);
+}
+.status-indicator[data-kind="error"] .status-dot {
+  background: var(--cds-status-error);
+}
+.status-indicator[data-kind="clay"] .status-dot {
+  background: var(--accent);
+  animation: cds-status-breathe 3s ease-in-out infinite;
+}
+.quiet-dots-track {
+  display: inline-flex;
+  align-items: center;
+  gap: 3.5px;
+}
+.quiet-dots-track > span {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: cds-quiet-dot 1.9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+.quiet-dots-track > span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.quiet-dots-track > span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes cds-status-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.42;
+  }
+}
+@keyframes cds-status-breathe {
+  0%,
+  100% {
+    transform: scale(0.9);
+    opacity: 0.82;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes cds-quiet-dot {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+
+/* Keyboard focus ---------------------------------------------------------- */
+:where(button, a, [role="button"], summary):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 72%, transparent);
+  outline-offset: 2px;
+}
+.file-tab:focus-visible,
+.nav-row:focus-visible {
+  outline-offset: -2px;
+}
+.search-dialog input:focus-visible,
+.form-body input:focus-visible,
+.form-body textarea:focus-visible,
+.form-body select:focus-visible,
+.canvas-find input:focus-visible,
+.file-search input:focus-visible {
+  box-shadow: var(--cds-focus-shadow);
+  border-radius: var(--cds-radius-md);
+}
+.file-search:focus-within {
+  border-bottom-color: var(--accent);
+}
+
+/* The member conversation uses the legacy .spin class for its loaders. */
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Scroll surfaces --------------------------------------------------------- */
+.conversation-area,
+.member-thread,
+.navigation,
+.file-list,
+.detail-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text) 18%, transparent) transparent;
+}
+.conversation-area::-webkit-scrollbar,
+.member-thread::-webkit-scrollbar,
+.navigation::-webkit-scrollbar,
+.file-list::-webkit-scrollbar,
+.detail-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.conversation-area::-webkit-scrollbar-thumb,
+.member-thread::-webkit-scrollbar-thumb,
+.navigation::-webkit-scrollbar-thumb,
+.file-list::-webkit-scrollbar-thumb,
+.detail-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--text) 18%, transparent);
+}
+.conversation-area::before,
+.member-thread::before {
+  content: "";
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: block;
+  height: var(--cds-scroll-fade-size);
+  margin-bottom: calc(var(--cds-scroll-fade-size) * -1);
+  pointer-events: none;
+  background: linear-gradient(to bottom, var(--surface-top), transparent);
+}
+
+/* Sidebar ----------------------------------------------------------------- */
+.team-heading .nav-row .team-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--cds-radius-md);
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  transition:
+    background var(--cds-dur-snap) ease,
+    color var(--cds-dur-snap) ease;
+}
+.nav-row {
+  gap: 8px;
+}
+.nav-row.active {
+  position: relative;
+  background: var(--cds-surface-2);
+  color: var(--text);
+  box-shadow: var(--cds-shadow-sm);
+}
+.nav-row.active::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 50%;
+  width: 2px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--accent);
+  transform: translateY(-50%);
+}
+.nav-row.active .team-mark {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+.group-heading {
+  color: var(--subtle);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+.team-views {
+  border-left: var(--cds-hairline) solid var(--cds-border);
+}
+.sidebar-bottom {
+  border-top: var(--cds-hairline) solid var(--line);
+}
+.sidebar-action kbd {
+  color: var(--subtle);
+}
+
+/* Topbar ------------------------------------------------------------------ */
+.topbar {
+  background: color-mix(in srgb, var(--surface-top) 88%, transparent);
+  backdrop-filter: blur(12px);
+}
+.chat-switch {
+  border-radius: var(--cds-radius-md);
+}
+.chat-switch:hover {
+  background: var(--hover);
+}
+.execution-settings-trigger,
+.delivery-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--cds-radius-md);
+  color: var(--secondary);
+  transition:
+    background var(--cds-dur-snap) ease,
+    color var(--cds-dur-snap) ease;
+}
+.execution-settings-trigger:hover,
+.delivery-trigger:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.canvas-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+.canvas-title > span:nth-child(2) {
+  color: var(--subtle);
+}
+.canvas-title strong {
+  font-weight: 550;
+}
+.delivery-trigger .unread-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface-top);
+}
+
+/* Conversation ------------------------------------------------------------ */
+.message-host > .message-text {
+  max-width: 700px;
+}
+.messages .message-user {
+  max-width: var(--cds-message-measure);
+}
+.messages .message-user > .message-text,
+.member-entry.incoming .message-text {
+  background: var(--cds-surface-2);
+  border: var(--cds-hairline) solid var(--cds-border);
+  border-radius: var(--cds-radius-bubble);
+  box-shadow: var(--cds-shadow-sm);
+  padding: 12px 16px;
+}
+.messages .message-host {
+  margin-right: var(--cds-message-inset-stop);
+}
+.message {
+  scroll-margin-block: 96px;
+}
+.streaming-text {
+  cursor: progress;
+}
+.messages .message-user {
+  position: relative;
+}
+.messages .message-user .message-heading {
+  display: flex;
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 2px);
+  margin: 0;
+  gap: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--cds-dur-base) var(--cds-ease);
+}
+.messages .message-user:hover .message-heading,
+.messages .message-user:focus-within .message-heading {
+  opacity: 1;
+  pointer-events: auto;
+}
+.messages .message-user .message-avatar {
+  color: var(--subtle);
+  font-size: 10px;
+  font-weight: 500;
+}
+.messages .message-user .message-heading time {
+  color: var(--subtle);
+}
+.message-heading {
+  opacity: 0.68;
+  transition: opacity var(--cds-dur-base) var(--cds-ease);
+}
+.message:hover .message-heading,
+.message:focus-within .message-heading {
+  opacity: 1;
+}
+.message-heading time {
+  color: var(--subtle);
+}
+.message .skill-tag {
+  margin-bottom: 8px;
+}
+.message.highlighted {
+  border-radius: var(--cds-radius-lg);
+}
+.conversation-updates-trigger {
+  border: var(--cds-hairline) solid var(--cds-border);
+  border-radius: 999px;
+  background: var(--cds-surface-2);
+  box-shadow: var(--cds-shadow-sm);
+}
+.thread-bottom {
+  border: var(--cds-hairline) solid var(--cds-border);
+  border-radius: 999px;
+  box-shadow: var(--cds-shadow-md);
+  color: var(--secondary);
+  transition:
+    background var(--cds-dur-snap) ease,
+    color var(--cds-dur-snap) ease,
+    box-shadow var(--cds-dur-snap) ease;
+}
+.thread-bottom:hover {
+  background: var(--cds-surface-3);
+  color: var(--text);
+  box-shadow: var(--cds-shadow-lg);
+}
+
+/* Activity timeline ------------------------------------------------------- */
+.conversation-activity .activity-summary {
+  color: var(--secondary);
+  gap: 7px;
+}
+.activity-summary .quiet-dots-track,
+.activity-summary .status-indicator {
+  margin-right: 2px;
+}
+.activity-toggle {
+  border-radius: var(--cds-radius-md);
+  padding-inline: 4px;
+  margin-left: -4px;
+}
+.activity-toggle:hover {
+  background: var(--hover);
+}
+.activity-items {
+  border-left-color: color-mix(in srgb, var(--accent) 26%, var(--line));
+}
+.activity-item.running .activity-toggle {
+  color: var(--text);
+}
+.activity-item.failed .activity-toggle,
+.activity-item.interrupted .activity-toggle {
+  color: var(--danger);
+}
+.activity-item .status-dot {
+  margin-right: 1px;
+}
+
+/* Composer details -------------------------------------------------------- */
+.composer-surface:hover {
+  box-shadow: var(--cds-shadow-composer-focus);
+}
+.composer-surface:focus-within {
+  box-shadow:
+    var(--cds-shadow-composer-focus),
+    0 0 0 3px var(--focus);
+}
+.composer-toolbar > .send-button.ready {
+  background: var(--cds-brand);
+}
+.composer-toolbar > .send-button.ready:hover {
+  background: var(--cds-clay-hover);
+  opacity: 1;
+}
+.composer-toolbar > .send-button:disabled {
+  background: var(--hover);
+  color: var(--subtle);
+}
+.file-chip {
+  border: var(--cds-hairline) solid var(--cds-border);
+  border-radius: var(--cds-radius-lg);
+  background: var(--cds-surface-1);
+  height: 30px;
+}
+.file-chip:hover {
+  background: var(--cds-surface-2);
+  border-color: var(--cds-border-strong);
+}
+.file-chip.image-attachment {
+  border-radius: var(--cds-radius-xl);
+}
+.selected-skill,
+.skill-tag {
+  border: var(--cds-hairline) solid var(--cds-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--cds-surface-1));
+  color: var(--secondary);
+  padding: 3px 8px;
+}
+.selected-skill button {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+}
+.selected-skill button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.welcome h2 {
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+.welcome p {
+  color: var(--secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
+.welcome-actions button {
+  border: var(--cds-hairline) solid var(--cds-border);
+  background: var(--cds-surface-1);
+  border-radius: 999px;
+}
+.welcome-actions button:hover {
+  background: var(--cds-surface-2);
+  border-color: var(--cds-border-strong);
+}
+
+/* Canvas ------------------------------------------------------------------ */
+.graph-card {
+  background: var(--cds-surface-2);
+  border: var(--cds-hairline) solid var(--cds-border);
+  border-radius: var(--cds-radius-xl);
+  box-shadow: var(--cds-shadow-sm);
+  transition:
+    box-shadow var(--cds-dur-snap) ease,
+    border-color var(--cds-dur-snap) ease,
+    background var(--cds-dur-snap) ease;
+}
+.graph-card:hover {
+  border-color: var(--cds-border-strong);
+  box-shadow: var(--cds-shadow-md);
+}
+.graph-card.selected {
+  border-color: var(--graph-selected);
+  box-shadow:
+    0 0 0 3px var(--focus),
+    var(--cds-shadow-md);
+}
+.graph-card-main {
+  padding: 16px;
+  min-height: 96px;
+  gap: 12px;
+  border-radius: calc(var(--cds-radius-xl) - 1px);
+}
+/* Keep both canvases on the same card geometry. */
+.collaboration-view .graph-card {
+  width: 304px;
+  border-radius: var(--cds-radius-xl);
+}
+.collaboration-view .graph-card-main {
+  min-height: 96px;
+  padding: 16px;
+  gap: 12px;
+  border-radius: calc(var(--cds-radius-xl) - 1px);
+}
+.collaboration-view .graph-symbol,
+.project-history .graph-symbol {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--cds-radius-lg);
+}
+.collaboration-view .member-caption {
+  border-radius: 0 0 calc(var(--cds-radius-xl) - 1px)
+    calc(var(--cds-radius-xl) - 1px);
+  background: var(--cds-surface-1);
+}
+.collaboration-view .graph-copy strong {
+  font-size: 13px;
+}
+.graph-symbol {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--cds-radius-lg);
+  border: var(--cds-hairline) solid var(--cds-border);
+  background: var(--cds-surface-1);
+}
+.graph-card.current .graph-symbol,
+.host-node .graph-symbol {
+  background: var(--accent-wash);
+  color: var(--accent-ink);
+}
+.graph-copy strong {
+  font-size: 13px;
+}
+.graph-copy > span {
+  font-size: 11px;
+}
+.member-caption {
+  background: var(--cds-surface-1);
+  border-top: var(--cds-hairline) solid var(--cds-border);
+  font-size: 11px;
+}
+.member-result-line {
+  border-top: var(--cds-hairline) solid var(--cds-border);
+  color: var(--subtle);
+  font-size: 11px;
+}
+.member-presence {
+  width: 6px;
+  height: 6px;
+  background: var(--cds-status-idle);
+}
+.member-presence.working {
+  background: var(--cds-status-running);
+  animation: cds-status-blink 1.6s ease-in-out infinite;
+}
+.member-presence.complete {
+  background: var(--cds-status-done);
+}
+.member-presence.error {
+  background: var(--cds-status-error);
+}
+.member-presence.waiting {
+  background: var(--cds-status-waiting);
+}
+.member-state > span {
+  background: var(--cds-status-idle);
+}
+.member-state.working > span {
+  background: var(--cds-status-running);
+  box-shadow: 0 0 0 4px
+    color-mix(in srgb, var(--cds-status-running) 14%, transparent);
+  animation: cds-status-blink 1.6s ease-in-out infinite;
+}
+.member-state.waiting > span {
+  background: var(--cds-status-waiting);
+}
+.member-state.complete > span {
+  background: var(--cds-status-done);
+}
+.member-state.error > span {
+  background: var(--cds-status-error);
+}
+.graph-card .react-flow__handle {
+  width: 7px;
+  height: 7px;
+  min-width: 7px;
+  min-height: 7px;
+  background: var(--cds-surface-2);
+  border: 1.5px solid var(--graph-line);
+  transition:
+    background var(--cds-dur-snap) ease,
+    border-color var(--cds-dur-snap) ease;
+}
+.graph-card .react-flow__handle:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.react-flow__edge-path {
+  stroke: var(--graph-line);
+  stroke-width: 1.25;
+}
+.react-flow__edge.collaboration-active .react-flow__edge-path {
+  stroke: var(--cds-status-running);
+}
+.react-flow__edge.branch-edge .react-flow__edge-path {
+  stroke: color-mix(in srgb, var(--accent) 55%, var(--graph-line));
+}
+.canvas-heading,
+.canvas-tools {
+  background: var(--cds-surface-2);
+  border: var(--cds-hairline) solid var(--cds-border);
+  border-radius: var(--cds-radius-xl);
+  box-shadow: var(--cds-shadow-sm);
+}
+.canvas-view .react-flow__attribution {
+  border-radius: var(--cds-radius-sm);
+  color: var(--subtle);
+}
+.canvas-view .react-flow__attribution a {
+  color: var(--subtle);
+}
+.canvas-view .react-flow {
+  --xy-selection-background-color: color-mix(
+    in srgb,
+    var(--accent) 8%,
+    transparent
+  );
+  --xy-selection-border: 1px dashed
+    color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+/* Files ------------------------------------------------------------------- */
+.file-workspace {
+  background: var(--surface-top);
+  border-left: var(--cds-hairline) solid var(--line);
+}
+.file-tabs-header {
+  height: 52px;
+  flex-basis: 52px;
+  border-bottom: var(--cds-hairline) solid var(--line);
+}
+.file-tab {
+  height: 30px;
+  border-radius: var(--cds-radius-lg);
+  transition:
+    background var(--cds-dur-snap) ease,
+    color var(--cds-dur-snap) ease;
+}
+.file-tab:hover:not(.selected) {
+  background: var(--hover);
+  color: var(--text);
+}
+.file-tab.selected {
+  background: var(--cds-surface-2);
+  border-color: var(--cds-border);
+  box-shadow: var(--cds-shadow-sm);
+}
+.file-search {
+  border-bottom-color: var(--cds-border);
+}
+.file-entry {
+  border-radius: var(--cds-radius-md);
+}
+.file-entry:hover {
+  background: var(--hover);
+}
+.file-directory button {
+  border-radius: var(--cds-radius-sm);
+  padding-inline: 2px;
+}
+.file-empty {
+  gap: 8px;
+  text-align: center;
+}
+.file-empty svg {
+  color: var(--subtle);
+  opacity: 0.65;
+}
+.file-empty small {
+  max-width: 240px;
+  color: var(--subtle);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+/* Menus and dialogs ------------------------------------------------------- */
+.menu-item {
+  min-height: 32px;
+  border-radius: var(--cds-radius-md);
+}
+.menu-item:hover,
+.menu-item[data-highlighted] {
+  background: var(--hover);
+}
+.modal,
+.search-dialog {
+  border: var(--cds-hairline) solid var(--cds-border);
+}
+.popover-heading {
+  color: var(--subtle);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+
+/* Responsive targets and touch affordances -------------------------------- */
+@media (max-width: 760px) {
+  .topbar .icon-button,
+  .execution-settings-trigger,
+  .delivery-trigger,
+  .sidebar .team-collapse,
+  .sidebar .group-add {
+    width: 40px;
+    height: 40px;
+  }
+  .canvas-heading .text-button {
+    min-height: 40px;
+  }
+}
+@media (pointer: coarse) {
+  .topbar .icon-button,
+  .execution-settings-trigger,
+  .delivery-trigger,
+  .sidebar .team-collapse,
+  .sidebar .group-add {
+    width: 44px;
+    height: 44px;
+  }
+}
+@media (hover: none) {
+  .message-save,
+  .messages .message-user .message-heading {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot,
+  .quiet-dots-track > span,
+  .member-presence.working,
+  .member-state.working > span {
+    animation: none !important;
+  }
+  .graph-card,
+  .file-tab,
+  .nav-row,
+  .team-heading .nav-row .team-mark {
+    transition: none;
+  }
+}

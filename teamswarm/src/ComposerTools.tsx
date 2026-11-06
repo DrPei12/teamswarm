@@ -592,6 +592,8 @@ export const ComposerInput = forwardRef<
       <textarea
         ref={input}
         aria-label={tr("Message")}
+        aria-haspopup="listbox"
+        aria-autocomplete="list"
         aria-controls={open ? "composer-commands" : undefined}
         aria-activedescendant={
           open && choices[index] ? `command-${index}` : undefined

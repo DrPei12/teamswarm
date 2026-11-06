@@ -476,6 +476,9 @@ function ConversationThread({
       <div
         className="member-thread"
         ref={scroller}
+        role="log"
+        tabIndex={0}
+        aria-label={t("Member conversation")}
         onWheel={(event) => {
           inspectingActivity.current = false;
           stopAutoScroll();

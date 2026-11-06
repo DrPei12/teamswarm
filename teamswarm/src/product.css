@@ -604,22 +604,23 @@
 .member-state > span {
   width: 6px;
   height: 6px;
-  background: #a9acb7;
+  background: var(--cds-status-idle);
   border-radius: 50%;
 }
 .member-state.working > span {
-  background: #6b83c1;
-  box-shadow: 0 0 0 4px #6b83c114;
+  background: var(--cds-status-running);
+  box-shadow: 0 0 0 4px
+    color-mix(in srgb, var(--cds-status-running) 8%, transparent);
   animation: working-pulse 2s ease-in-out infinite;
 }
 .member-state.waiting > span {
-  background: #b69a64;
+  background: var(--cds-status-waiting);
 }
 .member-state.complete > span {
-  background: #67917b;
+  background: var(--cds-status-done);
 }
 .member-state.error > span {
-  background: #c77777;
+  background: var(--cds-status-error);
 }
 .member-state.paused > span {
   border-radius: 1px;
@@ -644,12 +645,12 @@
   stroke: var(--graph-selected);
 }
 .react-flow__edge.collaboration-active .react-flow__edge-path {
-  stroke: #8193bc;
+  stroke: var(--cds-status-running);
   stroke-dasharray: 5 12;
   animation: collaboration-flow 1.6s linear infinite;
 }
 .react-flow__edge.branch-edge .react-flow__edge-path {
-  stroke: #949ac6;
+  stroke: color-mix(in srgb, var(--accent) 55%, var(--graph-line));
 }
 .canvas-tools {
   display: flex;
@@ -886,10 +887,10 @@ body:has(.detail-resize-handle[data-dragging]) * {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #a2a7b4;
+  background: var(--cds-status-idle);
 }
 .detail-status.working > span {
-  background: #6b83c1;
+  background: var(--cds-status-running);
 }
 .detail-scroll dl {
   display: grid;
@@ -1248,7 +1249,7 @@ body:has(.detail-resize-handle[data-dragging]) * {
 }
 .form-error {
   font-size: calc(11px * var(--font-scale));
-  color: #b45656;
+  color: var(--danger);
   margin-top: 12px;
 }
 @keyframes collaboration-flow {
@@ -1258,7 +1259,8 @@ body:has(.detail-resize-handle[data-dragging]) * {
 }
 @keyframes working-pulse {
   50% {
-    box-shadow: 0 0 0 5px #6b83c10a;
+    box-shadow: 0 0 0 5px
+      color-mix(in srgb, var(--cds-status-running) 4%, transparent);
   }
 }
 @keyframes detail-in {

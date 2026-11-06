@@ -271,7 +271,10 @@ try {
     .getByRole("button", { name: "Deleted members", exact: true })
     .click();
   await page
-    .getByRole("menuitem", { name: "Temporary member", exact: true })
+    .getByRole("dialog", { name: "Deleted members" })
+    .locator(".deleted-member-row")
+    .filter({ hasText: "Temporary member" })
+    .getByRole("button", { name: "View history", exact: true })
     .click();
   await page.locator(".member-conversation").waitFor();
   assert.equal(await page.locator(".member-composer").count(), 0);

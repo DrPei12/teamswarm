@@ -633,7 +633,7 @@ button.menu-item:hover {
   white-space: nowrap;
 }
 .menu-item.danger {
-  color: #da5757;
+  color: var(--danger);
 }
 .menu-heading {
   font-size: calc(11px * var(--font-scale));
@@ -790,7 +790,7 @@ button.menu-item:hover {
 .form-body input:focus,
 .form-body textarea:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px #696ad817;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 9%, transparent);
 }
 .form-body p {
   font-size: calc(13px * var(--font-scale));
@@ -840,7 +840,7 @@ button.menu-item:hover {
 }
 .danger-button {
   color: #fff;
-  background: #cf4747;
+  background: color-mix(in srgb, var(--danger) 86%, #000);
 }
 .theme-options {
   display: grid;

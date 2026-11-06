@@ -146,11 +146,11 @@
   gap: 6px;
 }
 .connection-ready {
-  color: #458367;
+  color: var(--success);
 }
 .connection-needs-action,
 .form-error {
-  color: #b64f50;
+  color: var(--danger);
 }
 .advanced-settings {
   border-top: 1px solid var(--line);
@@ -194,7 +194,7 @@
   overflow-wrap: anywhere;
 }
 .checkpoint-delete-modal .danger-button {
-  background: var(--danger, #b64f50);
+  background: var(--danger);
 }
 .execution-form small {
   font-family: var(--font-ui);
@@ -441,7 +441,7 @@
   color: var(--secondary);
 }
 .execution-expanded p {
-  color: #b64f50;
+  color: var(--danger);
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
@@ -450,7 +450,7 @@
   margin: 0;
 }
 .has-error .execution-status > svg:first-child {
-  color: #b64f50;
+  color: var(--danger);
 }
 .history-detail {
   min-width: 380px;
@@ -582,7 +582,7 @@
 }
 .replace-definition {
   margin: 10px 0 0 25px;
-  color: #b47534;
+  color: var(--warning);
   font-size: 12px;
 }
 .history-destinations {
@@ -619,7 +619,7 @@
   border: 1px solid var(--line);
   background: var(--panel);
   border-radius: 8px;
-  color: #b64f50;
+  color: var(--danger);
   font-size: 14px;
 }
 .muted {
@@ -654,7 +654,7 @@
 }
 .service-error > svg {
   flex-shrink: 0;
-  color: #b64f50;
+  color: var(--danger);
 }
 .service-error button {
   flex-shrink: 0;
@@ -957,7 +957,7 @@
   align-items: center;
   gap: 6px;
   font-size: calc(13px * var(--font-scale));
-  color: #458367;
+  color: var(--success);
 }
 .resource-list,
 .allocation-list,
@@ -1078,19 +1078,19 @@
   color: var(--secondary);
 }
 .status-badge.available {
-  color: #458367;
-  border-color: #45836755;
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 33%, transparent);
 }
 .status-badge.incompatible,
 .status-badge.not_installed,
 .status-badge.missing_credentials,
 .status-badge.unavailable {
-  color: #b64f50;
-  border-color: #b64f5055;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 33%, transparent);
 }
 .status-badge.stale {
-  color: #9a6b26;
-  border-color: #9a6b2655;
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 33%, transparent);
 }
 .resource-description,
 .resource-observation {
@@ -1119,7 +1119,7 @@
   align-items: center;
   gap: 6px;
   font-size: calc(12px * var(--font-scale));
-  color: #b64f50;
+  color: var(--danger);
 }
 .package-plan li {
   color: var(--secondary);
@@ -1203,8 +1203,8 @@
   color: var(--secondary);
 }
 .scope-tag.task {
-  color: #458367;
-  border-color: #45836755;
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 33%, transparent);
 }
 .allocation-picker {
   display: flex;
@@ -1252,10 +1252,10 @@
   padding: 12px 14px;
 }
 .package-preview.ok {
-  border-color: #45836755;
+  border-color: color-mix(in srgb, var(--success) 33%, transparent);
 }
 .package-preview.invalid {
-  border-color: #b64f5055;
+  border-color: color-mix(in srgb, var(--danger) 33%, transparent);
 }
 .package-preview > p[role="status"] {
   display: flex;

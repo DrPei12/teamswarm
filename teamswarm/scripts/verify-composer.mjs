@@ -189,16 +189,18 @@ try {
       catalogRequests++;
   });
   await page.goto(base + `/#/team/${team.id}/agent`);
-  await page
-    .locator(
-      '.permission-select[title="Permission switching is unavailable for this Harness."]',
-    )
-    .waitFor();
-  assert(
-    await page
-      .getByRole("button", { name: /^Execution permissions:/ })
-      .isDisabled(),
-  );
+  const hostPermissions = page.getByRole("button", {
+    name: "Execution permissions",
+    exact: true,
+  });
+  const permissionLabels = () =>
+    page
+      .getByRole("menuitemradio")
+      .locator(".item-label > span")
+      .allTextContents();
+  await hostPermissions.click();
+  assert.deepEqual(await permissionLabels(), ["Read-only"]);
+  await page.keyboard.press("Escape");
   const modelMenu = () =>
     page.getByRole("button", { name: "Choose model", exact: true }).click();
   await modelMenu();
@@ -237,12 +239,8 @@ try {
   assert.equal(selectedConfig.model, "qwen-plus");
   assert.equal(selectedConfig.protocol, "anthropic-messages");
   assert.equal(selectedConfig.baseUrl, "https://secondary.example/anthropic");
-  await page.getByRole("button", { name: /^Execution permissions:/ }).click();
-  for (const name of ["Request approval", "Automatic review", "Full access"])
-    assert.equal(
-      await page.getByRole("menuitemradio", { name, exact: true }).count(),
-      1,
-    );
+  await hostPermissions.click();
+  assert.deepEqual(await permissionLabels(), ["Read-only", "Full access"]);
   assert.equal(
     await page
       .getByText("Uses this Harness's native settings", { exact: true })
@@ -545,6 +543,7 @@ try {
   await page
     .locator(".composer-surface .image-attachment")
     .waitFor({ state: "detached" });
+  const sentText = await editor.inputValue();
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   const deadline = Date.now() + 12000;
   while (!requests.length && Date.now() < deadline)
@@ -554,6 +553,42 @@ try {
   assert.equal(requests[0].harness, "claude-code");
   assert.equal(requests[0].credentialEnv, "TEST_SECONDARY");
   assert.equal(requests[0].baseUrl, "https://secondary.example/anthropic");
+  const sentMessage = page
+    .getByRole("log", { name: "Conversation" })
+    .locator(".message-user")
+    .last();
+  const actions = sentMessage.getByRole("button", { name: "Message actions" });
+  // Exercise clipboard feedback without altering the user's Windows clipboard.
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text) => {
+          window.copiedMessage = text;
+        },
+      },
+    });
+  });
+  try {
+    await sentMessage.hover();
+    await actions.click();
+    await page.getByRole("menuitem", { name: "Copy message" }).click();
+    await page.getByText("Message copied", { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => window.copiedMessage), sentText);
+    await page.evaluate(() => {
+      navigator.clipboard.writeText = async () => {
+        throw new DOMException("Denied", "NotAllowedError");
+      };
+    });
+    await actions.focus();
+    await actions.press("Enter");
+    await page.getByRole("menuitem", { name: "Copy message" }).click();
+    await page.getByText("Copy failed", { exact: true }).waitFor();
+  } finally {
+    await page.evaluate(() => {
+      delete navigator.clipboard;
+    });
+  }
   const legacyTeam = await request("/product/teams", {
     name: "Legacy catalog regression",
     clientRequestId: randomUUID(),
@@ -808,7 +843,7 @@ try {
     assert.equal(controls.length, 4);
     assert.equal(
       await memberComposer
-        .getByRole("button", { name: /^Execution permissions:/ })
+        .getByRole("button", { name: "Execution permissions", exact: true })
         .count(),
       1,
     );
@@ -844,6 +879,7 @@ try {
           "Reload selected connection",
           "1230/1024/760/390 layout",
           "Resolved configuration reaches local execution fixture",
+          "Message actions copy the exact multiline text and report clipboard denial",
           "Legacy directory independent of current Harness",
           "Team connection isolation",
           "Warm menus: zero repeated requests and stable frame geometry",

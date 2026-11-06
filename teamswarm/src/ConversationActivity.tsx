@@ -1,5 +1,6 @@
 import { memo, useState } from "react";
 import { Disclosure as ActivityBody } from "./Disclosure";
+import { QuietDots } from "./design-system/StatusIndicators";
 import {
   ChevronRight,
   FileCode2,
@@ -280,16 +281,18 @@ export const ConversationActivity = memo(function ConversationActivity({
         onClick={() => setChoice(!open)}
       >
         <span>
-          {running
-            ? t("Working…")
-            : elapsedMs == null
-              ? t("Work activity")
-              : t("Worked for {duration}", {
-                  duration:
-                    seconds >= 60
-                      ? `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-                      : `${seconds}s`,
-                })}
+          {running ? (
+            <QuietDots label={t("Working…")} />
+          ) : elapsedMs == null ? (
+            t("Work activity")
+          ) : (
+            t("Worked for {duration}", {
+              duration:
+                seconds >= 60
+                  ? `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+                  : `${seconds}s`,
+            })
+          )}
         </span>
         <ChevronRight size={14} className={open ? "expanded" : ""} />
       </button>

@@ -45,6 +45,7 @@ import {
   Package,
   Archive,
   Paperclip,
+  Copy,
 } from "lucide-react";
 import { ComposerInput, RuntimeControls } from "./ComposerTools";
 import { ComposerChin, ComposerSurface } from "./design-system/ComposerSurface";
@@ -502,7 +503,9 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
         requestAnimationFrame(() =>
           thread.current?.scrollTo({
             top: thread.current.scrollHeight,
-            behavior: "smooth",
+            behavior: matchMedia("(prefers-reduced-motion: reduce)").matches
+              ? "instant"
+              : "smooth",
           }),
         );
       }
@@ -1310,7 +1313,13 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                   }}
                 >
                   {chat && (
-                    <div className="messages" aria-label={tr("Conversation")}>
+                    <div
+                      className="messages"
+                      role="log"
+                      aria-live="polite"
+                      aria-relevant="additions text"
+                      aria-label={tr("Conversation")}
+                    >
                       <ApprovalRequests
                         teamId={team.id}
                         workspace={workspace}
@@ -1401,13 +1410,27 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                               align="end"
                               trigger={
                                 <IconButton
-                                  label={tr("Save definition")}
+                                  label={tr("Message actions")}
                                   className="message-save"
                                 >
-                                  <BookmarkPlus size={14 * ICON_SCALE} />
+                                  <MoreHorizontal size={16 * ICON_SCALE} />
                                 </IconButton>
                               }
                             >
+                              <MenuItem
+                                icon={<Copy size={14 * ICON_SCALE} />}
+                                onSelect={async () => {
+                                  try {
+                                    await navigator.clipboard.writeText(m.text);
+                                    setNotice(tr("Message copied"));
+                                  } catch {
+                                    setNotice(tr("Copy failed"));
+                                  }
+                                }}
+                              >
+                                {tr("Copy message")}
+                              </MenuItem>
+                              <Separator />
                               <MenuItem
                                 onSelect={() => {
                                   setInsightSource(m);
@@ -1847,6 +1870,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                       key={`${team.id}:${branchId}`}
                       teamId={team.id}
                       branchId={branchId}
+                      projectName={team.name}
                       open={filesOpen}
                       onClose={() => setFilesOpen(false)}
                     />

@@ -48,11 +48,13 @@ const PdfDocument = lazy(() => import("./PdfDocument"));
 export function FileWorkspace({
   teamId,
   branchId,
+  projectName,
   open,
   onClose,
 }: {
   teamId: string;
   branchId: string;
+  projectName?: string;
   open: boolean;
   onClose: () => void;
 }) {
@@ -441,13 +443,14 @@ export function FileWorkspace({
           </div>
           <nav className="file-directory" aria-label={t("File path")}>
             <button
+              title={root || undefined}
               onClick={() => {
                 setDirectory("");
                 setSearch("");
               }}
             >
               <FolderOpen size={14} />
-              {root || t("Project")}
+              {projectName || root || t("Project")}
             </button>
             {directory
               .split("/")
@@ -509,7 +512,15 @@ export function FileWorkspace({
                 {loading ? (
                   <LoaderCircle size={18} className="spinner" />
                 ) : (
-                  t(search ? "No matching files" : "No files")
+                  <>
+                    <FolderOpen size={22} />
+                    <span>{t(search ? "No matching files" : "No files")}</span>
+                    {!search && (
+                      <small>
+                        {t("Files shared by the team appear here.")}
+                      </small>
+                    )}
+                  </>
                 )}
               </div>
             )}
