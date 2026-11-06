@@ -71,8 +71,8 @@ test("event streaming drains a 1500-event burst in order and resumes from the la
   } finally {stream.abort();await service.close();server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));rmSync(root,{recursive:true,force:true});}
 });
 
-test("resource admission accounts for outstanding starts and per-attempt process ownership without an implicit reserve",async()=>{
-  const root=mkdtempSync(path.join(tmpdir(),"teamswarm-resource-budget-"));
+test("process ownership remains tracked while memory observations do not restrict execution",async()=>{
+  const root=mkdtempSync(path.join(tmpdir(),"teamswarm-process-observation-"));
   const service=createApp({dataDir:root,harnesses:[]}),MiB=1024*1024;
   let sample={totalPhysical:4096*MiB,availablePhysical:1100*MiB,availableCommit:700*MiB,processes:[] as any[]};
   let currentPhysical=sample.availablePhysical;
@@ -80,10 +80,9 @@ test("resource admission accounts for outstanding starts and per-attempt process
   try {
     await resources.refresh();
     assert.equal(resources.canStart("codex",false),true);resources.reserve("first","codex");
-    assert.equal(resources.canStart("codex",false),false);assert.equal(resources.canStart("codex",true),true);
+    assert.equal(resources.canStart("codex",false),true);assert.equal(resources.canStart("codex",true),true);
     resources.finish("first");assert.equal(resources.canStart("codex",false),true);
     currentPhysical=600*MiB;assert.equal(resources.canStart("codex",false),true);
-    currentPhysical=resources.admission("codex",false).cost.physical-1;assert.equal(resources.canStart("codex",false),false);
     currentPhysical=sample.availablePhysical;
     const team=service.store.createTeam("Owner","");
     const work={id:"first",teamId:team.id,memberId:"reader"} as Work;
@@ -93,8 +92,8 @@ test("resource admission accounts for outstanding starts and per-attempt process
     resources.observe(work,attempt,{type:"resource.released",data:{id:"group",pid:123}});
     assert.equal(resources.state(team.id).groups[0].state,"released");
     await resources.refresh(); // Finish the acquisition-triggered sample before changing the fixture.
-    sample={...sample,availableCommit:resources.admission("codex",true).cost.commit-1};await resources.refresh();
-    assert.equal(resources.canStart("codex",true),false);
+    sample={...sample,availableCommit:200*MiB};await resources.refresh();
+    assert.equal(resources.canStart("codex",true),true);
   } finally {await resources.close();await harness.close();await service.close();rmSync(root,{recursive:true,force:true});}
 });
 
