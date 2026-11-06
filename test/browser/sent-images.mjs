@@ -85,7 +85,7 @@ try {
     assert(res.ok, await res.clone().text());
     return res.json();
   };
-  const png = readFileSync("apps/desktop/icon.png"),
+  const png = readFileSync("teamswarm/branding/logo-128.png"),
     first = await upload("first.png", "image/png", png),
     doc = await upload(
       "notes.txt",
