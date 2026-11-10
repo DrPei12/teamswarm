@@ -3,7 +3,7 @@ import type { TranscriptItem } from "@team/contracts/product";
 type RecordValue = Record<string, unknown>;
 export type ActivityGroup = {
   id: string;
-  kind: "context" | "delegation" | "item";
+  kind: "context" | "delegation" | "commands" | "item";
   items: TranscriptItem[];
 };
 const contextTools = new Set([
@@ -84,6 +84,9 @@ export function groupActivity(items: TranscriptItem[]): ActivityGroup[] {
   const groups: ActivityGroup[] = [];
   let context: ActivityGroup | undefined;
   let delegation: ActivityGroup | undefined;
+  // Consecutive commands share one collapsible row. Context reads and member
+  // assignments already merge into their own rows, so they do not split a run.
+  let commands: ActivityGroup | undefined;
   for (const item of items) {
     // Older transcripts emitted this placeholder on every turn, including resumes.
     if (
@@ -105,7 +108,16 @@ export function groupActivity(items: TranscriptItem[]): ActivityGroup[] {
         groups.push(delegation);
       }
       delegation.items.push(item);
-    } else groups.push({ id: item.id, kind: "item", items: [item] });
+    } else if (item.kind === "command") {
+      if (!commands) {
+        commands = { id: item.id, kind: "commands", items: [] };
+        groups.push(commands);
+      }
+      commands.items.push(item);
+    } else {
+      commands = undefined;
+      groups.push({ id: item.id, kind: "item", items: [item] });
+    }
   }
   return groups;
 }
@@ -154,4 +166,27 @@ export function delegationRows(
     row.assignments.push(item);
   }
   return rows;
+}
+
+const unsettled = (item: TranscriptItem) =>
+  item.status === "running" ||
+  item.status === "failed" ||
+  item.status === "interrupted" ||
+  (item.exitCode != null && item.exitCode !== 0);
+
+/** Commands that stay visible while their group is collapsed: anything still
+ * running or that did not succeed. Successful history stays behind the count. */
+export function commandSummary(items: TranscriptItem[]) {
+  const failed = items.filter(
+    (i) =>
+      i.status === "failed" ||
+      i.status === "interrupted" ||
+      (i.exitCode != null && i.exitCode !== 0),
+  ).length;
+  return {
+    total: items.length,
+    failed,
+    running: items.some((i) => i.status === "running"),
+    visible: items.filter(unsettled),
+  };
 }

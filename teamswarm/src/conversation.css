@@ -404,6 +404,14 @@
 .activity-item.failed .activity-toggle {
   color: var(--danger);
 }
+.activity-command-list {
+  margin-left: 7px;
+  padding-left: 15px;
+  border-left: 1px solid var(--line);
+}
+.activity-command-list > .activity-item {
+  margin: 2px 0;
+}
 .activity-body {
   overflow: hidden;
   margin-left: 23px;

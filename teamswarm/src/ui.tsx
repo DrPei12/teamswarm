@@ -191,6 +191,8 @@ export function Menu({
   side = "bottom",
   className = "",
   label,
+  open,
+  onOpenChange,
 }: {
   trigger: ReactNode;
   children: ReactNode;
@@ -198,10 +200,17 @@ export function Menu({
   side?: "top" | "right" | "bottom" | "left";
   className?: string;
   label?: string;
+  /** Controlled state, for menus that also open from a context click. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const { t: tr } = useI18n();
   return (
-    <DropdownMenu.Root modal={false}>
+    <DropdownMenu.Root
+      modal={false}
+      {...(open === undefined ? {} : { open })}
+      onOpenChange={onOpenChange}
+    >
       <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <section aria-label={label || tr("Actions")}>

@@ -590,7 +590,13 @@ export class TeamRuntime {
     this.ticking = true;
     try {
       const changes = this.store.changes.pending();
+      // A removed team keeps its records but never schedules or dispatches again.
+      const live = new Set(this.store.teams.listTeams().map((t) => t.id));
       for (const change of changes) {
+        if (!live.has(change.teamId)) {
+          this.store.changes.acknowledge(change.teamId, change.revision);
+          continue;
+        }
         const team = { id: change.teamId };
         this.correspondence.schedule(team.id);
         this.communication.schedule(team.id, (work) =>
@@ -610,6 +616,7 @@ export class TeamRuntime {
         this.store.changes.acknowledge(team.id, change.revision);
       }
       const all = this.store.workQuery(undefined, { statuses: ["queued", "running", "stopping", "recovery_required"] })
+        .filter((w) => live.has(w.teamId))
         .sort(
           (a, b) =>
             Number(b.title === "Host") - Number(a.title === "Host") ||

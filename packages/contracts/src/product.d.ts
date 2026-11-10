@@ -242,6 +242,8 @@ export type Team = {
   runtime?: RuntimeConfig;
   context?: ContextWindowUsage;
   configured?: boolean;
+  /** Hidden from the working list; restorable from the workspace menu. */
+  archived?: boolean;
   lastChatId?: string;
   mainChatId?: string;
   canvasViewports?: Record<string, { x: number; y: number; zoom: number }>;

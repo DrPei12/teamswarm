@@ -389,6 +389,7 @@ export class ProductStore {
         name: team.name,
         color: prefs.color ?? "#7774cf",
         configured: !!settings,
+        ...(team.archivedAt ? { archived: true } : {}),
         runtime: {
           harness:
             harnessManifest(hostConfig?.harness ?? "")?.name ??
@@ -1386,6 +1387,59 @@ export function productRoutes(runtime: TeamRuntime): Router {
     );
     res.status(201).json(result);
   });
+  // Work that is still dispatched or queued belongs to a live team. Archiving
+  // waits for it; removal stops what has not started and refuses live turns.
+  const teamWorks = (teamId: string, statuses: string[]) =>
+    runtime.store.list<Work>("works", teamId).filter(w => statuses.includes(w.status));
+  const requireAnotherTeam = (teamId: string) => {
+    if (!runtime.store.teams.listTeams().some(t => t.id !== teamId && !t.archivedAt))
+      throw conflict("last_team", "Keep at least one active team. Create another team first.");
+  };
+  router.patch("/product/teams/:teamId", (req, res) => {
+    const teamId = parse(key, req.params.teamId);
+    const input = parse(
+      z.object({ name: z.string().trim().min(1).max(80).optional(), archived: z.boolean().optional() }).strict(),
+      req.body,
+    );
+    const team = runtime.store.teams.getTeam(teamId);
+    if (!team) throw notFound();
+    if (input.archived === true && !team.archivedAt) {
+      requireAnotherTeam(teamId);
+      if (teamWorks(teamId, ["queued", "waiting", "running", "stopping"]).length)
+        throw conflict("team_busy", "Finish or stop this team's current work before archiving it.");
+    }
+    runtime.store.transaction(() => {
+      if (input.name !== undefined && input.name !== team.name) runtime.store.teams.renameTeam(teamId, input.name);
+      if (input.archived !== undefined && input.archived !== !!team.archivedAt)
+        runtime.store.teams.setTeamArchived(teamId, input.archived);
+    });
+    const saved = runtime.store.teams.getTeam(teamId)!;
+    res.json({ id: saved.id, name: saved.name, archived: !!saved.archivedAt });
+  });
+  router.delete("/product/teams/:teamId", async (req, res) => {
+    const teamId = parse(key, req.params.teamId);
+    if (!runtime.store.teams.getTeam(teamId)) throw notFound();
+    requireAnotherTeam(teamId);
+    if (teamWorks(teamId, ["running", "stopping"]).length)
+      throw conflict("team_busy", "Stop this team's running work before deleting it.");
+    for (const work of teamWorks(teamId, ["queued", "waiting"]))
+      await runtime.stop(teamId, work.id, "Team was deleted.");
+    if (teamWorks(teamId, ["queued", "waiting", "running", "stopping"]).length)
+      throw conflict("team_busy", "Stop this team's running work before deleting it.");
+    // Work left waiting for recovery would otherwise keep occupying its member and workspace.
+    runtime.store.transaction(() => {
+      for (const work of teamWorks(teamId, ["recovery_required"]))
+        runtime.store.setStatus(work, "interrupted", "Team was deleted.");
+    });
+    runtime.memberPermissions.list(teamId).forEach(request => runtime.memberPermissions.cancel(teamId, request.memberId));
+    runtime.store.teams.removeTeam(teamId);
+    product.update((p) => {
+      delete p.teams[teamId];
+      for (const id of Object.keys(p.drafts)) if (id === `new:${teamId}`) delete p.drafts[id];
+      p.skills = p.skills.filter(skill => skill.teamId !== teamId);
+    });
+    res.json({ id: teamId, deleted: true });
+  });
   router.post("/product/conversations", (req, res) => {
     const input = parse(
       z
@@ -1495,6 +1549,8 @@ export function productRoutes(runtime: TeamRuntime): Router {
         else p.drafts[id] = d;
       }
       for (const [id, values] of Object.entries(input.teams ?? {})) {
+        // Another window may still hold preferences for a team removed meanwhile.
+        if (runtime.store.teams.wasRemoved(id)) continue;
         if (!runtime.store.teams.getTeam(id)) throw notFound();
         p.teams[id] = {
           ...p.teams[id],
@@ -1756,6 +1812,8 @@ export function productRoutes(runtime: TeamRuntime): Router {
           workspace: z.string().trim().min(1).max(4096).optional(),
           config: executionConfig,
           maxConcurrent: z.number().int().positive().optional(),
+          // Same bounds as the runtime schema; omitted keeps the saved limit.
+          timeoutSeconds: z.number().int().min(10).max(3600).optional(),
         })
         .strict(),
       req.body,
@@ -1775,6 +1833,9 @@ export function productRoutes(runtime: TeamRuntime): Router {
           ...settings,
           workspace,
           config: input.config,
+          ...(input.timeoutSeconds !== undefined
+            ? { timeoutSeconds: input.timeoutSeconds }
+            : {}),
         },
         input.expectedVersion,
       ),

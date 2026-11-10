@@ -34,6 +34,24 @@
 .team-collapse:hover {
   background: var(--hover);
 }
+/* Team actions stay out of the way until the row is pointed at or focused. */
+.team-more {
+  opacity: 0;
+}
+.team-heading:hover .team-more,
+.team-heading:focus-within .team-more,
+.team-more[data-state="open"] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .team-more {
+    opacity: 1;
+  }
+}
+.archived-teams .nav-row {
+  width: 100%;
+  color: var(--secondary);
+}
 .team-views {
   margin: 6px 0 20px 10px;
   padding-left: 8px;

@@ -559,6 +559,23 @@ class ProductClient {
     inputStorage.removeItem(key);
     return result;
   }
+  async updateTeam(
+    teamId: string,
+    change: { name?: string; archived?: boolean },
+  ) {
+    return this.command<{ id: string; name: string; archived: boolean }>(
+      `/product/teams/${encodeURIComponent(teamId)}`,
+      change,
+      "PATCH",
+    );
+  }
+  async deleteTeam(teamId: string) {
+    return this.command<{ id: string; deleted: true }>(
+      `/product/teams/${encodeURIComponent(teamId)}`,
+      {},
+      "DELETE",
+    );
+  }
   async send(teamId: string, chatId: string | undefined, draft: Draft) {
     await this.flush();
     const signature = JSON.stringify({ teamId, chatId, draft });
@@ -1094,6 +1111,7 @@ class ProductClient {
         expectedVersion: settings.version,
         workspace: settings.workspace,
         config: settings.config,
+        timeoutSeconds: settings.timeoutSeconds,
       },
       "PUT",
     );

@@ -41,6 +41,8 @@ import {
   BookmarkPlus,
   Package,
   Archive,
+  ArchiveRestore,
+  Trash2,
   Paperclip,
   Copy,
 } from "lucide-react";
@@ -85,6 +87,7 @@ import {
   type Attachment,
   type DefinitionKind,
   type Message,
+  type Team,
 } from "./store";
 
 type Screen =
@@ -210,6 +213,10 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [historyLoadError, setHistoryLoadError] = useState("");
   const [rename, setRename] = useState<Chat | null>(null);
+  const [teamMenu, setTeamMenu] = useState<string | null>(null);
+  const [teamRename, setTeamRename] = useState<Team | null>(null);
+  const [teamDelete, setTeamDelete] = useState<Team | null>(null);
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [searchIndex, setSearchIndex] = useState(0);
   const editor = useRef<HTMLTextAreaElement>(null);
@@ -247,8 +254,13 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   };
   const currentState = useRef(workspace);
   currentState.current = workspace;
+  // Archived teams keep their records but leave the working list.
+  const activeTeams = workspace.teams.filter((t) => !t.archived);
+  const archivedTeams = workspace.teams.filter((t) => t.archived);
   const team =
-    workspace.teams.find((t) => t.id === route.teamId) || workspace.teams[0];
+    activeTeams.find((t) => t.id === route.teamId) ||
+    activeTeams[0] ||
+    workspace.teams[0];
   const view = route.view || "host";
   const teamDeliveries = workspace.deliveries
     .filter((d) => d.teamId === team.id)
@@ -570,6 +582,37 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     const target = workspace.teams.find((t) => t.id === teamId);
     navigate({ teamId, chatId: target?.mainChatId, view: "host" });
   };
+  const teamCommand = async (run: () => Promise<unknown>, done?: string) => {
+    if (busy) return false;
+    setBusy(true);
+    try {
+      await run();
+      if (done) setNotice(done);
+      return true;
+    } catch (error) {
+      setNotice((error as Error).message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  /** Leave a team that is about to disappear from the working list. */
+  const leaveTeam = (teamId: string) => {
+    if (team.id !== teamId) return;
+    const next = activeTeams.find((t) => t.id !== teamId);
+    if (next) openHost(next.id);
+  };
+  const archiveTeam = async (target: Team, archived: boolean) => {
+    if (
+      await teamCommand(
+        () => product.updateTeam(target.id, { archived }),
+        archived ? "Team archived" : "Team restored",
+      )
+    ) {
+      if (archived) leaveTeam(target.id);
+      else openHost(target.id);
+    }
+  };
   const addFiles = async (files: File[]) => {
     if (!files.length) return;
     const key = draftKey;
@@ -616,20 +659,22 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     />
   );
   const searchResults = [
-    ...workspace.teams.map((t) => ({
+    ...activeTeams.map((t) => ({
       id: t.id,
       label: t.name,
       detail: tr("Team"),
       icon: <Hash size={15 * ICON_SCALE} />,
       run: () => navigate({ teamId: t.id }),
     })),
-    ...workspace.chats.map((c) => ({
-      id: c.id,
-      label: c.title,
-      detail: `${workspace.teams.find((t) => t.id === c.teamId)?.name || tr("Chat")}${c.archived ? ` · ${tr("Archived")}` : ""}`,
-      icon: <Icon name="agent" />,
-      run: () => navigate({ teamId: c.teamId, chatId: c.id }),
-    })),
+    ...workspace.chats
+      .filter((c) => activeTeams.some((t) => t.id === c.teamId))
+      .map((c) => ({
+        id: c.id,
+        label: c.title,
+        detail: `${workspace.teams.find((t) => t.id === c.teamId)?.name || tr("Chat")}${c.archived ? ` · ${tr("Archived")}` : ""}`,
+        icon: <Icon name="agent" />,
+        run: () => navigate({ teamId: c.teamId, chatId: c.id }),
+      })),
   ].filter((r) =>
     `${r.label} ${r.detail}`.toLowerCase().includes(search.toLowerCase()),
   );
@@ -771,12 +816,18 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 </IconButton>
               </div>
               <Disclosure open={!collapsed}>
-                {workspace.teams.map((t) => (
+                {activeTeams.map((t) => (
                   <div
                     className={`team-block ${team.id === t.id ? "is-current-team" : ""}`}
                     key={t.id}
                   >
-                    <div className="team-heading">
+                    <div
+                      className="team-heading"
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        setTeamMenu(t.id);
+                      }}
+                    >
                       <button
                         className="nav-row"
                         onClick={() => openHost(t.id)}
@@ -786,6 +837,45 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                         </span>
                         <span>{t.name}</span>
                       </button>
+                      <Menu
+                        align="end"
+                        label={tr("Team options")}
+                        open={teamMenu === t.id}
+                        onOpenChange={(open) => setTeamMenu(open ? t.id : null)}
+                        trigger={
+                          <button
+                            className="team-collapse team-more"
+                            aria-label={tr("Team options for {name}", {
+                              name: t.name,
+                            })}
+                          >
+                            <MoreHorizontal size={14 * ICON_SCALE} />
+                          </button>
+                        }
+                      >
+                        <MenuItem
+                          icon={<Pencil size={14 * ICON_SCALE} />}
+                          onSelect={() => setTeamRename(t)}
+                        >
+                          {tr("Rename")}
+                        </MenuItem>
+                        <MenuItem
+                          icon={<Archive size={14 * ICON_SCALE} />}
+                          disabled={activeTeams.length < 2}
+                          onSelect={() => void archiveTeam(t, true)}
+                        >
+                          {tr("Archive team")}
+                        </MenuItem>
+                        <Separator />
+                        <MenuItem
+                          danger
+                          icon={<Trash2 size={14 * ICON_SCALE} />}
+                          disabled={activeTeams.length < 2}
+                          onSelect={() => setTeamDelete(t)}
+                        >
+                          {tr("Delete team")}
+                        </MenuItem>
+                      </Menu>
                       <button
                         className="team-collapse"
                         aria-label={tr("Toggle {name}", { name: t.name })}
@@ -849,6 +939,59 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 ))}
               </Disclosure>
             </section>
+            {!!archivedTeams.length && (
+              <section className="nav-group archived-teams">
+                <div className="group-title">
+                  <button
+                    className="group-heading"
+                    aria-expanded={archivedOpen}
+                    onClick={() => setArchivedOpen(!archivedOpen)}
+                  >
+                    {tr("Archived teams")} · {archivedTeams.length}
+                    <ChevronDown
+                      className={archivedOpen ? "" : "rotate-left"}
+                      size={11 * ICON_SCALE}
+                    />
+                  </button>
+                </div>
+                <Disclosure open={archivedOpen}>
+                  {archivedTeams.map((t) => (
+                    <Menu
+                      key={t.id}
+                      label={tr("Team options")}
+                      trigger={
+                        <button
+                          className="nav-row"
+                          aria-label={tr("Team options for {name}", {
+                            name: t.name,
+                          })}
+                        >
+                          <span className="team-mark">
+                            <Archive size={14 * ICON_SCALE} />
+                          </span>
+                          <span>{t.name}</span>
+                        </button>
+                      }
+                    >
+                      <MenuItem
+                        icon={<ArchiveRestore size={14 * ICON_SCALE} />}
+                        onSelect={() => void archiveTeam(t, false)}
+                      >
+                        {tr("Restore team")}
+                      </MenuItem>
+                      <Separator />
+                      <MenuItem
+                        danger
+                        icon={<Trash2 size={14 * ICON_SCALE} />}
+                        onSelect={() => setTeamDelete(t)}
+                      >
+                        {tr("Delete team")}
+                      </MenuItem>
+                    </Menu>
+                  ))}
+                </Disclosure>
+              </section>
+            )}
             {!!teamChats.length && (
               <section className="recent-chats">
                 <div className="group-heading">
@@ -2334,6 +2477,97 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
               <kbd>{key}</kbd>
             </div>
           ))}
+        </div>
+      </Modal>
+      <Modal
+        open={!!teamRename}
+        onOpenChange={(open) => !open && !busy && setTeamRename(null)}
+        title={tr("Rename team")}
+      >
+        <form
+          key={teamRename?.id}
+          onSubmit={async (e: FormEvent<HTMLFormElement>) => {
+            e.preventDefault();
+            const name = String(
+              new FormData(e.currentTarget).get("name"),
+            ).trim();
+            const target = teamRename;
+            if (!name || !target) return;
+            if (
+              name === target.name ||
+              (await teamCommand(() => product.updateTeam(target.id, { name })))
+            )
+              setTeamRename(null);
+          }}
+        >
+          <div className="form-body">
+            <label>
+              {tr("Team name")}
+              <input
+                name="name"
+                required
+                maxLength={60}
+                autoComplete="off"
+                defaultValue={teamRename?.name}
+              />
+            </label>
+          </div>
+          <div className="form-footer">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={busy}
+              onClick={() => setTeamRename(null)}
+            >
+              {tr("Cancel")}
+            </button>
+            <button className="primary-button" disabled={busy}>
+              {tr("Save")}
+            </button>
+          </div>
+        </form>
+      </Modal>
+      <Modal
+        open={!!teamDelete}
+        onOpenChange={(open) => !open && !busy && setTeamDelete(null)}
+        title={tr("Delete team")}
+        className="checkpoint-delete-modal"
+      >
+        <div className="form-body">
+          <p>{tr("Delete “{title}”?", { title: teamDelete?.name ?? "" })}</p>
+          <p>
+            {tr(
+              "The team, its conversations and its history leave TeamSwarm and cannot be restored from the app. Files in the project folder are kept. Archive the team instead to keep it available.",
+            )}
+          </p>
+        </div>
+        <div className="form-footer">
+          <button
+            className="secondary-button"
+            disabled={busy}
+            onClick={() => setTeamDelete(null)}
+          >
+            {tr("Cancel")}
+          </button>
+          <button
+            className="primary-button danger-button"
+            disabled={busy}
+            onClick={async () => {
+              const target = teamDelete;
+              if (!target) return;
+              if (
+                await teamCommand(
+                  () => product.deleteTeam(target.id),
+                  "Team deleted",
+                )
+              ) {
+                setTeamDelete(null);
+                leaveTeam(target.id);
+              }
+            }}
+          >
+            {tr("Delete team")}
+          </button>
         </div>
       </Modal>
       <Modal

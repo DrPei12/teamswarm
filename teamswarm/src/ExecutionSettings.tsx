@@ -775,6 +775,29 @@ function ManualExecutionSettings({
                 />
               </label>
             </div>
+            <label>
+              {t("Time limit per turn (minutes)")}
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={60}
+                step={1}
+                required
+                disabled={busy}
+                value={Math.max(1, Math.round(settings.timeoutSeconds / 60))}
+                onChange={(e) => {
+                  const minutes = Math.round(Number(e.target.value));
+                  if (Number.isFinite(minutes) && minutes >= 1 && minutes <= 60)
+                    setSettings({ ...settings, timeoutSeconds: minutes * 60 });
+                }}
+              />
+              <small>
+                {t(
+                  "A turn that runs longer is stopped and kept as interrupted. Applies to new requests; 1–60 minutes.",
+                )}
+              </small>
+            </label>
             {!subscriptionMode && !sharedAccount && (
               <div
                 className="advanced-settings"

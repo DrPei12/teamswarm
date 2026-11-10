@@ -12,6 +12,8 @@ export interface TeamSettings {
 export interface Team {
   id: string; name: string; purpose: string; isExample: boolean;
   createdAt: string; updatedAt: string; settings: TeamSettings;
+  /** Archived teams stay intact but leave the working list. */
+  archivedAt?: string | null;
 }
 export interface Conversation {
   id: string; teamId: string; title: string; projectId: string | null;

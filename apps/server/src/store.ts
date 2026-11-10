@@ -78,6 +78,7 @@ function mapTeam(row: Row): Team {
     createdAt: text(row, 'created_at'),
     updatedAt: text(row, 'updated_at'),
     settings: mapSettings(row),
+    archivedAt: nullableText(row, 'archived_at'),
   };
 }
 
@@ -244,6 +245,11 @@ export class TeamStore {
       CREATE INDEX IF NOT EXISTS activities_team_created
         ON activities(team_id, created_at DESC);
     `);
+    // A removed team keeps its rows so references stay valid, but every read
+    // below treats it as absent. Archived teams remain readable.
+    const columns = new Set(this.all('PRAGMA table_info(teams)').map(row => String(row.name)));
+    if (!columns.has('archived_at')) this.db.exec('ALTER TABLE teams ADD COLUMN archived_at TEXT');
+    if (!columns.has('deleted_at')) this.db.exec('ALTER TABLE teams ADD COLUMN deleted_at TEXT');
   }
 
   private all(sql: string, ...params: SqlParameter[]): Row[] {
@@ -300,7 +306,7 @@ export class TeamStore {
   }
 
   private teamRow(teamId: string): Row | undefined {
-    return this.one('SELECT * FROM teams WHERE id = ?', teamId);
+    return this.one('SELECT * FROM teams WHERE id = ? AND deleted_at IS NULL', teamId);
   }
 
   private projectRow(teamId: string, projectId: string): Row | undefined {
@@ -316,7 +322,33 @@ export class TeamStore {
   }
 
   listTeams(): Team[] {
-    return this.all('SELECT * FROM teams ORDER BY created_at ASC').map(mapTeam);
+    return this.all('SELECT * FROM teams WHERE deleted_at IS NULL ORDER BY created_at ASC').map(mapTeam);
+  }
+
+  renameTeam(teamId: string, name: string): Team | undefined {
+    if (!this.teamRow(teamId)) return undefined;
+    this.run('UPDATE teams SET name = ?, updated_at = ? WHERE id = ?', name, now(), teamId);
+    return this.getTeam(teamId);
+  }
+
+  setTeamArchived(teamId: string, archived: boolean): Team | undefined {
+    if (!this.teamRow(teamId)) return undefined;
+    const timestamp = now();
+    this.run('UPDATE teams SET archived_at = ?, updated_at = ? WHERE id = ?', archived ? timestamp : null, timestamp, teamId);
+    return this.getTeam(teamId);
+  }
+
+  /** True only for a team that existed and was removed, so late writes can be dropped. */
+  wasRemoved(teamId: string): boolean {
+    return !!this.one('SELECT id FROM teams WHERE id = ? AND deleted_at IS NOT NULL', teamId);
+  }
+
+  /** Remove a team from every listing. Its records and project files stay on disk. */
+  removeTeam(teamId: string): boolean {
+    if (!this.teamRow(teamId)) return false;
+    const timestamp = now();
+    this.run('UPDATE teams SET deleted_at = ?, updated_at = ? WHERE id = ?', timestamp, timestamp, teamId);
+    return true;
   }
 
   getTeam(teamId: string): Team | undefined {

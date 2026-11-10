@@ -18,6 +18,7 @@ import {
   delegationRows,
   toolValue,
   canExpandActivity,
+  commandSummary,
   field,
   type ActivityGroup,
 } from "./activityPresentation.ts";
@@ -256,6 +257,49 @@ const ActivityItem = memo(function ActivityItem({
   );
 });
 
+/** One row for a run of commands. Successful commands stay behind the count;
+ * running and unsuccessful ones remain visible without expanding. */
+function CommandGroup({ group }: { group: ActivityGroup }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const summary = commandSummary(group.items);
+  const shown = open ? group.items : summary.visible;
+  return (
+    <div
+      className={`activity-item activity-commands ${summary.running ? "running" : ""}`}
+    >
+      <button
+        className="activity-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        <Terminal size={15} />
+        <span>
+          {t(
+            summary.running
+              ? "Running commands · {count}"
+              : "Ran {count} commands",
+            { count: summary.total },
+          )}
+        </span>
+        <ChevronRight size={13} className={open ? "expanded" : ""} />
+        {summary.failed > 0 && (
+          <small>
+            {t("{count} did not succeed", { count: summary.failed })}
+          </small>
+        )}
+      </button>
+      {shown.length > 0 && (
+        <div className="activity-command-list">
+          {shown.map((item) => (
+            <ActivityItem item={item} key={item.id} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const ConversationActivity = memo(function ConversationActivity({
   items,
   running = false,
@@ -298,8 +342,11 @@ export const ConversationActivity = memo(function ConversationActivity({
       </button>
       <ActivityBody open={open} className="activity-items">
         {groups.map((group) =>
-          group.kind === "item" ? (
+          group.kind === "item" ||
+          (group.kind === "commands" && group.items.length === 1) ? (
             <ActivityItem item={group.items[0]} key={group.id} />
+          ) : group.kind === "commands" ? (
+            <CommandGroup group={group} key={group.id} />
           ) : (
             <GroupedActivity group={group} members={members} key={group.id} />
           ),

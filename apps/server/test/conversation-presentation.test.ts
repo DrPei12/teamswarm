@@ -3,6 +3,7 @@ import { test } from "node:test";
 import type { TranscriptItem } from "@team/contracts/product";
 import {
   groupActivity,
+  commandSummary,
   delegationRows,
   toolValue,
 } from "../../../teamswarm/src/activityPresentation.js";
@@ -130,4 +131,37 @@ test("effort choices follow the current model capability and accept future provi
     executionConfig.safeParse({ effort: "invalid\nvalue" }).success,
     false,
   );
+});
+
+test("consecutive commands fold into one row that keeps running and unsuccessful commands visible", () => {
+  const command = (
+    id: string,
+    status: TranscriptItem["status"] = "completed",
+    exitCode?: number,
+  ): TranscriptItem => ({ id, kind: "command", text: `node ${id}.js`, status, exitCode });
+  const items = [
+    command("a"),
+    command("b", "completed", 1),
+    tool("read", "team_read_file"),
+    command("c", "failed"),
+    command("d", "running"),
+    { id: "note", kind: "message", text: "Progress", status: "completed" } as TranscriptItem,
+    command("e"),
+  ];
+  const groups = groupActivity(items);
+  // A context read merges into its own row and does not split the command run.
+  assert.deepEqual(groups.map((g) => [g.kind, g.items.length]), [
+    ["commands", 4],
+    ["context", 1],
+    ["item", 1],
+    ["commands", 1],
+  ]);
+  assert.equal(groups.flatMap((g) => g.items).length, items.length);
+  const summary = commandSummary(groups[0].items);
+  assert.deepEqual(
+    [summary.total, summary.failed, summary.running],
+    [4, 2, true],
+  );
+  assert.deepEqual(summary.visible.map((i) => i.id), ["b", "c", "d"]);
+  assert.deepEqual(commandSummary(groups[3].items).visible, []);
 });
