@@ -119,6 +119,7 @@ const toolLabels: Record<string, string> = {
   team_set_member_permissions: "Manage member permissions",
   team_pending_permissions: "Check pending approvals",
   team_answer_permission: "Answer permission request",
+  AskUserQuestion: "Asked the user",
   team_write_file: "Wrote file",
   team_edit_file: "Edited file",
   team_read_work: "Read work details",

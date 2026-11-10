@@ -16,6 +16,7 @@ import { CodexHarness } from "./harness/codex.js";
 import { RuntimeResources, type ResourceSampling } from "./resources.js";
 import { MemberWorkspaces } from "./member-workspaces.js";
 import { NativePermissions } from "./native-permissions.js";
+import { NativeQuestions } from "./native-questions.js";
 import { validateNativePermissions } from "./harness/permissions.js";
 import { rebootConfirmsTermination, systemBootTime } from "./harness/native-recovery.js";
 import { RuntimeStore, activeStates, overlaps, hash } from "./store.js";
@@ -90,6 +91,7 @@ export class TeamRuntime {
   readonly resources: RuntimeResources;
   readonly workspaces: MemberWorkspaces;
   readonly nativePermissions: NativePermissions;
+  readonly nativeQuestions: NativeQuestions;
   readonly memberPermissions: MemberPermissions;
   private resourceWaiting = new Set<string>();
   private active = new Map<
@@ -113,6 +115,7 @@ export class TeamRuntime {
     this.store.history = this.history;
     this.workspaces = new MemberWorkspaces(this.store, this.history);
     this.nativePermissions = new NativePermissions(this.store);
+    this.nativeQuestions = new NativeQuestions(this.store);
     this.correspondence = new Correspondence(this.store);
     this.approvals = new ExecutionApprovals(this.store);
     this.records = new CollaborationRecords(this.store);
@@ -1131,6 +1134,7 @@ export class TeamRuntime {
               " The shared project definition is authoritative. On context_update_required, read team_project_context, reconsider the assignment, and acknowledge before continuing. Do not maintain a competing project-definition copy or import another branch's memories. For self-check work, use checks scoped to the changed files and required behavior. Do not inventory or hash the whole repository or generate baseline reports for a small change; the platform stores submitted artifact versions and checks publication conflicts.",
         input: JSON.stringify(preparedInput),
         onPermission: (input, signal) => this.nativePermissions.request(work, attempt, input, signal),
+        onQuestion: (input, signal) => this.nativeQuestions.request(work, attempt, input, signal),
         contextIsolation: "branch",
         hostMode: member.kind === "host" ? hostMode(work.kind) : undefined,
         tools: executionTools,
@@ -1413,6 +1417,7 @@ export class TeamRuntime {
       if (timeout) clearTimeout(timeout);
       this.approvals.cancel(attempt.id);
       this.nativePermissions.cancelAttempt(attempt.id);
+      this.nativeQuestions.cancelAttempt(attempt.id);
       const current = this.store.get<Work>("works", work.teamId, work.id);
       if (nativeEnded || !activeStates.has(current.status))
         this.correspondence.finish(
@@ -2967,6 +2972,7 @@ export class TeamRuntime {
   private async interrupt(work: Work): Promise<void> {
     if (!work.attemptId || this.interrupting.has(work.attemptId)) return;
     this.nativePermissions.cancelAttempt(work.attemptId);
+    this.nativeQuestions.cancelAttempt(work.attemptId);
     const attempt = this.store.get<Attempt>(
       "attempts",
       work.teamId,

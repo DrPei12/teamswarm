@@ -18,6 +18,7 @@ import { inspectExecution, preflight, probeCodexExecution, type PreflightInput }
 import { prepareExecutionEnvironment } from "./execution-environment.js";
 import { contextObservation } from "../context-budget.js";
 import { readOnlyPermissions, validateNativePermissions, policyFor } from "./permissions.js";
+import { nativeQuestions } from "../native-questions.js";
 
 type Obj = Record<string, any>;
 type Pending = {
@@ -542,11 +543,15 @@ export class CodexHarness implements Harness {
           : { decision: liveAccepted ? "accept" : "decline" };
         request?.onEvent({ type: liveAccepted ? "approval.accepted" : "approval.denied", data: { method: message.method } });
       } else if (message.method === "item/tool/requestUserInput") {
-        result = { answers: {} };
-        execution?.request.onEvent({
-          type: "input.required",
-          data: { questions: message.params.questions },
-        });
+        const raw: Obj[] = Array.isArray(message.params?.questions) ? message.params.questions : [];
+        // Secret answers would be stored with the conversation, so those stay unanswered.
+        const questions = raw.some(q => q?.isSecret === true || typeof q?.id !== "string") ? []
+          : nativeQuestions(raw.map(q => ({ ...q, allowOther: q.isOther === true, options: q.options ?? [] })));
+        const answers = questions.length && questions.length === raw.length && execution && !execution.permissionAbort.signal.aborted
+          ? await execution.request.onQuestion?.({ nativeId: String(message.params?.itemId ?? message.id), tool: message.method, questions }, execution.permissionAbort.signal) ?? null
+          : null;
+        result = { answers: answers && !execution?.permissionAbort.signal.aborted ? Object.fromEntries(questions.map((q, i) => [q.id!, { answers: answers[i] }])) : {} };
+        if (!answers) execution?.request.onEvent({ type: "input.required", data: { questions: message.params?.questions } });
       } else throw new Error("Unsupported harness request.");
     } catch (error) {
       result = {

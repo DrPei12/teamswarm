@@ -15,16 +15,32 @@ export interface NativePermissionRequest {
   input: unknown;
   reason?: string;
 }
+export interface NativeQuestion {
+  /** Native identity of the question when the Harness keys answers by it. */
+  id?: string;
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  /** The user may answer in their own words instead of choosing an option. */
+  allowOther?: boolean;
+  options: { label: string; description?: string }[];
+}
+export interface NativeQuestionRequest {
+  nativeId: string;
+  tool: string;
+  questions: NativeQuestion[];
+}
 export interface PermissionOptions {
   defaultId: string;
   options: { id: string; label: string; group?: "native"; requiresWrite?: boolean; permissions: NativePermissions }[];
 }
 export interface ExecutionApproval {
-  kind?: "member-permissions";
+  kind?: "member-permissions" | "question";
   id: string; teamId: string; memberId: string; workId: string; attemptId: string;
   tool: string; details: string; createdAt: string;
   status: "pending" | "accepted" | "declined" | "cancelled";
   memberChange?: { name: string; current: string; requested: string; reason: string };
+  questions?: NativeQuestion[];
 }
 export type NativePermissions = { harness: string; [option: string]: unknown };
 export interface ExecutionConfig {
@@ -471,6 +487,8 @@ export interface HarnessRequest {
   onContextRebuild?: () => string;
   onEvent: (event: HarnessEvent) => void;
   onPermission?: (request: NativePermissionRequest, signal?: AbortSignal) => Promise<"allow" | "deny">;
+  /** One answer list per question, in order; null when nobody answers before the attempt ends. */
+  onQuestion?: (request: NativeQuestionRequest, signal?: AbortSignal) => Promise<string[][] | null>;
   onTool: (name: string, args: unknown, callId: string) => Promise<unknown>;
 }
 export interface HarnessResult {

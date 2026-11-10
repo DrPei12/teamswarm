@@ -62,11 +62,16 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
   };
   router.get("/teams/:teamId/approvals", (req, res) => {
     const teamId = param(req.params.teamId);
-    res.json([...runtime.approvals.list(teamId, true), ...runtime.nativePermissions.approvals(teamId), ...runtime.memberPermissions.list(teamId)]);
+    res.json([...runtime.approvals.list(teamId, true), ...runtime.nativePermissions.approvals(teamId), ...runtime.nativeQuestions.approvals(teamId), ...runtime.memberPermissions.list(teamId)]);
   });
   router.post("/teams/:teamId/approvals/:approvalId", (req, res) => {
-    const input = parse(z.object({ accepted: z.boolean(), language: z.enum(["en", "zh-CN"]).optional() }).strict(), req.body);
+    const input = parse(z.object({ accepted: z.boolean(), language: z.enum(["en", "zh-CN"]).optional(),
+      answers: z.array(z.array(z.string().trim().min(1).max(2000)).min(1).max(13)).min(1).max(8).optional() }).strict(), req.body);
     const teamId = param(req.params.teamId), id = param(req.params.approvalId);
+    if (runtime.nativeQuestions.has(teamId, id)) {
+      if (input.accepted && !input.answers) throw badRequest("invalid_answers", "Answer every question before sending.");
+      return res.json(runtime.nativeQuestions.answerFromUI(teamId, id, input.accepted ? input.answers! : null));
+    }
     res.json(runtime.memberPermissions.has(teamId,id)
       ? runtime.memberPermissions.answer(teamId,id,input.accepted,input.language)
       : runtime.nativePermissions.has(teamId, id)

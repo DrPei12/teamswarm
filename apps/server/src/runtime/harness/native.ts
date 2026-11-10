@@ -28,6 +28,7 @@ import { contextObservation, DEEPSEEK_NATIVE_WINDOW } from "../context-budget.js
 import { preflight, inspectExecution, type PreflightInput } from "./preflight.js";
 import { prepareExecutionEnvironment } from "./execution-environment.js";
 import { validateNativePermissions, policyFor } from "./permissions.js";
+import { nativeQuestions, unansweredQuestion } from "../native-questions.js";
 import { CommandObservations } from "./command-observations.js";
 import { OpenCodeAcp } from "./opencode-acp.js";
 import { grokModelConfig, isolateGrokEnvironment } from "./grok-config.js";
@@ -278,8 +279,11 @@ export class NativeHarness implements Harness {
           c.access === "read-only"
             ? "Read,Glob,Grep" + (nativeCommands ? ",Bash" : "")
             : "Read,Glob,Grep,Write,Edit,Bash";
+        // Claude Code offers AskUserQuestion only outside --bare and only through the stdio prompt channel.
+        const questions = !!request.onQuestion && c.permissions?.harness === "claude-code" && policyFor(c, "claude-code")!.mode !== "dontAsk";
+        if (questions) env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
         args.push(
-          ...(subscription ? claudeSubscriptionFlags : ["--bare"]),
+          ...(subscription || questions ? claudeSubscriptionFlags : ["--bare"]),
           ...(nativeAccess(c) === "full-access" ? [] : ["--restricted"]),
           "--print",
           "--verbose",
@@ -291,7 +295,7 @@ export class NativeHarness implements Harness {
           "--permission-mode",
           c.permissions?.harness === "claude-code" ? policyFor(c, "claude-code")!.mode : "dontAsk",
           "--tools",
-          nativeTools,
+          nativeTools + (questions ? ",AskUserQuestion" : ""),
           "--allowedTools",
           (c.permissions ? "Read,Glob,Grep" : nativeTools) + ",mcp__teamswarm__*" +
             (c.permissions?.harness === "claude-code" && c.access === "workspace-write" && policyFor(c, "claude-code")!.allow?.length ? "," + policyFor(c, "claude-code")!.allow!.join(",") : ""),
@@ -595,7 +599,19 @@ export class NativeHarness implements Harness {
             }
             if (event.type === "result") terminal = event;
           } else if (this.id === "claude-code") {
-            if (event.type === "control_request" && event.request?.subtype === "can_use_tool") {
+            if (event.type === "control_request" && event.request?.subtype === "can_use_tool" && event.request.tool_name === "AskUserQuestion") {
+              const r = event.request;
+              void (async () => {
+                // Claude Code always lets the user answer in their own words.
+                const questions = nativeQuestions(r.input?.questions).map(q => ({ ...q, allowOther: true }));
+                let answers: string[][] | null = null;
+                try { if (questions.length) answers = await request.onQuestion?.({ nativeId: r.tool_use_id ?? event.request_id, tool: r.tool_name, questions }, permissionAbort.signal) ?? null; } catch {}
+                if (!child.stdin.destroyed) child.stdin.write(JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: event.request_id,
+                  response: answers && !permissionAbort.signal.aborted
+                    ? { behavior: "allow", updatedInput: { ...r.input, answers: Object.fromEntries(questions.map((q, i) => [q.question, answers![i].join(", ")])) } }
+                    : { behavior: "deny", message: unansweredQuestion } } }) + "\n");
+              })();
+            } else if (event.type === "control_request" && event.request?.subtype === "can_use_tool") {
               const r = event.request;
               void (async () => {
                 let decision = "deny";
