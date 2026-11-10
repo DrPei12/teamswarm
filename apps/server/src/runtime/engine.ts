@@ -20,6 +20,7 @@ import { validateNativePermissions } from "./harness/permissions.js";
 import { rebootConfirmsTermination, systemBootTime } from "./harness/native-recovery.js";
 import { RuntimeStore, activeStates, overlaps, hash } from "./store.js";
 import { redact } from "./redact.js";
+import { unfinishedHostTurns } from "../host-execution.js";
 import { ProjectHistory } from "./project-history.js";
 import { Correspondence } from "./correspondence.js";
 import {
@@ -938,7 +939,17 @@ export class TeamRuntime {
           this.history.forRun(this.store.get<Run>("runs", work.teamId, w.runId)).id === branchId)
         .map((w) => ({ title: w.title, instructions: w.instructions, result: w.result, status: w.status })),
       attachmentsAndInstructions: member.kind === "host" && details ? JSON.parse(String(details.data)).executionInput : undefined,
+      ...this.unfinishedTurns(work, attempt, run, member),
     };
+  }
+  /** A Host turn that stopped without a reply left no message, note or artifact; pass its facts on. */
+  private unfinishedTurns(work: Work, attempt: Attempt, run: Run, member: Member) {
+    if (member.kind !== "host" || work.kind === "host-followup" || work.kind === "collaboration") return {};
+    const turns = unfinishedHostTurns(this, run, attempt.id);
+    return turns.length ? {
+      unfinishedTurns: turns,
+      unfinishedTurnsNote: "Earlier turns in this conversation stopped before replying. These are recorded facts, not results: check that files, processes and temporary directories they mention still exist before building on them, and continue from the point reached instead of repeating finished steps.",
+    } : {};
   }
   private executionRequirements(work: Work): NonNullable<Work["executionRequirements"]> {
     const requirements = work.executionRequirements ?? {};

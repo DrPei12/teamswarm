@@ -88,3 +88,57 @@ export function projectHostExecutions(input: {
   }
   return messages.sort((a, b) => a.createdAt - b.createdAt);
 }
+
+const clip = (value: string, limit: number) =>
+  value.length <= limit ? value : value.slice(0, limit) + "…";
+
+/** Host turns in this conversation that ended without a reply since the last delivered one.
+ * Bounded facts for the next turn's input: what was asked, why it stopped, the last partial
+ * text, and which commands and files it had reached. Nothing here is inferred or summarized by a model. */
+export function unfinishedHostTurns(runtime: TeamRuntime, run: Run, currentAttemptId: string, limit = 2) {
+  const store = runtime.store;
+  const hosts = new Set(store.list<Member>("members", run.teamId).filter(m => m.kind === "host").map(m => m.id));
+  const runs = new Map(store.list<Run>("runs", run.teamId).filter(r => r.conversationId === run.conversationId).map(r => [r.id, r]));
+  const works = new Map(store.list<Work>("works", run.teamId)
+    .filter(w => runs.has(w.runId) && hosts.has(w.memberId) && w.kind !== "host-followup" && w.kind !== "collaboration")
+    .map(w => [w.id, w]));
+  const attempts = store.list<Attempt>("attempts", run.teamId).filter(a => works.has(a.workId) && a.id !== currentAttemptId);
+  const replied = attempts.map(a => ["submitted", "accepted", "self_checked"].includes(a.status)).lastIndexOf(true);
+  return attempts.slice(replied + 1)
+    .filter(a => ["failed", "interrupted", "recovery_required"].includes(a.status))
+    .slice(-limit)
+    .map(attempt => {
+      const work = works.get(attempt.workId)!, source = runs.get(work.runId)!;
+      const execution = hostExecution(runtime, work, source, attempt);
+      const items = transcriptItems(runtime, attempt);
+      const output = store.db.prepare(
+        "SELECT data FROM runtime_events WHERE attempt_id=? AND type='execution.partial_output' ORDER BY sequence DESC LIMIT 1",
+      ).get(attempt.id);
+      const text = output ? String(JSON.parse(String(output.data)).text ?? "")
+        : items.filter(i => i.kind === "message").map(i => i.text).join("\n\n");
+      const commands = items.filter(i => i.kind === "command");
+      const unsuccessful = (i: typeof commands[number]) => i.status !== "completed" || (i.exitCode != null && i.exitCode !== 0);
+      const files = [...new Set(items.flatMap(i => i.changes?.map(c => c.path) ?? []))];
+      return redact({
+        attemptId: attempt.id,
+        sourceMessageId: source.sourceMessageId,
+        request: clip(work.instructions, 400),
+        status: execution.status,
+        ...(execution.error ? { cause: clip(execution.error, 400) } : {}),
+        startedAt: attempt.startedAt,
+        ...(attempt.finishedAt ? { endedAt: attempt.finishedAt } : {}),
+        ...(text.trim() ? { lastText: text.length > 1200 ? "…" + text.slice(-1200) : text } : {}),
+        commands: {
+          total: commands.length,
+          unsuccessful: commands.filter(unsuccessful).length,
+          // The most recent commands show where the turn stopped.
+          recent: commands.slice(-6).map(i => ({
+            command: clip(i.title || i.text, 200),
+            status: i.status,
+            ...(i.exitCode != null ? { exitCode: i.exitCode } : {}),
+          })),
+        },
+        ...(files.length ? { changedFiles: files.slice(0, 20), changedFileCount: files.length } : {}),
+      }, attempt.config.credentialEnv);
+    });
+}
