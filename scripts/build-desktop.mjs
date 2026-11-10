@@ -1,9 +1,12 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { verifyBuild, digest } from "./release-identity.mjs";
 import { desktopTarget } from "./desktop-platform.mjs";
+import { builderCache } from "./builder-cache.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const target = desktopTarget();
 const npm = process.env.npm_execpath;
@@ -33,8 +36,12 @@ for (const resource of config.extraResources)
 const configFile = path.join(root, ".codex-local", `electron-builder-${target.key}.json`);
 writeFileSync(configFile, JSON.stringify(config, null, 2));
 const unpackedOnly = process.argv.includes("--dir");
+const { getCacheDirectory } = createRequire(import.meta.url)("app-builder-lib/out/util/electronGet");
+const cache = builderCache({ configured: process.env.ELECTRON_BUILDER_CACHE, standard: getCacheDirectory({ allowEnvVarOverride: false }),
+  fallback: path.join(tmpdir(), "electron-builder-cache") });
+if (cache && cache !== process.env.ELECTRON_BUILDER_CACHE) console.log(`Packaging tools are cached in ${cache}.`);
 run(process.execPath, ["scripts/run-electron-builder.cjs", "--config", configFile, `--${target.builder}`, `--${target.arch}`, "--publish", "never", ...(unpackedOnly ? ["--dir"] : [])],
-  { env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: "false" } });
+  { env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: "false", ...(cache ? { ELECTRON_BUILDER_CACHE: cache } : {}) } });
 verifyBuild(root);
 if (!unpackedOnly && target.platform === "win32") {
   run("python", ["-X", "utf8", "-B", "scripts/verify-installer.py", "--installer", path.join(output, `TeamSwarm-${build.version}-Windows-x64.exe`),

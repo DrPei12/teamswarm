@@ -2,9 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { applicationDataBase, dataDirectory } from '../scripts/platform.cjs';
 import { desktopTarget } from '../scripts/desktop-platform.mjs';
+import { builderCache, canRenameInside } from '../scripts/builder-cache.mjs';
 import { installCredentialBridge } from '../apps/desktop/credential-bridge.cjs';
 
 test('the lockfile contains Rollup binaries for all three desktop targets', () => {
@@ -79,4 +82,22 @@ test('credential bridge routes encryption/decryption and preserves the request i
   assert.equal(encrypted.id, id);
   const decrypted = await request({ operation: 'decrypt', value: encrypted.value });
   assert.equal(decrypted.value, 'public-test-fixture');
+});
+
+test('packaging tools move to a temporary cache when the standard cache cannot rename folders', () => {
+  const standard = '/profile/electron-builder', fallback = '/tmp/electron-builder-cache';
+  assert.equal(builderCache({ standard, fallback, usable: () => true }), undefined);
+  assert.equal(builderCache({ standard, fallback, usable: directory => directory === fallback }), fallback);
+  assert.equal(builderCache({ configured: ' /chosen ', standard, fallback, usable: () => false }), '/chosen');
+  assert.throws(() => builderCache({ standard, fallback, usable: () => false }), /ELECTRON_BUILDER_CACHE/);
+});
+
+test('the rename check leaves nothing behind', () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'teamswarm-cache-'));
+  try {
+    assert.equal(canRenameInside(path.join(directory, 'cache')), true);
+    assert.deepEqual(readdirSync(path.join(directory, 'cache')), []);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
