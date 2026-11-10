@@ -1034,6 +1034,15 @@ export class TeamRuntime {
               )
               .at(-1)
           : undefined;
+      // Latest candidate decides: an identity the native side never held (or no longer
+      // loads) is not replaced by an older attempt of the same session.
+      if (previous && (previous.nativeSession === "unconfirmed" || previous.nativeSession === "lost")) {
+        this.store.event(work.teamId, "session.context_rebuilt", {
+          previousAttemptId: previous.id,
+          reason: "native_session_not_established",
+        }, work, attempt.id);
+        previous = undefined;
+      }
       if (
         previous && previous.nativeSessionScope !== attempt.nativeSessionScope
       ) {
@@ -1129,10 +1138,16 @@ export class TeamRuntime {
           this.store.save("attempts", a);
         },
         onSession: (id, actual) => {
+          const { nativeSession, ...observed } = actual ?? {};
           this.store.recordSession(attempt, id, {
-            ...redact(actual, attempt.config.credentialEnv),
+            ...redact(observed, attempt.config.credentialEnv),
             teamToolSignature: attempt.toolContractVersion,
           });
+          if (nativeSession === "unconfirmed" || nativeSession === "inherited") {
+            const a = this.store.get<Attempt>("attempts", work.teamId, attempt.id);
+            a.nativeSession = nativeSession;
+            this.store.save("attempts", a);
+          }
           this.history.receipt(work, attempt, "delivered", project.nodeId);
         },
         onTurn: (id) => {
@@ -1165,6 +1180,8 @@ export class TeamRuntime {
           this.resources.observe(work, attempt, event);
           const current = this.store.get<Work>("works", work.teamId, work.id);
           if (current.attemptId !== attempt.id) return;
+          if (event.type === "session.native" || event.type === "session.native_unavailable")
+            this.nativeSessionObserved(work.teamId, attempt.id, event.type === "session.native" ? "confirmed" : "lost");
           if (event.type === "model.request") {
             const a = this.store.get<Attempt>("attempts", work.teamId, attempt.id);
             a.modelRequest = event.data as unknown as NonNullable<Attempt["modelRequest"]>;
@@ -1210,6 +1227,7 @@ export class TeamRuntime {
         },
       });
       result.text = redact(result.text, attempt.config.credentialEnv);
+      if (result.status === "completed") this.nativeSessionObserved(work.teamId, attempt.id, "confirmed");
       this.hostContext.recordOutput(work.teamId, attempt.id, result.text);
       if (result.error)
         result.error = redact(result.error, attempt.config.credentialEnv);
@@ -1394,6 +1412,13 @@ export class TeamRuntime {
         );
       if (!this.closing && !work.interaction) this.followUp(work, member);
     }
+  }
+  /** Records native evidence about a session identity that was committed before its process started. */
+  private nativeSessionObserved(teamId: string, attemptId: string, state: "confirmed" | "lost"): void {
+    const a = this.store.get<Attempt>("attempts", teamId, attemptId);
+    if (!a.nativeSession || a.nativeSession === "confirmed" || a.nativeSession === state) return;
+    a.nativeSession = state;
+    this.store.save("attempts", a);
   }
   private followUp(work: Work, member: Member): void {
     if (work.interaction && !work.attemptId && ["failed", "interrupted"].includes(work.status))

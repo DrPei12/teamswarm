@@ -449,6 +449,8 @@ export class NativeHarness implements Harness {
         harness: this.id,
         protocol: c.protocol ?? this.capabilities.protocol,
         configured: true,
+        // This identity is committed before the native process exists.
+        nativeSession: request.sessionId ? "inherited" : "unconfirmed",
         nativePermissions: c.permissions ?? null,
         nativeCommands,
         workspace: request.workspace,
@@ -495,6 +497,7 @@ export class NativeHarness implements Harness {
     let terminal: HarnessResult | undefined;
     let stderr = "";
     let nativeSession: string | undefined;
+    let sessionSeen = false;
     let grokSegment = 0, grokKind = "";
     let dshRunning = false;
     let shutdownAcknowledged = false;
@@ -542,7 +545,7 @@ export class NativeHarness implements Harness {
       if (this.id === "opencode") acp = new OpenCodeAcp(child, request, bridge.url, path.join(home, "native-session.json"),
         (event: any) => {
           const safe = redact(event, c.credentialEnv); emit("native.event", { harness: this.id, event: safe }); commands.observe(safe); transcript.observe(safe);
-          if (event.type === "session") emit("session.native", { harness: this.id, nativeSessionId: event.id });
+          if (event.type === "session") { sessionSeen = true; emit("session.native", { harness: this.id, nativeSessionId: event.id }); }
         },
         result => { transcript.finish(result.status); terminal = result; const active = this.active.get(id); if (active) active.termination ??= terminateNative(child); },
         { prompt: conversationInput(request.input) });
@@ -722,6 +725,7 @@ export class NativeHarness implements Harness {
             }
           }
           if (nativeSession) {
+            sessionSeen = true;
             emit("session.native", { nativeSessionId: nativeSession });
             nativeSession = undefined;
           }
@@ -789,6 +793,11 @@ export class NativeHarness implements Harness {
                   text,
                   error: `Native process exited (${code}) without a completion receipt. ${stderr}`,
                 });
+        // The process ran and ended without loading the session it was asked to resume:
+        // resuming the same identity again would fail the same way.
+        if (request.sessionId && !sessionSeen && child.pid !== undefined && !stopping &&
+            (result.status === "failed" || result.status === "unknown"))
+          emit("session.native_unavailable", { harness: this.id });
         try {
           receipt(result);
         } catch {

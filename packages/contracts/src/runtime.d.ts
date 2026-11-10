@@ -304,6 +304,13 @@ export interface Attempt {
   /** Opaque native session-store identity; a changed store requires fresh native context. */
   nativeSessionScope?: string;
   sessionId: string | null;
+  /**
+   * Whether the native session behind sessionId is known to exist. An adapter that commits its
+   * identity before the native process starts reports "unconfirmed" (new) or "inherited" (resumed);
+   * native evidence makes it "confirmed"; a resume the native side never loaded is "lost".
+   * Missing means the adapter binds only sessions that already exist.
+   */
+  nativeSession?: "unconfirmed" | "inherited" | "confirmed" | "lost";
   turnId: string | null;
   /** Durable boundary: only dispatched attempts may have started a native turn. Missing means legacy/unknown. */
   dispatch?: { state: "prepared" | "preparing" | "dispatched"; native?: Record<string, unknown> };
