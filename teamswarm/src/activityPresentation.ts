@@ -85,6 +85,14 @@ export function groupActivity(items: TranscriptItem[]): ActivityGroup[] {
   let context: ActivityGroup | undefined;
   let delegation: ActivityGroup | undefined;
   for (const item of items) {
+    // Older transcripts emitted this placeholder on every turn, including resumes.
+    if (
+      item.kind === "status" &&
+      item.id.endsWith(":startup") &&
+      (item.title === "Starting Harness" || item.title === "Harness started") &&
+      (item.status === "running" || item.status === "completed")
+    )
+      continue;
     if (item.kind === "tool" && contextTools.has(item.title ?? "")) {
       if (!context) {
         context = { id: item.id, kind: "context", items: [] };

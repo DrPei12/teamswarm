@@ -2,11 +2,34 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { NativeTranscript } from "../src/runtime/harness/native-transcript.js";
 
+test("OpenCode exposes public tool lifecycle and retains pre-tool commentary without reasoning or duplicate commands", () => {
+  const events: any[] = [];
+  const observer = new NativeTranscript("opencode", "turn", (type, data) => events.push({ type, data }));
+  const emit = (event: any) => observer.observe({ type: "opencode.event", event });
+  emit({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "PRIVATE_REASONING" } });
+  emit({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "I am inspecting the file." } });
+  emit({ sessionUpdate: "tool_call", toolCallId: "read", title: "read_file", kind: "read", status: "pending", rawInput: { path: "sample.txt" } });
+  emit({ sessionUpdate: "tool_call_update", toolCallId: "read", status: "completed", rawOutput: "File content" });
+  emit({ sessionUpdate: "tool_call", toolCallId: "cmd", title: "bash", kind: "execute", status: "pending", rawInput: { command: "fixture-command" } });
+  emit({ sessionUpdate: "tool_call_update", toolCallId: "cmd", status: "completed", rawOutput: { exitCode: 0 } });
+  emit({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Final public answer." } });
+  const read = events.filter(e => e.data.id === "turn:tool:read");
+  assert.equal(read[0]?.data.status, "running");
+  assert.equal(read.at(-1)?.data.status, "completed");
+  assert.equal(read.at(-1)?.data.output, "File content");
+  assert(events.some(e => e.type === "transcript.item" && e.data.kind === "message" && e.data.phase === "commentary"));
+  const deltas = events.filter(e => e.type === "transcript.delta");
+  assert.equal(deltas.length, 2);
+  assert.notEqual(deltas[0].data.id, deltas[1].data.id);
+  assert(!events.some(e => e.data.id === "turn:tool:cmd"));
+  assert(!JSON.stringify(events).includes("PRIVATE_REASONING"));
+});
+
 for (const harness of ["deepseek-harness", "claude-code", "pi"]) {
   test(`${harness} exposes public text before completion, tool lifecycle and no reasoning content`, () => {
     const events: any[] = [];
     const observer = new NativeTranscript(harness, "turn", (type,data) => events.push({type,data}));
-    assert.equal(events[0].data.status, "running");
+    assert.equal(events.length, 0);
     if (harness === "deepseek-harness") {
       observer.observe({method:"teamswarm.transcript",params:{id:"step",type:"text",text:"Public "}});
       assert(events.some(e => e.type === "transcript.delta" && e.data.delta === "Public "));
@@ -27,6 +50,7 @@ for (const harness of ["deepseek-harness", "claude-code", "pi"]) {
       observer.observe({type:"pi.event",event:{type:"tool_execution_start",toolCallId:"call",toolName:"team_state",args:{}}});
       observer.observe({type:"pi.event",event:{type:"tool_execution_end",toolCallId:"call",result:{content:[{type:"text",text:"actual result"}]}}});
     }
+    assert(events.every(e => e.data.id !== "turn:startup"));
     const message = events.find(e => e.type === "transcript.item" && e.data.kind === "message");
     const delta = events.find(e => e.type === "transcript.delta");
     assert.equal(message.data.id, delta.data.id, "Completed text replaces the same streamed item");

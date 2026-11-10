@@ -541,12 +541,10 @@ export class NativeHarness implements Harness {
       const transcript = new NativeTranscript(this.id, turnId, emit);
       if (this.id === "opencode") acp = new OpenCodeAcp(child, request, bridge.url, path.join(home, "native-session.json"),
         (event: any) => {
-          const safe = redact(event, c.credentialEnv); emit("native.event", { harness: this.id, event: safe }); commands.observe(safe);
+          const safe = redact(event, c.credentialEnv); emit("native.event", { harness: this.id, event: safe }); commands.observe(safe); transcript.observe(safe);
           if (event.type === "session") emit("session.native", { harness: this.id, nativeSessionId: event.id });
-          const e = event.event;
-          if (e?.sessionUpdate === "agent_message_chunk" && e.content?.type === "text") emit("transcript.delta", { id: `${turnId}:opencode`, kind: "message", delta: e.content.text });
         },
-        result => { terminal = result; const active = this.active.get(id); if (active) active.termination ??= terminateNative(child); },
+        result => { transcript.finish(result.status); terminal = result; const active = this.active.get(id); if (active) active.termination ??= terminateNative(child); },
         { prompt: conversationInput(request.input) });
       lines.on("line", (line) => {
         let event: any;

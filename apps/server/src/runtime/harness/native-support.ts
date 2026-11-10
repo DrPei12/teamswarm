@@ -1,5 +1,5 @@
 import { harnessManifest } from "@team/contracts/harness-catalog";
-import { createServer } from "node:http";
+import { createServer, type RequestListener } from "node:http";
 import { productVersion } from "../../version.js";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
@@ -147,19 +147,41 @@ export function childEnvironment(request: HarnessRequest): NodeJS.ProcessEnv {
   return env;
 }
 
-/** Per-attempt capability endpoint. The model never supplies Team/Attempt identity. */
+function openToolListener() {
+  const routes = new Map<string, RequestListener>();
+  const server = createServer((req, res) => {
+    const route = routes.get(req.url ?? "");
+    if (route) route(req, res);
+    else { res.writeHead(403); res.end(); }
+  });
+  const origin = new Promise<string>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") reject(new Error("MCP bind failed."));
+      else resolve(`http://127.0.0.1:${address.port}`);
+    });
+  });
+  return { routes, server, origin };
+}
+const toolListeners = new Map<string, ReturnType<typeof openToolListener>>();
+
+/** Attempts share a native Harness listener. Each capability still belongs to one attempt. */
 export async function toolBridge(request: HarnessRequest) {
-  const token = randomUUID();
-  const permissionToken = randomUUID();
+  const harness = request.config.harness;
+  const listener = toolListeners.get(harness) ?? openToolListener();
+  toolListeners.set(harness, listener);
+  const toolPath = `/mcp/${randomUUID()}`;
+  const permissionPath = `/permission/${randomUUID()}`;
   const pendingPermissions = new Set<AbortController>();
-  const server = createServer(async (req, res) => {
+  let closed = false;
+  const handle: RequestListener = async (req, res) => {
     const send = (status: number, body?: unknown) => {
       res.writeHead(status, { "content-type": "application/json" });
       res.end(body === undefined ? undefined : JSON.stringify(body));
     };
     if (
-      ![`/mcp/${token}`, `/permission/${permissionToken}`].includes(req.url ?? "") ||
-      (req.headers.origin &&
+      closed || (req.headers.origin &&
         !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(
           req.headers.origin,
         ))
@@ -175,15 +197,18 @@ export async function toolBridge(request: HarnessRequest) {
         chunks.push(chunk);
       }
       const message = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      if (req.url === `/permission/${permissionToken}`) {
+      if (closed) return send(403);
+      if (req.url === permissionPath) {
         if (typeof message.nativeId !== "string" || typeof message.tool !== "string") return send(400);
         const controller = new AbortController();
         pendingPermissions.add(controller);
         const abort = () => controller.abort();
+        const cancelled = new Promise<"deny">(resolve =>
+          controller.signal.addEventListener("abort", () => resolve("deny"), { once: true }));
         res.once("close", abort);
         try {
-          const decision = await request.onPermission?.(message, controller.signal) ?? "deny";
-          return send(200, { decision });
+          const decision = await Promise.race([request.onPermission?.(message, controller.signal) ?? "deny", cancelled]);
+          return send(200, { decision: controller.signal.aborted ? "deny" : decision });
         } finally { res.removeListener("close", abort); pendingPermissions.delete(controller); }
       }
       if (message.id === undefined) return send(202);
@@ -227,21 +252,27 @@ export async function toolBridge(request: HarnessRequest) {
     } catch {
       send(400, { error: "Invalid request" });
     }
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string")
-    throw new Error("MCP bind failed.");
-  return {
-    url: `http://127.0.0.1:${address.port}/mcp/${token}`,
-    permissionUrl: `http://127.0.0.1:${address.port}/permission/${permissionToken}`,
-    close: async () => {
-      for (const controller of pendingPermissions) controller.abort();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-    },
   };
+  listener.routes.set(toolPath, handle);
+  listener.routes.set(permissionPath, handle);
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    listener.routes.delete(toolPath);
+    listener.routes.delete(permissionPath);
+    for (const controller of pendingPermissions) controller.abort();
+    if (listener.routes.size) return;
+    toolListeners.delete(harness);
+    await new Promise<void>(resolve => {
+      listener.server.close(() => resolve());
+      listener.server.closeAllConnections();
+    });
+  };
+  try {
+    const origin = await listener.origin;
+    return { url: origin + toolPath, permissionUrl: origin + permissionPath, close };
+  } catch (error) {
+    await close();
+    throw error;
+  }
 }

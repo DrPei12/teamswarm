@@ -28,6 +28,18 @@ export type Attachment = {
   size: number;
   type: string;
 };
+export type HostExecution = {
+  workId: string;
+  attemptId?: string;
+  sourceMessageId: string;
+  status: Work["status"];
+  startedAt: string;
+  finishedAt?: string;
+  /** Primary stop/failure cause, not a model-authored reply. */
+  error?: string;
+  /** Subsequent observation, for example confirmed process-tree termination. */
+  detail?: string;
+};
 export type Message = {
   id: string;
   text: string;
@@ -42,6 +54,7 @@ export type Message = {
   runtime?: RuntimeConfig;
   references?: { id: string; kind: string; label: string }[];
   activity?: TranscriptItem[];
+  execution?: HostExecution;
 };
 export type Chat = {
   id: string;
@@ -134,7 +147,7 @@ export type TranscriptItem = {
   kind: "message" | "reasoning" | "command" | "tool" | "file" | "status";
   text: string;
   title?: string;
-  status: "running" | "completed" | "failed" | "interrupted";
+  status: "running" | "completed" | "failed" | "interrupted" | "unknown";
   phase?: string;
   output?: string;
   changes?: { path: string; kind: string; diff?: string }[];

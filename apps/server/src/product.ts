@@ -1,5 +1,6 @@
 import {contextWindowPresetIds,type ContextWindowPreset} from "@team/contracts/context-window";
 import {memberContextWindow} from "./runtime/context-window.js";
+import { hostExecution, projectHostExecutions } from "./host-execution.js";
 import { contextWindowUsage } from "./product-context.js";
 import { permissionCatalog, mergePermissionChoice } from "./runtime/permission-options.js";
 import { nativePermissions, validateNativePermissions } from "./runtime/harness/permissions.js";
@@ -442,8 +443,13 @@ export class ProductStore {
             ).values(),
           ];
 
+          const executionWork = state.works.find(w => w.id === attempt?.workId);
+          const executionRun = state.runs.find(r => r.id === executionWork?.runId);
           return {
             id: meta.legacyId ?? m.id,
+            ...(attempt && executionWork && executionRun
+              ? { execution: hostExecution(this.runtime, executionWork, executionRun, attempt) }
+              : {}),
             recordId: m.id,
             text: m.content,
             role: m.role === "assistant" ? "host" : "user",
@@ -460,45 +466,17 @@ export class ProductStore {
               : undefined,
           };
         });
-        for (const work of (page ? [] : state.works).filter(
-          (w) =>
-            active.has(w.status) &&
-            w.kind !== "host-followup" &&
-            w.kind !== "collaboration" &&
-            state.members.find((m) => m.id === w.memberId)?.kind === "host" &&
-            state.runs.find((r) => r.id === w.runId)?.conversationId ===
-              conversation.id,
-        )) {
-          const attempt = attempts.find((a) => a.id === work.attemptId);
-          if (!attempt) continue;
-          const deltas = this.db
-            .prepare(
-              "SELECT data FROM runtime_events WHERE attempt_id=? AND type='message.delta' ORDER BY sequence",
-            )
-            .all(attempt.id);
-          const items = transcriptItems(this.runtime, attempt);
-          const text = items.length
-            ? items
-                .filter((i) => i.kind === "message" && i.phase !== "commentary")
-                .map((i) => i.text)
-                .join("\n\n")
-            : deltas
-                .map((e) => String(JSON.parse(String(e.data)).delta ?? ""))
-                .join("");
-          const activity = items.filter(
-            (i) => i.kind !== "message" || i.phase === "commentary",
-          );
-          if (text || activity.length)
-            messages.push({
-              id: `stream:${attempt.id}`,
-              text,
-              files: [],
-              role: "host",
-              createdAt: Date.parse(attempt.startedAt),
-              pending: true,
-              activity,
-            });
-        }
+        projectHostExecutions({
+          runtime: this.runtime,
+          teamId: team.id,
+          conversationId: conversation.id,
+          sourceMessageIds: new Set(detail.messages.map(m => m.id)),
+          messages,
+          works: state.works,
+          runs: state.runs,
+          members: state.members,
+          attempts,
+        });
         workspace.chats.push({
           ...chatPrefs,
           id: conversation.id,
@@ -1401,7 +1379,9 @@ export function productRoutes(runtime: TeamRuntime): Router {
       () => {
         const team = runtime.store.teams.createTeam(input.name, "");
         product.configureDefault(team.id);
-        return team;
+        // Bind the team's first Host conversation before the client navigates,
+        // so its first message cannot create an unrelated "Recent" chat.
+        return { ...team, mainChatId: runtime.history.mainConversation(team.id) };
       },
     );
     res.status(201).json(result);

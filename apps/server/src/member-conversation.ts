@@ -121,12 +121,17 @@ export function transcriptItems(
         ...item,
         text: replaceText ? data.text ?? "" : data.text || previous?.text || "",
       });
-    } else if (!items.has(id)) {
+    } else {
       const item = codexDisplayItem(
-        { ...data, aggregatedOutput: data.output },
-        true,
+        { ...data, aggregatedOutput: data.aggregatedOutput ?? data.output },
+        !["running", "inProgress"].includes(data.status),
       );
-      if (item) items.set(id, item);
+      if (item) {
+        if (data.nativeOutcome === "failed") item.status = "failed";
+        if (data.nativeOutcome === "cancelled") item.status = "interrupted";
+        if (data.nativeOutcome === "unknown") item.status = "unknown";
+        items.set(id, { ...items.get(id), ...item });
+      }
     }
   }
   return [...items.values()].map((item) =>

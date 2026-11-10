@@ -9,14 +9,12 @@ const preview = (value: string) => Buffer.from(value).subarray(0, 65536).toStrin
 /** Translate public native text and tool lifecycle facts without replacing the
  * native loop or exposing provider reasoning/replay state. */
 export class NativeTranscript {
-  private started = false;
   private message = "";
   private sequence = 0;
   private tools = new Map<string, { title: string; kind: TranscriptItem["kind"] }>();
+  private acpCommands = new Set<string>();
   constructor(private harness: string, private turn: string,
-    private emit: (type: string, data: Record<string, unknown>) => void) {
-    emit("transcript.item", { id: `${turn}:startup`, kind: "status", title: "Starting Harness", text: harness, status: "running" });
-  }
+    private emit: (type: string, data: Record<string, unknown>) => void) {}
   private delta(id: string, delta: string) {
     if (delta) this.emit("transcript.delta", { id, kind: "message", delta });
   }
@@ -46,10 +44,45 @@ export class NativeTranscript {
       output: preview(output), truncated: Buffer.byteLength(output) > 65536,
       status: failed ? "failed" : "completed" });
   }
+  finish(status: "completed" | "failed" | "interrupted" | "unknown") {
+    if (this.harness !== "opencode" || !this.message) return;
+    this.emit("transcript.item", { id: this.message, kind: "message", text: "", phase: "final", status: status === "unknown" ? "running" : status });
+    this.message = "";
+  }
   observe(event: any) {
-    if (!this.started) {
-      this.started = true;
-      this.emit("transcript.item", { id: `${this.turn}:startup`, kind: "status", title: "Harness started", text: this.harness, status: "completed" });
+    if (this.harness === "opencode") {
+      if (event.type !== "opencode.event") return;
+      const e = event.event;
+      if (e?.sessionUpdate === "agent_message_chunk" && e.content?.type === "text") {
+        this.message ||= `${this.turn}:opencode:${this.sequence++}`;
+        this.delta(this.message, e.content.text);
+      }
+      if (e?.sessionUpdate === "tool_call") {
+        // Text preceding an actual tool call is public progress, not the final reply.
+        if (this.message) {
+          this.emit("transcript.item", { id: this.message, kind: "message", text: "", phase: "commentary", status: "completed" });
+          this.message = "";
+        }
+        if (e.kind === "execute" || command(e.title ?? "") || e.rawInput?.variant === "Bash") {
+          this.acpCommands.add(e.toolCallId);
+        } else if (typeof e.toolCallId === "string" && !this.tools.has(e.toolCallId)) {
+          this.tool(e.toolCallId, e.title ?? "Tool activity", e.rawInput ?? {});
+        }
+      }
+      if (["tool_call", "tool_call_update"].includes(e?.sessionUpdate) && !this.acpCommands.has(e.toolCallId)) {
+        const call = this.tools.get(e.toolCallId);
+        if (!call) return;
+        if (e.rawInput != null)
+          this.emit("transcript.item", { id: `${this.turn}:tool:${e.toolCallId}`, ...call, text: preview(JSON.stringify(e.rawInput)), status: "running" });
+        if (["completed", "failed"].includes(e.status)) {
+          const content = e.rawOutput ?? e.content ?? "";
+          const output = Array.isArray(content)
+            ? content.map(b => b?.type === "content" ? text(b.content) : text(b)).filter(Boolean).join("\n")
+            : content;
+          this.result(e.toolCallId, output, e.status === "failed");
+        }
+      }
+      return; // Never project agent_thought_chunk or other internal native events.
     }
     if (this.harness === "deepseek-harness") {
       if (event.method === "teamswarm.transcript") {

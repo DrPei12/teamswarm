@@ -261,6 +261,55 @@ test("attempt tool bridge rejects an unknown capability and propagates authorita
   }
 });
 
+test("eight native attempts share one listener, keep their own calls and revoke permissions independently", async () => {
+  const make = (member: number) => {
+    const req = request(process.cwd());
+    req.onTool = async (_name, args) => ({ member, sequence: (args as { sequence: number }).sequence });
+    return req;
+  };
+  const first = make(0);
+  let started!: () => void;
+  const prompted = new Promise<void>(resolve => { started = resolve; });
+  first.onPermission = async () => {
+    started();
+    return new Promise(() => {}); // The member leaves while the user is still deciding.
+  };
+  const bridges = await Promise.all([first, ...Array.from({ length: 7 }, (_, i) => make(i + 1))].map(toolBridge));
+  const other = make(9);
+  other.config = { ...other.config, harness: "pi" };
+  const separate = await toolBridge(other);
+  const call = async (url: string, sequence: number) => {
+    const response = await fetch(url, { method: "POST", body: JSON.stringify({
+      id: sequence, method: "tools/call", params: { name: "read_fact", arguments: { sequence } },
+    }) });
+    const reply = await response.json();
+    assert.equal(reply.id, sequence);
+    return JSON.parse(reply.result.content[0].text);
+  };
+  try {
+    const origins = new Set(bridges.map(b => new URL(b.url).origin));
+    assert.equal(origins.size, 1);
+    assert(!origins.has(new URL(separate.url).origin));
+    assert.equal(new Set(bridges.flatMap(b => [b.url, b.permissionUrl])).size, 16);
+    await Promise.all(Array.from({ length: 64 }, async (_, i) => {
+      const member = i % 8, sequence = Math.floor(i / 8);
+      assert.deepEqual(await call(bridges[member].url, sequence), { member, sequence });
+    }));
+    const decision = fetch(bridges[0].permissionUrl, { method: "POST", body: JSON.stringify({ nativeId: "req", tool: "shell" }) });
+    await prompted;
+    await bridges[0].close();
+    assert.deepEqual(await (await decision).json(), { decision: "deny" });
+    for (const url of [bridges[0].url, bridges[0].permissionUrl])
+      assert.equal((await fetch(url, { method: "POST" })).status, 403);
+    assert.deepEqual(await call(bridges[1].url, 99), { member: 1, sequence: 99 });
+    await Promise.all(bridges.map(b => b.close()));
+    await assert.rejects(fetch(bridges[1].url, { method: "POST" }));
+    assert.deepEqual(await call(separate.url, 100), { member: 9, sequence: 100 });
+  } finally {
+    await Promise.all([...bridges, separate].map(b => b.close()));
+  }
+});
+
 test("native terminal receipts survive adapter replacement; invalid bindings and unavailable configuration fail before execution", async () => {
   const root = mkdtempSync(path.join(tmpdir(), ".test-harness-"));
   const saved = {

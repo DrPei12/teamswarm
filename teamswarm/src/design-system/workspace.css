@@ -1359,6 +1359,46 @@ html[data-pane-dragging] * {
   margin-right: 1px;
 }
 
+/* Durable Host execution receipt: visible even when the model produced no text. */
+.execution-receipt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cds-gap-xs);
+  max-width: 700px;
+  margin: 0 0 var(--cds-gap-md);
+  padding: 9px 12px;
+  border: var(--cds-hairline) solid var(--line);
+  border-radius: var(--cds-radius-lg);
+  background: var(--surface-top);
+}
+.execution-receipt .status-indicator {
+  color: var(--secondary);
+  font-size: 12px;
+}
+.execution-receipt-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.execution-receipt-detail {
+  margin: 0;
+  color: var(--subtle);
+  font-size: 11px;
+  line-height: 17px;
+}
+.execution-receipt.failed,
+.execution-receipt.interrupted {
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line));
+  background: color-mix(in srgb, var(--danger) 5%, var(--surface-top));
+}
+.execution-receipt.recovery_required {
+  border-color: color-mix(in srgb, var(--warning) 30%, var(--line));
+  background: color-mix(in srgb, var(--warning) 6%, var(--surface-top));
+}
+
 /* Composer details -------------------------------------------------------- */
 .composer-surface:hover {
   box-shadow: var(--cds-shadow-composer-focus);

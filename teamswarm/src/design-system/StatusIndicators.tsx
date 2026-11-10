@@ -65,6 +65,7 @@ export function statusKind(status?: string): StatusKind {
     case "waiting":
     case "queued":
     case "pending":
+    case "recovery_required":
       return "waiting";
     case "done":
     case "completed":

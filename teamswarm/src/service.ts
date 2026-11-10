@@ -552,7 +552,10 @@ class ProductClient {
         ? previous
         : { name, clientRequestId: crypto.randomUUID() };
     inputStorage.setItem(key, JSON.stringify(input));
-    const result = await this.command<{ id: string }>("/product/teams", input);
+    const result = await this.command<{ id: string; mainChatId?: string }>(
+      "/product/teams",
+      input,
+    );
     inputStorage.removeItem(key);
     return result;
   }

@@ -1206,6 +1206,8 @@ export class TeamRuntime {
       this.hostContext.recordOutput(work.teamId, attempt.id, result.text);
       if (result.error)
         result.error = redact(result.error, attempt.config.credentialEnv);
+      if (result.status !== "completed" && result.text.trim())
+        this.store.event(work.teamId, "execution.partial_output", { text: result.text }, work, attempt.id);
       nativeEnded = result.status !== "unknown";
       this.store.transaction(() => {
         const current = this.store.get<Work>("works", work.teamId, work.id);

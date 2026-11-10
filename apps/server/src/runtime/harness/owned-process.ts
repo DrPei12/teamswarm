@@ -79,6 +79,15 @@ class OwnedProcess {
 
 let bridge: Promise<string> | undefined;
 const groups = new WeakMap<ChildProcessWithoutNullStreams, { cleanup?: Promise<boolean> }>();
+function supervisorRoot() {
+  // Keep the compiled helper out of the volatile OS temp cleanup path.
+  // Runtime cache is per device, not per project/workspace.
+  const explicit = process.env.TEAMSWARM_SUPERVISOR_DIR;
+  if (explicit && path.isAbsolute(explicit)) return explicit;
+  const local = process.env.LOCALAPPDATA;
+  if (local) return path.join(local, "TeamSwarm", "process-supervisor");
+  return path.join(tmpdir(), "teamswarm-process");
+}
 async function stopProcessGroup(pid: number): Promise<boolean> {
   try { process.kill(-pid, "SIGKILL"); }
   catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
@@ -99,7 +108,7 @@ export async function confirmOwnedExit(child: ChildProcessWithoutNullStreams): P
 function windowsBridge(): Promise<string> {
   return bridge ??= (async () => {
     const digest = createHash("sha256").update(windowsSource).digest("hex");
-    const directory = path.join(tmpdir(), "teamswarm-process", digest);
+    const directory = path.join(supervisorRoot(), digest);
     mkdirSync(directory, { recursive: true });
     const executable = path.join(directory, "owned-process.exe");
     const receipt = path.join(directory, "sha256");
@@ -123,11 +132,20 @@ function windowsBridge(): Promise<string> {
   })().catch(error => { bridge = undefined; throw error; });
 }
 
+async function supervisorExecutable(): Promise<string> {
+  let executable = await windowsBridge();
+  if (existsSync(executable)) return executable;
+  // A cached helper can disappear after temporary-directory or security cleanup.
+  bridge = undefined;
+  return windowsBridge();
+}
+
 export async function spawnOwned(command: string, args: string[], options: SpawnOptionsWithoutStdio): Promise<ChildProcessWithoutNullStreams> {
   if (process.platform === "win32") {
     // The helper creates the target suspended, binds it to a Job, then resumes it.
     // Terminating the helper closes the last Job handle and terminates descendants.
-    const child = spawn(await windowsBridge(), ["run", String(process.pid), command, ...args], { ...options, windowsHide: true, stdio: "pipe" });
+    const child = spawn(await supervisorExecutable(), ["run", String(process.pid), command, ...args], { ...options, windowsHide: true, stdio: "pipe" });
+    child.once("error", () => { bridge = undefined; });
     groups.set(child, {});
     return child;
   }
@@ -145,7 +163,7 @@ export interface ProcessSample {
   processes: { pid: number; parentPid: number; identity: string; workingSet: number; privateBytes: number; cpuMilliseconds?: number }[];
 }
 export async function sampleWindowsProcesses(root: number): Promise<ProcessSample> {
-  const executable = await windowsBridge();
+  const executable = await supervisorExecutable();
   return new Promise((resolve, reject) => execFile(executable, ["sample", String(root)],
     { windowsHide: true, timeout: 10000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
       if (error) reject(error); else try { resolve(JSON.parse(stdout)); } catch(error) { reject(error); }

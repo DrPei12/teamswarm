@@ -64,6 +64,7 @@ import {
   ExecutionActivity,
 } from "./ExecutionSettings";
 import { MessageContent } from "./MessageContent";
+import { ExecutionReceipt } from "./ExecutionReceipt";
 import { ConversationActivity } from "./ConversationActivity";
 import { usePanelResize } from "./usePanelResize";
 import {
@@ -1469,6 +1470,10 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                                   )}
                                 </Menu>
                               </div>
+                              {m.execution &&
+                                m.execution.status !== "submitted" && (
+                                  <ExecutionReceipt execution={m.execution} />
+                                )}
                               {m.skill && (
                                 <span className="skill-tag">
                                   <Icon name="skills" />
@@ -1491,7 +1496,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                               )}
                               {(m.text.trim() ||
                                 m.pending ||
-                                !m.files.length) && (
+                                (!m.files.length && !m.execution)) && (
                                 <MessageContent
                                   text={m.text}
                                   pending={m.pending}
@@ -2214,7 +2219,10 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
             setBusy(true);
             try {
               const created = await product.createTeam(name);
-              navigate({ teamId: created.id });
+              navigate({
+                teamId: created.id,
+                chatId: created.mainChatId,
+              });
             } catch (error) {
               setNotice((error as Error).message);
             } finally {

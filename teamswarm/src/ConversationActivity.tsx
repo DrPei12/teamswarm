@@ -270,7 +270,8 @@ export const ConversationActivity = memo(function ConversationActivity({
   const { t } = useI18n();
   const [choice, setChoice] = useState<boolean | null>(null);
   const open = choice ?? running;
-  if (!items.length) return null;
+  const groups = groupActivity(items);
+  if (!groups.length) return null;
   const seconds = Math.max(1, Math.round((elapsedMs ?? 0) / 1000));
   return (
     <div className={`conversation-activity ${running ? "running" : ""}`}>
@@ -296,7 +297,7 @@ export const ConversationActivity = memo(function ConversationActivity({
         <ChevronRight size={14} className={open ? "expanded" : ""} />
       </button>
       <ActivityBody open={open} className="activity-items">
-        {groupActivity(items).map((group) =>
+        {groups.map((group) =>
           group.kind === "item" ? (
             <ActivityItem item={group.items[0]} key={group.id} />
           ) : (
