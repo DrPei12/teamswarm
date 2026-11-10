@@ -139,7 +139,11 @@ export function contextWindowUsage(
       next.usableTokens !== attempt.contextWindow.usableTokens)
       ? { ...value, nextLimit: next.usableTokens }
       : value;
-  if (plan)
+  // A guessed window that was never applied to the Harness yields to the
+  // capacity the Harness actually reported for this session.
+  const guessed =
+    plan?.source === "estimate" && !plan.overrideNative && limit !== null;
+  if (plan && !guessed)
     return addNext({
       used,
       estimated,

@@ -198,3 +198,56 @@ test("Claude step usage recovers final deltas, cache tokens and native window wh
     db.close();
   }
 });
+
+test("a guessed window yields to the capacity the Harness reported for the session", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(
+    "CREATE TABLE host_context_frames(team_id TEXT, attempt_id TEXT, data TEXT); CREATE TABLE runtime_events(team_id TEXT, attempt_id TEXT, type TEXT, sequence INTEGER, data TEXT)",
+  );
+  try {
+    const c = executionConfig.parse({
+      harness: "claude-code",
+      model: "qwen-plus",
+      baseUrl: "https://secondary.example/anthropic",
+      credentialEnv: "TEST_SECONDARY",
+    });
+    const plan = resolveContextWindow(c, "auto")!;
+    assert.deepEqual(
+      [plan.source, plan.rawTokens, plan.overrideNative],
+      ["estimate", 200000, false],
+    );
+    const a = {
+      id: "a",
+      teamId: "t",
+      config: c,
+      contextWindow: plan,
+      usage: null,
+    } as unknown as Attempt;
+    const frame = (context: Record<string, unknown>) => {
+      db.exec("DELETE FROM host_context_frames");
+      db.prepare("insert into host_context_frames values('t','a',?)").run(
+        JSON.stringify({ context }),
+      );
+    };
+    // Before any native report the estimate is all there is.
+    frame({ inputTokens: 100000, outputTokens: 100 });
+    const estimated = contextWindowUsage(db, c, a)!;
+    assert.equal(estimated.limit, plan.usableTokens);
+    assert.equal(estimated.limitSource, "estimate");
+    // The Harness kept its own, larger window; occupancy is measured against it.
+    frame({ inputTokens: 260900, outputTokens: 100, contextWindowTokens: 828000 });
+    const reported = contextWindowUsage(db, c, a)!;
+    assert.deepEqual(
+      [reported.used, reported.limit, reported.limitSource],
+      [261000, 828000, "reported"],
+    );
+    // A window the user selected and that was applied to the Harness still bounds the session.
+    const chosen = resolveContextWindow(c, "128k")!;
+    assert.equal(chosen.overrideNative, true);
+    const bounded = contextWindowUsage(db, c, { ...a, contextWindow: chosen } as Attempt)!;
+    assert.equal(bounded.limit, chosen.usableTokens);
+    assert.equal(bounded.limitSource, "configured");
+  } finally {
+    db.close();
+  }
+});
