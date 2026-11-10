@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { verifyBuild, digest } from "./release-identity.mjs";
 import { desktopTarget } from "./desktop-platform.mjs";
 import { builderCache } from "./builder-cache.mjs";
+import { keepCallerIntegrity } from "./release-integrity.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const target = desktopTarget();
 const npm = process.env.npm_execpath;
@@ -28,6 +29,7 @@ if (existsSync(output)) {
   rmSync(output, { recursive: true });
 }
 mkdirSync(output, { recursive: true });
+if (keepCallerIntegrity(output)) console.log(`Reset the integrity label of ${output} so packaging helpers can write their output.`);
 const config = JSON.parse(readFileSync(path.join(root, "electron-builder.json"), "utf8"));
 config.directories = { app: path.join(root, "apps/desktop"), output };
 config.afterPack = path.join(root, "apps/desktop/verify-package.cjs");

@@ -8,6 +8,7 @@ import path from 'node:path';
 import { applicationDataBase, dataDirectory } from '../scripts/platform.cjs';
 import { desktopTarget } from '../scripts/desktop-platform.mjs';
 import { builderCache, canRenameInside } from '../scripts/builder-cache.mjs';
+import { keepCallerIntegrity, lowIntegrityLabel } from '../scripts/release-integrity.mjs';
 import { installCredentialBridge } from '../apps/desktop/credential-bridge.cjs';
 
 test('the lockfile contains Rollup binaries for all three desktop targets', () => {
@@ -100,4 +101,18 @@ test('the rename check leaves nothing behind', () => {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test('a release folder that would lower the rights of packaging helpers is relabelled', () => {
+  const low = 'release\r\nD:AI(A;OICIID;FA;;;BA)S:AI(ML;OICIID;NW;;;LW)\r\n', normal = 'release\r\nD:AI(A;OICIID;FA;;;BA)\r\n';
+  assert.equal(lowIntegrityLabel(low), true);
+  assert.equal(lowIntegrityLabel(normal), false);
+  assert.equal(lowIntegrityLabel('S:(ML;OICI;NW;;;ME)'), false);
+  const relabelled = [];
+  const apply = directory => { relabelled.push(directory); return true; };
+  assert.equal(keepCallerIntegrity('out', { platform: 'win32', inspect: () => low, apply }), true);
+  assert.equal(keepCallerIntegrity('out', { platform: 'win32', inspect: () => normal, apply }), false);
+  assert.equal(keepCallerIntegrity('out', { platform: 'linux', inspect: () => low, apply }), false);
+  assert.deepEqual(relabelled, ['out']);
+  assert.throws(() => keepCallerIntegrity('out', { platform: 'win32', inspect: () => low, apply: () => false }), /Low integrity label/);
 });
