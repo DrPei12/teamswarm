@@ -824,6 +824,7 @@ test("explicit local harness modules load; remote paths and duplicate adapters a
         "pi",
         "deepseek-harness",
         "opencode",
+        "antigravity",
         "test-extension",
       ],
     );

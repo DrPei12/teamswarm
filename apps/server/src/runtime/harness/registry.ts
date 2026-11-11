@@ -28,10 +28,10 @@ export async function loadHarnesses(
 ): Promise<Harness[]> {
   const adapters: Harness[] = [
     new CodexHarness(),
-    new AntigravityHarness(),
     ...(["claude-code", "grok", "pi", "deepseek-harness", "opencode"] as const).map(
       (id) => new NativeHarness(id),
     ),
+    new AntigravityHarness(),
   ];
   if (!modules) return adapters;
   const files: unknown = JSON.parse(modules);
