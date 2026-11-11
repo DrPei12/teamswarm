@@ -16,7 +16,7 @@ await new Promise((resolve) => probe.close(resolve));
 const service = createApp({
   apiPort: port,
   dataDir: path.join(output, "data"),
-  harnesses: ["codex", "claude-code", "grok"].map((id) => ({
+  harnesses: ["codex", "claude-code", "grok", "antigravity"].map((id) => ({
     id,
     capabilities: { resume: true },
     async inspect() {
