@@ -73,6 +73,13 @@ try {
   await checks.getByRole('checkbox', { name: 'Unit' }).check();
   await checks.getByRole('checkbox', { name: 'Lint' }).check();
   await checks.getByRole('textbox', { name: 'Other answer' }).fill('Smoke');
+  await page.getByRole('button', { name: 'Collaboration', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Question test answer', exact: true }).click();
+  await card.waitFor();
+  assert(await format.getByRole('radio', { name: /^Text/ }).isChecked());
+  assert(await checks.getByRole('checkbox', { name: 'Unit' }).isChecked());
+  assert(await checks.getByRole('checkbox', { name: 'Lint' }).isChecked());
+  assert.equal(await checks.getByRole('textbox', { name: 'Other answer' }).inputValue(), 'Smoke');
   await page.screenshot({ path: path.join(root, 'question-request.png') });
   await send.click();
   await card.waitFor({ state: 'detached' });
