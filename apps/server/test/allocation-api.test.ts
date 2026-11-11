@@ -49,9 +49,10 @@ interface Running {
   baseUrl: string;
   close: () => Promise<void>;
 }
-async function open(harness: Harness): Promise<Running> {
+async function open(harness: Harness, manualResourceConfiguration = false): Promise<Running> {
   const directory = mkdtempSync(path.join(process.cwd(), ".test-allocation-api-"));
   const service = createApp({
+    manualResourceConfiguration,
     dataDir: path.join(directory, "data"),
     webDistDir: path.join(directory, "web"),
     harnesses: [harness],
@@ -187,6 +188,122 @@ test("resources persist, list, update with optimistic versions and delete safely
   }
 });
 
+test("only actionable formal tasks enter allocation; hide, restore and unpin preserve their history", async () => {
+  const app = await open(fixtureCodex(), true);
+  try {
+    const team = await seedTeam(app, "Allocation list");
+    const worker = await seedMember(app, team, "Writer", "read-only");
+    const resource = await seedResource(app, team, "Task preset", { harness: "codex", access: "read-only" });
+    const { store, history } = app.service.runtime;
+    const chat = history.mainConversation(team);
+    let host!: Work;
+    store.teams.recordMessage(team, chat, "Allocate work", randomUUID(), message => {
+      host = store.enqueueHost(team, chat, message.id, true, false);
+    });
+    const run = store.get<Run>("runs", team, host.runId);
+    const create = (title:string) => store.createWork(run, worker.id, title, title, [], [], []);
+    const task = create("Member conversation"); // The role is structural, never inferred from its title.
+    const mail = create("Custom message title");
+    mail.interaction = { messageIds: [randomUUID()] };store.save("works", mail);
+    const coordination = create("Coordination");coordination.kind="collaboration";store.save("works",coordination);
+    const predecessor = create("Same title"); store.setStatus(predecessor,"failed");
+    const continuation = create("Same title");continuation.continuationOf=predecessor.id;store.setStatus(continuation,"self_checked");
+    const ids = async () => (await api(app,"/api/product")).body.executions[team].allocationTaskIds as string[];
+    assert.deepEqual(await ids(), [task.id]);
+    const snapshot = () => store.get<Work>("works",team,task.id);
+    const endpoint = "/api/teams/"+team+"/works/"+task.id;
+    const update = (suffix:string,params:Record<string,unknown>) => api(app,endpoint+suffix, {method:"PUT",...json({expectedRevision:snapshot().revision,...params})});
+    const selection = {resourceId:resource.id,resourceVersion:resource.version,reason:"Task fixture"};
+    assert.equal((await update("/allocation",{selection,fromAllocationList:true})).status,200);
+    const pinned=snapshot();
+    assert.equal((await update("/allocation-list",{hidden:true})).status,200);
+    assert(snapshot().allocationDismissedAt);assert.equal(snapshot().status,pinned.status);assert.deepEqual(snapshot().selection,pinned.selection);
+    assert.equal((await update("/allocation",{selection:null,fromAllocationList:true})).status,409);
+    assert.equal((await update("/allocation-list",{expectedRevision:pinned.revision,hidden:false})).status,409);
+    const resourceUrl="/api/teams/"+team+"/resources/"+resource.id;
+    assert.equal((await api(app,resourceUrl,{method:"DELETE"})).body.error.code,"resource_in_use");
+    assert.equal((await update("/allocation-list",{hidden:false})).status,200);
+    assert.equal(snapshot().allocationDismissedAt,undefined);
+    const failed=snapshot();store.setStatus(failed,"rejected");
+    assert.deepEqual(await ids(),[task.id]);
+    assert.equal((await update("/allocation",{selection:null,fromAllocationList:true})).status,200);
+    assert.equal(snapshot().selection,undefined);
+    assert.equal((await api(app,resourceUrl,{method:"DELETE",...json({expectedVersion:2})})).body.error.code,"version_conflict");
+    assert.equal((await api(app,resourceUrl,{method:"DELETE",...json({expectedVersion:1})})).status,200);
+    const historicResource=await seedResource(app,team,"Past allocation",{harness:"codex",access:"read-only"});
+    const oldPin={resourceId:historicResource.id,resourceVersion:historicResource.version,reason:"Historical assignment"};
+    assert.equal((await update("/allocation",{selection:oldPin,fromAllocationList:true})).status,200);
+    run.state="completed";store.save("runs",run);
+    assert.deepEqual(await ids(),[]);
+    assert.equal((await api(app,endpoint+"/retry",{method:"POST",...json({expectedRevision:snapshot().revision,fromAllocationList:true})})).status,409);
+    assert.equal((await api(app,"/api/teams/"+team+"/resources/"+historicResource.id,{method:"DELETE",...json({expectedVersion:1})})).status,200);
+    assert.deepEqual(snapshot().selection,oldPin);
+    assert.equal(store.get<Work>("works",team,mail.id).interaction?.messageIds[0],mail.interaction.messageIds[0]);
+    assert.equal(store.get<Work>("works",team,predecessor.id).status,"failed");
+    assert.equal(store.get<Work>("works",team,continuation.id).status,"self_checked");
+  } finally {await app.close();}
+});
+
+test("the installed client policy rejects every paused panel write before it can change state", async () => {
+  const app = await open(fixtureCodex());
+  try {
+    const team = await seedTeam(app, "Paused resource settings");
+    const member = await seedMember(app, team, "Member", "read-only");
+    const saved = await seedResource(app, team, "Existing resource", { harness: "codex", access: "read-only" });
+    const { store, history } = app.service.runtime;
+    const chat = history.mainConversation(team);
+    let host!: Work;
+    store.teams.recordMessage(team, chat, "Fixture", randomUUID(), m => { host = store.enqueueHost(team, chat, m.id, true, false); });
+    const run = store.get<Run>("runs", team, host.runId);
+    const task = store.createWork(run, member.id, "Fixture", "Fixture", [], [], []);
+    store.setStatus(task, "failed");
+    const branch = history.forRun(run).id;
+    const prefix = "/api/teams/" + team;
+    const session = await fetch(app.baseUrl + "/api/control/session", {method:"POST",headers:{authorization:"Bearer "+app.service.controlToken}});
+    const cookie = session.headers.get("set-cookie")!.split(";")[0];
+    const client = (method:string, route:string, body:unknown) => fetch(app.baseUrl+route, {
+      method, headers: {cookie, "content-type":"application/json"}, body:JSON.stringify(body)
+    });
+    const selection = {resourceId:saved.id,resourceVersion:saved.version,reason:"Selected by user"};
+    const assignment = {expectedRevision:task.revision,selection};
+    const resource = {name:"Pending change",description:"",config:saved.config};
+    const state = () => ["runtime_resources","runtime_members","runtime_works","runtime_runs","runtime_attempts","runtime_events"].map(
+      table=>store.db.prepare("SELECT * FROM "+table+" WHERE team_id=? ORDER BY rowid").all(team)
+    );
+    const before=state();
+    const writes:[string,string,unknown][]=[
+      ["POST","/resources",resource],["PUT","/resources/"+saved.id,{...resource,expectedVersion:saved.version}],
+      ["DELETE","/resources/"+saved.id,{expectedVersion:saved.version}],
+      ["PUT","/branches/"+branch+"/host-allocation",{expectedRevision:1,selection}],
+      ["PUT","/members/"+member.id+"/allocation",{expectedRevision:1,selection}],
+      ["PUT","/works/"+task.id+"/allocation",assignment],
+      ["PUT","/works/"+task.id+"/allocation-list",{expectedRevision:task.revision,hidden:true}],
+      ["POST","/works/"+task.id+"/retry",{expectedRevision:task.revision,fromAllocationList:true}],
+      ["POST","/allocation-package/import",{package:(await api(app,prefix+"/allocation-package")).body}],
+    ];
+    for(const [method, route, body] of writes) {
+      const response=await client(method,prefix+route,body);
+      assert.equal(response.status,409,route);
+      assert.equal((await response.json()).error.code,"resource_configuration_paused",route);
+    }
+    for (const body of [{secret:"isolated-placeholder"}, {secret:"isolated-placeholder",purpose:"resource-panel"}]) {
+      const denied=await client("PUT","/api/product/teams/"+team+"/credential",body);
+      assert.equal(denied.status,409);
+      assert.equal((await denied.json()).error.code,"resource_configuration_paused");
+    }
+    assert.deepEqual(state(),before);
+    const view=(await api(app,"/api/product")).body;
+    assert.equal(view.service.manualResourceConfiguration,false);
+    assert.equal(view.executions[team].allocationTaskIds,undefined);
+    const current=view.executions[team].host;
+    const normal=await client("PUT","/api/product/teams/"+team+"/branches/"+branch+"/host/runtime",{
+      expectedVersion:current.configurationVersion,config:{...current.config,model:"chat-model",effort:"high"}
+    });
+    assert.equal(normal.status,200);
+    assert.equal((await api(app,"/api/product")).body.executions[team].host.config.effort,"high");
+  } finally { await app.close(); }
+});
+
 test("member and task allocation use stable contract codes and never half-write", async () => {
   const running = await open(fixtureCodex());
   try {
@@ -206,7 +323,7 @@ test("member and task allocation use stable contract codes and never half-write"
       protocol: "chat-completions",
     });
 
-    // Access escalation: a read-only member cannot adopt a workspace-write edge.
+    // A model resource does not expand the member's access.
     const escalated = await api(
       running,
       `/api/teams/${teamId}/members/${reader.id}/allocation`,
@@ -218,11 +335,12 @@ test("member and task allocation use stable contract codes and never half-write"
         }),
       },
     );
-    assert.equal(escalated.status, 409);
-    assert.equal(escalated.body.error.code, "access_escalation");
+    assert.equal(escalated.status, 200);
     const afterFail = running.service.runtime.store.get<Member>("members", teamId, reader.id);
-    assert.equal(afterFail.selection, undefined);
-    assert.equal(afterFail.allocationVersion, undefined);
+    assert.equal(afterFail.selection?.resourceId, writable.id);
+    assert.equal(afterFail.config.access, "read-only");
+    assert.equal(running.service.runtime.catalog.memberExecution(teamId, running.service.runtime.history.ensure(teamId).id, afterFail).config.access, "read-only");
+    assert.equal(afterFail.allocationVersion, 2);
 
     // Stale expectedRevision is a version conflict, not a silent overwrite.
     const staleRev = await api(
@@ -243,13 +361,13 @@ test("member and task allocation use stable contract codes and never half-write"
     const ok = await api(running, `/api/teams/${teamId}/members/${reader.id}/allocation`, {
       method: "PUT",
       ...json({
-        expectedRevision: 1,
+        expectedRevision: 2,
         selection: { resourceId: readonly.id, resourceVersion: 1, reason: "explicit" },
       }),
     });
     assert.equal(ok.status, 200);
     assert.equal(ok.body.selection.resourceId, readonly.id);
-    assert.equal(ok.body.allocationVersion, 2);
+    assert.equal(ok.body.allocationVersion, 3);
 
     // An unknown resource and an incompatible one fail closed.
     const unknown = await api(
@@ -318,7 +436,7 @@ test("member and task allocation use stable contract codes and never half-write"
     assert.equal(workOk.status, 200);
     assert.equal(workOk.body.selection.resourceId, writable.id);
 
-    // A running attempt is busy: neither the work nor the member may be reallocated.
+    // A running task stays pinned; a member default can seed future Attempts.
     const running0 = store.get<Work>("works", teamId, work.id);
     store.setStatus(running0, "running");
     const busyWork = await api(running, `/api/teams/${teamId}/works/${work.id}/allocation`, {
@@ -337,8 +455,9 @@ test("member and task allocation use stable contract codes and never half-write"
         selection: { resourceId: readonly.id, resourceVersion: 1, reason: "swap" },
       }),
     });
-    assert.equal(busyMember.status, 409);
-    assert.equal(busyMember.body.error.code, "busy");
+    assert.equal(busyMember.status, 200);
+    assert.equal(busyMember.body.selection.resourceId, readonly.id);
+    assert.equal(store.get<Work>("works", teamId, work.id).selection?.resourceId, writable.id);
 
     // A terminal, non-executing work cannot be reallocated either.
     const finished = store.createWork(run, writer.id, "Done", "Done", ["c"], [], []);
@@ -395,7 +514,7 @@ test("member and task allocation use stable contract codes and never half-write"
       {
         method: "PUT",
         ...json({
-          expectedRevision: 2,
+          expectedRevision: 3,
           selection: { resourceId: defaultEdge.id, resourceVersion: 1, reason: "default" },
         }),
       },
@@ -552,11 +671,13 @@ test("the engine freezes the resource snapshot at Attempt start and keeps histor
     assert.equal(reread.workId, work.id);
     assert.equal(reread.memberId, member.id);
 
-    // Stop the runner before releasing the deferred execution to avoid new work.
-    (runtime as any).closing = true;
+    // Enter normal shutdown before releasing the fixture; close() must still
+    // drain callbacks and unsubscribe the scheduler before the database closes.
+    const shutdown = runtime.close();
     release!();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await shutdown;
   } finally {
+    release?.();
     await runtime.close();
     teams.close();
     const resolved = path.resolve(directory);
@@ -1123,9 +1244,9 @@ test("deleteResource is blocked only by live references and keeps terminal histo
     assert.equal(keptAttempt.allocation?.config.access, "workspace-write");
     assert.equal(keptAttempt.status, "accepted");
 
-    (runtime as any).closing = true;
+    const shutdown = runtime.close();
     release?.();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await shutdown;
   } finally {
     await runtime.close();
     teams.close();

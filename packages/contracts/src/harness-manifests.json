@@ -523,7 +523,8 @@
             "type": "string",
             "enum": [
               "read-only",
-              "workspace-write"
+              "workspace-write",
+              "danger-full-access"
             ]
           },
           "approval": {
@@ -711,6 +712,82 @@
       },
       "isolation": {
         "default": "Native permission rules; no TeamSwarm OS sandbox is added"
+      }
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "id": "antigravity",
+    "name": "Antigravity",
+    "packageVersion": "1.0.0",
+    "driver": "acp",
+    "models": {
+      "protocols": [],
+      "preferredProtocol": null,
+      "nativeOnly": true,
+      "nativeLogin": true,
+      "nativeEffort": {
+        "values": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "nativeLoginOnly": true
+      },
+      "thinkingFormats": {},
+      "outputBudget": false,
+      "contextWindow": false
+    },
+    "permissions": {
+      "schema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string",
+            "const": "antigravity"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "plan",
+              "default",
+              "bypassPermissions"
+            ]
+          }
+        },
+        "required": [
+          "harness",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "readOnly": {
+        "set": {
+          "mode": "plan"
+        }
+      }
+    },
+    "session": {
+      "resume": true
+    },
+    "description": {
+      "execution": {
+        "runtime": "Antigravity CLI ACP",
+        "strategy": "The official Antigravity CLI owns its native account, model calls, tools and session history.",
+        "installUrl": "https://antigravity.google/docs/cli/acp/"
+      },
+      "permissions": {
+        "behavior": "Read-only turns use native plan mode and reject native mutation approval. Full access uses the native skip-permissions flag."
+      },
+      "results": {
+        "source": "ACP session updates and tool lifecycle",
+        "cancellation": "ACP session/cancel and owned process reconciliation"
+      },
+      "isolation": {
+        "default": "Native permission modes; Team publication validates the assigned write scope."
       }
     }
   }

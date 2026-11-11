@@ -74,7 +74,9 @@ test("read-only selection narrows full access and Harness changes preserve nativ
   assert.deepEqual(narrowed.permissions, { harness: "codex", approvalPolicy: "untrusted", sandbox: "read-only" });
   assert.doesNotThrow(() => executionConfig.parse(narrowed));
   assert.deepEqual(permissionsForHarness(c, "claude-code"), { harness: "claude-code", mode: "bypassPermissions" });
-  assert.equal(permissionsForHarness(c, "pi"), undefined);
+  const pi = permissionsForHarness(c, "pi");
+  assert.equal(pi?.harness, "pi");
+  assert.ok((pi?.tools as string[]).includes(process.platform === "win32" ? "powershell" : "bash"));
   assert.equal(c.permissions?.harness === "codex" && c.permissions.sandbox, "danger-full-access");
 });
 

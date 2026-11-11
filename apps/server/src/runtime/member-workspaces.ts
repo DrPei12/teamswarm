@@ -1,4 +1,5 @@
-import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync, renameSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
+import { commitPreparedDirectory } from "./prepared-directory.js";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { conflict } from "../errors.js";
@@ -49,6 +50,18 @@ export class MemberWorkspaces {
   }
   prepare(work: Work, member: Member, run: Run) {
     if (member.kind === "host" || work.workspaceMode !== "isolated" || work.workspace) return;
+    if (work.interaction?.resumeFromWorkId) {
+      const base = this.store.get<Work>("works", work.teamId, work.interaction.resumeFromWorkId);
+      if (base.memberId !== member.id || this.history.forRun(this.store.get<Run>("runs", work.teamId, base.runId)).id !== this.history.forRun(run).id)
+        throw conflict("workspace_identity", "A conversation must remain in its member's project branch.");
+      // A read-only conversation reuses its thread's workspace. It does not
+      // create a new production copy just to deliver a message.
+      work.workspace = this.store.workspace(base);
+      work.workspaceMode = base.workspace ? base.workspaceMode ?? "shared" : "shared";
+      this.store.save("works", work);
+      this.store.event(work.teamId, "work.workspace_reused", { memberId: member.id, sourceWorkId: base.id }, work);
+      return;
+    }
     const target = work.reviewOf ? this.store.get<Work>("works", work.teamId, work.reviewOf) : null;
     if (target) this.store.verifyArtifacts(target);
     const source = target ? this.store.workspace(target) : run.settings.workspace;
@@ -66,7 +79,7 @@ export class MemberWorkspaces {
     const snapshot = this.history.snapshots.capture(source);
     const workspace = path.join(this.root(member), "work-" + component(work.id));
     if (existsSync(workspace)) throw conflict("workspace_prepare_incomplete", "An unfinished working copy already exists; recover it before preparing this work.");
-    const staging = workspace + ".preparing-" + randomUUID();
+    const staging = path.join(this.root(member), ".teamswarm-prepare-" + randomUUID());
     let baseline: string;
     try {
       this.history.snapshots.restore(snapshot, staging);
@@ -77,7 +90,7 @@ export class MemberWorkspaces {
         writeFileSync(file, artifact.content, "utf8");
       }
       baseline = this.history.snapshots.capture(staging);
-      renameSync(staging, workspace);
+      commitPreparedDirectory(staging, workspace);
     } catch (error) {
       // Only the fresh unpublished staging directory created by this invocation.
       if (existsSync(staging) && path.dirname(staging) === this.root(member) && !lstatSync(staging).isSymbolicLink()) rmSync(staging, { recursive: true });

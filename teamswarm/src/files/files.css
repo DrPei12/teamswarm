@@ -46,7 +46,7 @@
 }
 .file-panel-title {
   padding: 0 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   font-weight: 500;
 }
 .file-tab {
@@ -73,7 +73,7 @@
   padding: 5px 2px 5px 8px;
   border: 0;
   background: none;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 .file-tab > button[role="tab"] span {
   overflow: hidden;
@@ -124,7 +124,7 @@
   box-shadow: none;
   outline: 0;
   padding: 10px 0;
-  font: 13px var(--font-ui);
+  font: calc(13px * var(--font-scale)) var(--font-ui);
 }
 .file-directory {
   padding: 7px 16px;
@@ -133,7 +133,7 @@
   overflow-x: auto;
   flex-shrink: 0;
   gap: 4px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   color: var(--subtle);
 }
 .file-directory button,
@@ -167,7 +167,7 @@
   gap: 9px;
   align-items: center;
   text-align: left;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 .file-entry:hover,
 .file-entry:focus-visible {
@@ -177,7 +177,7 @@
   min-width: 0;
   flex: 1;
   overflow-wrap: anywhere;
-  line-height: 18px;
+  line-height: calc(18px * var(--font-scale));
 }
 .file-entry > svg {
   flex-shrink: 0;
@@ -185,7 +185,7 @@
 }
 .file-entry small {
   display: block;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   color: var(--subtle);
   margin-top: 2px;
 }
@@ -207,7 +207,7 @@
   gap: 6px;
   background: none;
   border: 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   padding: 4px 0;
   color: var(--secondary);
   text-align: left;
@@ -231,7 +231,7 @@
   background: none;
   padding: 4px 7px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   color: var(--subtle);
   white-space: nowrap;
 }
@@ -248,7 +248,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 .file-save:disabled {
   opacity: 0.4;
@@ -269,24 +269,24 @@
 .file-markdown {
   overflow: auto;
   padding: 24px clamp(20px, 4vw, 40px) 48px;
-  font: 15px/1.65 var(--font-conversation);
+  font: calc(15px * var(--content-scale))/1.65 var(--font-conversation);
   flex: 1;
   overflow-wrap: anywhere;
 }
 .file-markdown h1 {
-  font-size: 24px;
+  font-size: calc(24px * var(--font-scale));
   margin: 0 0 24px;
 }
 .file-markdown h2 {
-  font-size: 20px;
+  font-size: calc(20px * var(--font-scale));
   margin: 28px 0 14px;
 }
 .file-markdown h3 {
-  font-size: 17px;
+  font-size: calc(17px * var(--font-scale));
 }
 .file-markdown pre {
   overflow: auto;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   background: var(--hover);
   padding: 14px;
   border-radius: 8px;
@@ -298,7 +298,7 @@
   border-collapse: collapse;
   width: 100%;
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 .file-markdown td,
 .file-markdown th {
@@ -354,7 +354,7 @@
   flex-direction: column;
   gap: 12px;
   color: var(--subtle);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   padding: 24px;
 }
 .file-status {
@@ -365,13 +365,13 @@
   align-items: center;
   justify-content: space-between;
   border-top: 1px solid var(--line);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   color: var(--subtle);
 }
 .file-error {
   padding: 10px 14px;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: calc(12px * var(--font-scale));
+  line-height: calc(18px * var(--font-scale));
   background: var(--accent-wash);
   display: flex;
   gap: 12px;
@@ -388,7 +388,7 @@
   flex-shrink: 0;
 }
 .file-limit {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   color: var(--subtle);
   padding: 8px;
 }
@@ -442,7 +442,7 @@
   align-items: center;
   flex: 0 0 auto;
   gap: 12px;
-  font: 12px var(--font-ui);
+  font: calc(12px * var(--font-scale)) var(--font-ui);
   color: var(--subtle);
 }
 .document-toolbar button {
@@ -494,7 +494,7 @@
   border-radius: 9px;
   background: var(--panel);
   box-shadow: var(--cds-shadow-popover, 0 8px 28px #0002);
-  font: 13px var(--font-ui);
+  font: calc(13px * var(--font-scale)) var(--font-ui);
   color: var(--text);
 }
 .document-zoom-menu [role="menuitem"] {
@@ -578,7 +578,7 @@
   background: transparent;
   border: 1px solid transparent;
   border-radius: 5px;
-  font: 11px var(--font-ui);
+  font: calc(11px * var(--font-scale)) var(--font-ui);
   color: var(--subtle);
 }
 .office-slide-thumbnails button[aria-selected="true"] {
@@ -617,7 +617,7 @@
   border-radius: 4px;
   background: transparent;
   padding: 7px 8px;
-  font: 14px/1.6 var(--font-ui);
+  font: calc(14px * var(--font-scale))/1.6 var(--font-ui);
   color: var(--text);
   margin: 0 0 5px;
 }
@@ -633,7 +633,7 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  font: 11px var(--font-ui);
+  font: calc(11px * var(--font-scale)) var(--font-ui);
   color: var(--subtle);
   padding: 4px 0;
   flex-shrink: 0;
@@ -660,7 +660,7 @@
   flex-shrink: 0;
   display: flex;
   border-bottom: 1px solid var(--line);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 .sheet-formula > span {
   width: 64px;
@@ -686,7 +686,7 @@
 .sheet-grid table {
   border-collapse: separate;
   border-spacing: 0;
-  font: 12px var(--font-ui);
+  font: calc(12px * var(--font-scale)) var(--font-ui);
   table-layout: fixed;
 }
 .sheet-grid th {
@@ -752,7 +752,7 @@
   background: none;
   border-bottom: 2px solid transparent;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 .sheet-tabs button[aria-selected="true"] {
   border-bottom-color: var(--accent);

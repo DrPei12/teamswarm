@@ -24,6 +24,8 @@
     "@codemirror/legacy-modes": "^6.5.5",
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.15",
+    "@fontsource-variable/noto-sans-sc": "5.3.1",
+    "@fontsource-variable/source-serif-4": "5.3.1",
     "@office-kit/docx": "0.2.0",
     "@office-kit/pptx": "0.28.0",
     "@office-kit/pptx-preview": "0.21.0",

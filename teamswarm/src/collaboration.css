@@ -32,7 +32,7 @@
   padding: 5px 8px;
   border-radius: var(--cds-radius-control);
   text-align: left;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 .work-thread-trigger > span:first-child {
   overflow: hidden;
@@ -69,18 +69,20 @@
 }
 .work-thread-picker small {
   color: var(--secondary);
-  font-size: 11px;
-  line-height: 18px;
+  font-size: calc(11px * var(--font-scale));
+  line-height: calc(18px * var(--font-scale));
 }
 .project-records select,
 .record-editor input,
 .record-editor textarea {
-  font: inherit;
-  color: inherit;
+  font: 400 var(--field-font-size) / var(--field-line-height) var(--font-ui);
+  color: var(--text);
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 8px;
+  border-radius: var(--field-radius);
+  padding: var(--field-padding-block) var(--field-padding-inline);
+  min-height: var(--field-height);
+  min-width: 0;
 }
 .project-records {
   padding: 0 22px 22px;
@@ -107,7 +109,7 @@
   opacity: 0.6;
 }
 .record-hint {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   line-height: 1.6;
   opacity: 0.65;
 }
@@ -133,11 +135,11 @@
   line-height: 1.5;
 }
 .record-heading strong {
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   overflow-wrap: anywhere;
 }
 .record-heading span {
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   opacity: 0.65;
   flex-shrink: 0;
 }
@@ -148,15 +150,19 @@
 .record-editor label {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
+  gap: var(--field-label-gap);
+  font-size: var(--field-font-size);
+  line-height: var(--field-line-height);
+  font-weight: 500;
+  min-width: 0;
+  color: var(--secondary);
 }
 .record-actions {
   display: flex;
   gap: 12px;
   align-items: center;
   margin-top: 12px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 .record-actions button:not(.primary-button) {
   text-decoration: underline;
@@ -173,17 +179,19 @@
 .record-fields {
   display: flex;
   gap: 14px;
+  align-items: end;
 }
 .record-fields label {
   flex: 1;
+  min-width: 0;
 }
 .record-error {
   color: #bd4949;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   overflow-wrap: anywhere;
 }
 .output-content {
-  font: 12px/1.7 var(--font-mono, monospace);
+  font: calc(12px * var(--code-scale))/1.7 var(--font-mono, monospace);
   max-height: 320px;
   overflow: auto;
   white-space: pre-wrap;
@@ -195,13 +203,13 @@
 .record-download {
   display: inline-block;
   margin: 12px 0 4px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 .insight-record .markdown {
-  font-size: 13px;
+  font-size: calc(13px * var(--content-scale));
 }
 .insight-sources {
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   line-height: 1.6;
 }
 .insight-sources blockquote {
@@ -224,4 +232,25 @@
     flex-wrap: wrap;
     gap: 4px;
   }
+}
+.delivery-history {
+  margin-block-start: 8px;
+  font-size: var(--font-caption-size);
+  color: var(--secondary);
+}
+.delivery-history summary {
+  cursor: pointer;
+}
+.delivery-history ol {
+  padding-inline-start: 1.6em;
+}
+.delivery-history li + li {
+  margin-block-start: 6px;
+}
+.delivery-history li > span {
+  margin-inline-start: 8px;
+}
+.delivery-history p {
+  margin: 2px 0;
+  overflow-wrap: anywhere;
 }

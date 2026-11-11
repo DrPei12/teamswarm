@@ -883,6 +883,20 @@ function HistoryContent({
           />
           <Background color="var(--graph-dot)" gap={24} size={1} />
         </ReactFlow>
+        {!nodes.length && (
+          <div className="canvas-empty">
+            <Flag size={26} />
+            <span>{t("No checkpoints yet")}</span>
+            <button
+              className="secondary-button"
+              onClick={() => void checkpoint()}
+              disabled={busy || !branch}
+            >
+              <Plus size={14} />
+              {t("Create checkpoint")}
+            </button>
+          </div>
+        )}
         <div className="canvas-tools">
           <IconButton
             label={t("Zoom out")}

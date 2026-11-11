@@ -1,3 +1,4 @@
+import type { ContextWindowPreset } from "@team/contracts/context-window";
 import { harnessManifests } from "@team/contracts/harness-catalog";
 import {
   PreferencesOutbox,
@@ -551,9 +552,29 @@ class ProductClient {
         ? previous
         : { name, clientRequestId: crypto.randomUUID() };
     inputStorage.setItem(key, JSON.stringify(input));
-    const result = await this.command<{ id: string }>("/product/teams", input);
+    const result = await this.command<{ id: string; mainChatId?: string }>(
+      "/product/teams",
+      input,
+    );
     inputStorage.removeItem(key);
     return result;
+  }
+  async updateTeam(
+    teamId: string,
+    change: { name?: string; archived?: boolean },
+  ) {
+    return this.command<{ id: string; name: string; archived: boolean }>(
+      `/product/teams/${encodeURIComponent(teamId)}`,
+      change,
+      "PATCH",
+    );
+  }
+  async deleteTeam(teamId: string) {
+    return this.command<{ id: string; deleted: true }>(
+      `/product/teams/${encodeURIComponent(teamId)}`,
+      {},
+      "DELETE",
+    );
   }
   async send(teamId: string, chatId: string | undefined, draft: Draft) {
     await this.flush();
@@ -754,42 +775,18 @@ class ProductClient {
     );
   }
   async configure(teamId: string, config: RuntimeConfig, choice?: ModelChoice) {
-    const settings = this.state.workspace?.executions?.[teamId]?.settings;
-    if (!settings) throw new Error("Team settings are not available.");
+    const host = this.state.workspace?.executions?.[teamId]?.host;
+    if (!host) throw new Error("Team settings are not available.");
     const next = await this.resolveRuntimeChoice(
       teamId,
-      settings.config,
+      host.config,
       config,
       choice,
     );
-    return this.saveSettings(teamId, { ...settings, config: next });
-  }
-  async configurePermissions(
-    teamId: string,
-    memberId: string,
-    permissions: NonNullable<ExecutionConfig["permissions"]>,
-  ) {
-    const workspace = this.state.workspace;
-    const host = workspace?.executions?.[teamId]?.host;
-    const isHost = memberId.startsWith("host:") || memberId === host?.memberId;
-    const member = workspace?.members.find(
-      (m) => m.teamId === teamId && m.id === memberId,
-    );
-    const config = isHost ? host?.config : member?.executionConfig;
-    const version = isHost
-      ? host?.permissionVersion
-      : member?.configurationVersion;
-    if (!host || !config || !version)
-      throw new Error("Execution permissions are not available. Try again.");
     try {
       return await this.command(
-        `/product/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(isHost ? host.memberId : memberId)}/permissions`,
-        {
-          permissions,
-          harness: config.harness,
-          expectedVersion: version,
-          branchId: host.branchId,
-        },
+        `/product/teams/${encodeURIComponent(teamId)}/branches/${encodeURIComponent(host.branchId)}/host/runtime`,
+        { config: next, expectedVersion: host.configurationVersion },
         "PUT",
       );
     } catch (error) {
@@ -838,14 +835,22 @@ class ProductClient {
     responsibility: string,
     config: RuntimeConfig,
     clientRequestId: string,
+    options: {
+      executionConfig?: ExecutionConfig;
+      permissionPreset?:
+        | import("@team/contracts/allocation").MemberPermissionPreset
+        | "team-default";
+      expectedPolicyVersion?: number;
+    } = {},
   ) {
     const settings = this.state.workspace?.executions?.[teamId]?.settings;
     if (!settings) throw new Error("Team settings are not available.");
-    let next = await this.resolveRuntimeChoice(teamId, settings.config, config);
+    const base = options.executionConfig ?? settings.config;
+    let next = await this.resolveRuntimeChoice(teamId, base, config);
     // The form can change Harness and model together; the composer changes one at a time.
     if (
       config.model &&
-      config.model !== settings.config.model &&
+      config.model !== base.model &&
       config.model !== next.model
     )
       next = await chooseModel(
@@ -855,7 +860,13 @@ class ProductClient {
         resolveModelConnection,
       );
     const key = `teamswarm.member-create:${teamId}`;
-    const signature = JSON.stringify({ name, responsibility, config: next });
+    const signature = JSON.stringify({
+      name,
+      responsibility,
+      config: next,
+      permissionPreset: options.permissionPreset,
+      expectedPolicyVersion: options.expectedPolicyVersion,
+    });
     const previous = JSON.parse(inputStorage.getItem(key) ?? "null");
     const request =
       previous?.signature === signature
@@ -869,6 +880,8 @@ class ProductClient {
         name,
         responsibility,
         config: next,
+        permissionPreset: options.permissionPreset,
+        expectedPolicyVersion: options.expectedPolicyVersion,
       },
     );
     if (
@@ -877,6 +890,64 @@ class ProductClient {
     )
       inputStorage.removeItem(key);
     return result;
+  }
+  async resolveMemberConfiguration(
+    teamId: string,
+    previous: ExecutionConfig,
+    config: RuntimeConfig,
+    choice?: ModelChoice,
+  ) {
+    return this.resolveRuntimeChoice(teamId, previous, config, choice);
+  }
+  async resolvePermissionConfiguration(
+    teamId: string,
+    config: ExecutionConfig,
+    preset: import("@team/contracts/allocation").MemberPermissionPreset,
+  ) {
+    return api<ExecutionConfig>(
+      `/product/teams/${encodeURIComponent(teamId)}/permission-config`,
+      { config, preset },
+    );
+  }
+  async configureHostPermissionPreset(
+    teamId: string,
+    preset: import("@team/contracts/allocation").MemberPermissionPreset,
+  ) {
+    const host = this.state.workspace?.executions?.[teamId]?.host;
+    if (!host) throw new Error("Host configuration is not available.");
+    try {
+      return await this.command(
+        `/product/teams/${encodeURIComponent(teamId)}/branches/${encodeURIComponent(host.branchId)}/host/permission-preset`,
+        { expectedVersion: host.configurationVersion, preset },
+        "PUT",
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "version_conflict")
+        await this.refresh();
+      throw error;
+    }
+  }
+  async configureMemberPermissionPreset(
+    teamId: string,
+    memberId: string,
+    preset: import("@team/contracts/allocation").MemberPermissionPreset,
+  ) {
+    const member = this.state.workspace?.members.find(
+      (m) => m.teamId === teamId && m.id === memberId,
+    );
+    if (!member?.configurationVersion)
+      throw new Error("Member configuration is not available. Try again.");
+    try {
+      return await this.command(
+        `/product/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/permission-preset`,
+        { expectedVersion: member.configurationVersion, preset },
+        "PUT",
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "version_conflict")
+        await this.refresh();
+      throw error;
+    }
   }
   private async resolveRuntimeChoice(
     teamId: string,
@@ -912,6 +983,14 @@ class ProductClient {
     if (config.permissions !== undefined && harness === previous.harness)
       next = { ...next, permissions: config.permissions };
     return next;
+  }
+  async saveGeneralSettings(settings: {
+    name?: string;
+    language?: Workspace["language"];
+    contextWindowPreset?: ContextWindowPreset;
+  }) {
+    if (!Object.keys(settings).length) return;
+    await this.command("/product/preferences", settings, "PATCH");
   }
   async resources(teamId: string) {
     return api<{ resources: ExecutionResource[] }>(
@@ -950,10 +1029,25 @@ class ProductClient {
       "DELETE",
     );
   }
-  async deleteResource(teamId: string, resourceId: string) {
+  async purgeMemberEntry(
+    teamId: string,
+    memberId: string,
+    expectedRemovedAt: string,
+  ) {
+    return this.command(
+      `/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(memberId)}/entry`,
+      { expectedRemovedAt },
+      "DELETE",
+    );
+  }
+  async deleteResource(
+    teamId: string,
+    resourceId: string,
+    expectedVersion: number,
+  ) {
     return this.command<{ id: string; deleted: true }>(
       `/teams/${encodeURIComponent(teamId)}/resources/${encodeURIComponent(resourceId)}`,
-      {},
+      { expectedVersion },
       "DELETE",
     );
   }
@@ -972,7 +1066,7 @@ class ProductClient {
   async setMemberAllocation(
     teamId: string,
     memberId: string,
-    input: { expectedRevision: number; selection: ResourceSelection },
+    input: { expectedRevision: number; selection: ResourceSelection | null },
   ) {
     return this.command<{
       selection?: ResourceSelection;
@@ -986,11 +1080,11 @@ class ProductClient {
   async setWorkAllocation(
     teamId: string,
     workId: string,
-    input: { expectedRevision: number; selection: ResourceSelection },
+    input: { expectedRevision: number; selection: ResourceSelection | null },
   ) {
     return this.command<{ revision: number; selection?: ResourceSelection }>(
       `/teams/${encodeURIComponent(teamId)}/works/${encodeURIComponent(workId)}/allocation`,
-      input,
+      { ...input, fromAllocationList: true },
       "PUT",
     );
   }
@@ -1018,6 +1112,7 @@ class ProductClient {
         expectedVersion: settings.version,
         workspace: settings.workspace,
         config: settings.config,
+        timeoutSeconds: settings.timeoutSeconds,
       },
       "PUT",
     );

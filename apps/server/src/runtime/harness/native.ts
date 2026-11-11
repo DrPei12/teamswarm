@@ -1,4 +1,6 @@
-import { claudePermissionOptions, openCodePermissionOptions, openCodePermissions, withDefaultPermissions } from "../permission-options.js";
+import {windowBinding} from "../context-window.js";
+import { ClaudeTurnUsage } from "../claude-turn-usage.js";
+import { nativeAccess, deepseekPermissionOptions, grokPermissionOptions, piPermissionOptions, claudePermissionOptions, openCodePermissionOptions, openCodePermissions, withDefaultPermissions } from "../permission-options.js";
 import { conversationInput } from "./conversation-input.js";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnOwned, confirmOwnedExit } from "./owned-process.js";
@@ -22,16 +24,18 @@ import type {
 import { redact } from "../redact.js";
 import { sessionStoreScope } from "./session-scope.js";
 import { NativeUsage } from "./native-usage.js";
-import { contextObservation } from "../context-budget.js";
+import { contextObservation, DEEPSEEK_NATIVE_WINDOW } from "../context-budget.js";
 import { preflight, inspectExecution, type PreflightInput } from "./preflight.js";
 import { prepareExecutionEnvironment } from "./execution-environment.js";
 import { validateNativePermissions, policyFor } from "./permissions.js";
+import { nativeQuestions, unansweredQuestion } from "../native-questions.js";
 import { CommandObservations } from "./command-observations.js";
 import { OpenCodeAcp } from "./opencode-acp.js";
 import { grokModelConfig, isolateGrokEnvironment } from "./grok-config.js";
 import { accountHome, subscriptionEnvironment, subscriptionInspection, subscriptionAccounts, subscriptionScope, claudeSubscriptionFlags } from "./subscriptions.js";
 import { rebootConfirmsTermination, systemBootTime } from "./native-recovery.js";
 import { recoverOpenCodeTruncation } from "./opencode-recovery.js";
+import { NativeTranscript } from "./native-transcript.js";
 import {
   childEnvironment,
   nativeEntry,
@@ -52,10 +56,10 @@ type Active = {
 
 /** Native loops stay in their own executable/SDK. No model-loop emulation here. */
 export class NativeHarness implements Harness {
-  permissionOptions() { return this.id === "claude-code" ? claudePermissionOptions : this.id === "opencode" ? openCodePermissionOptions : { defaultId: "", options: [] }; }
+  permissionOptions() { return this.id === "claude-code" ? claudePermissionOptions : this.id === "opencode" ? openCodePermissionOptions : this.id === "deepseek-harness" ? deepseekPermissionOptions : this.id === "grok" ? grokPermissionOptions : piPermissionOptions; }
   readonly capabilities;
   get sessionScope(): string {
-    return sessionStoreScope(nativeHome(this.id)) + (this.id === "claude-code" || this.id === "grok" ? ":" + subscriptionScope(this.id) : "") + (this.id === "grok" ? ":acp-profile-v1" : "");
+    return sessionStoreScope(nativeHome(this.id)) + (this.id === "claude-code" || this.id === "grok" ? ":" + subscriptionScope(this.id) : "") + (this.id === "grok" ? ":acp-profile-v1" : "") + ":device-access-v1";
   }
   private active = new Map<string, Active>();
   resources() {
@@ -109,8 +113,6 @@ export class NativeHarness implements Harness {
   }
   validateConfig(config: ExecutionConfig) {
     validateNativePermissions(config);
-    if (config.permissions && !["claude-code", "opencode"].includes(this.id))
-      throw new Error("This Harness does not support configurable approval modes yet.");
     const entry = nativeEntry(this.id);
     if (config.contextWindowTokens != null && !["pi", "opencode"].includes(this.id))
       throw new Error("An explicit context window requires Pi or OpenCode.");
@@ -151,7 +153,7 @@ export class NativeHarness implements Harness {
     validateNativePermissions(request.config);
     if (Object.values(request.requirements).some(Boolean)) {
       try {
-        if (!request.isolatedWorkspace) throw new Error("native_workspace_required: assign an isolated member working directory for native commands.");
+        if (!request.isolatedWorkspace && nativeAccess(request.config) !== "full-access") throw new Error("native_workspace_required: assign an isolated member working directory for native commands.");
         const piPolicy = policyFor(request.config, "pi");
         const policy = request.config.permissions;
         if (piPolicy && !piPolicy.tools.some(tool => ["bash", "powershell"].includes(tool)))
@@ -193,6 +195,7 @@ export class NativeHarness implements Harness {
     const binding = JSON.stringify({
       workspace: path.resolve(request.workspace),
       config: request.modelRoute?.sourceConfig ?? c,
+      ...(request.contextWindow ? {contextWindow:windowBinding(request.contextWindow)} : {}),
       ...(request.workspaceBoundary ? { workspaceBoundary: request.workspaceBoundary } : {}),
       ...(subscription ? { accountScope: subscriptionScope(this.id as "claude-code" | "grok") } : {}),
     });
@@ -216,6 +219,7 @@ export class NativeHarness implements Harness {
     let args = command === process.execPath ? [entry] : [];
     let stdin = "";
     const spec = {
+      contextWindow: request.contextWindow,
       entry,
       home,
       workspace: request.workspace,
@@ -249,6 +253,11 @@ export class NativeHarness implements Harness {
           configPath,
         ];
       } else if (this.id === "claude-code") {
+        if (request.contextWindow?.overrideNative) {
+          env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(request.contextWindow.rawTokens);
+          if (request.contextWindow.usableTokens >= 100000)
+            env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(Math.min(1000000,request.contextWindow.usableTokens));
+        }
         env.CLAUDE_CONFIG_DIR = subscription ? accountHome("claude-code") : home;
         if (!subscription) {
           env.ANTHROPIC_API_KEY = env[c.credentialEnv!];
@@ -270,19 +279,23 @@ export class NativeHarness implements Harness {
           c.access === "read-only"
             ? "Read,Glob,Grep" + (nativeCommands ? ",Bash" : "")
             : "Read,Glob,Grep,Write,Edit,Bash";
+        // Claude Code offers AskUserQuestion only outside --bare and only through the stdio prompt channel.
+        const questions = !!request.onQuestion && c.permissions?.harness === "claude-code" && policyFor(c, "claude-code")!.mode !== "dontAsk";
+        if (questions) env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
         args.push(
-          ...(subscription ? claudeSubscriptionFlags : ["--bare"]),
-          "--restricted",
+          ...(subscription || questions ? claudeSubscriptionFlags : ["--bare"]),
+          ...(nativeAccess(c) === "full-access" ? [] : ["--restricted"]),
           "--print",
           "--verbose",
           "--output-format",
           "stream-json",
+          "--include-partial-messages",
           ...(c.model ? ["--model", c.model] : []),
           ...(subscription && c.effort ? ["--effort", c.effort] : []),
           "--permission-mode",
           c.permissions?.harness === "claude-code" ? policyFor(c, "claude-code")!.mode : "dontAsk",
           "--tools",
-          nativeTools,
+          nativeTools + (questions ? ",AskUserQuestion" : ""),
           "--allowedTools",
           (c.permissions ? "Read,Glob,Grep" : nativeTools) + ",mcp__teamswarm__*" +
             (c.permissions?.harness === "claude-code" && c.access === "workspace-write" && policyFor(c, "claude-code")!.allow?.length ? "," + policyFor(c, "claude-code")!.allow!.join(",") : ""),
@@ -313,6 +326,7 @@ export class NativeHarness implements Harness {
         env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           share: "disabled",
+          ...(request.contextWindow?.overrideNative ? {compaction:{auto:true,reserved:request.contextWindow.rawTokens-request.contextWindow.usableTokens}} : {}),
           model: `teamswarm/${c.model}`,
           default_agent: "teamswarm",
           autoupdate: false,
@@ -336,7 +350,7 @@ export class NativeHarness implements Harness {
               models: {
                 [c.model!]: {
                   name: c.model,
-                  limit: { context: c.contextWindowTokens ?? 131072, output: c.maxOutputTokens ?? 8192 },
+                  limit: { context: request.contextWindow?.rawTokens ?? c.contextWindowTokens ?? 131072, output: c.maxOutputTokens ?? 8192 },
                 },
               },
             },
@@ -363,6 +377,10 @@ export class NativeHarness implements Harness {
         env.DSH_MAX_TOKENS_AS_SUCCESS = "false";
         // JSON is a YAML subset. No raw credential is written into the native patch.
         const patch = [
+          ...(request.contextWindow?.overrideNative ? [{id:"compaction-basic",config:{
+            thresholdRatio:request.contextWindow.effectivePercent/100,
+            headroomTokens:Math.min(65536,Math.floor(request.contextWindow.rawTokens/2))
+          }}] : []),
           { id: "approval", config: { policy: c.permissions?.harness === "deepseek-harness" ? policyFor(c, "deepseek-harness")!.approval : "never" } },
           {
             id: "llm-deepseek",
@@ -371,7 +389,7 @@ export class NativeHarness implements Harness {
               apiKeyEnv: "DEEPSEEK_API_KEY",
               thinking: "disabled",
               maxTokens: 8192,
-              models: [{ id: c.model, contextWindow: 131072, maxTokens: 8192 }],
+              models: [{ id: c.model, contextWindow: request.contextWindow?.rawTokens ?? DEEPSEEK_NATIVE_WINDOW, maxTokens: 8192 }],
               retryPolicy: { mode: "normal", maxRetries: 0 },
             },
           },
@@ -435,6 +453,8 @@ export class NativeHarness implements Harness {
         harness: this.id,
         protocol: c.protocol ?? this.capabilities.protocol,
         configured: true,
+        // This identity is committed before the native process exists.
+        nativeSession: request.sessionId ? "inherited" : "unconfirmed",
         nativePermissions: c.permissions ?? null,
         nativeCommands,
         workspace: request.workspace,
@@ -481,6 +501,7 @@ export class NativeHarness implements Harness {
     let terminal: HarnessResult | undefined;
     let stderr = "";
     let nativeSession: string | undefined;
+    let sessionSeen = false;
     let grokSegment = 0, grokKind = "";
     let dshRunning = false;
     let shutdownAcknowledged = false;
@@ -518,19 +539,19 @@ export class NativeHarness implements Harness {
         const observation = usageTotal.observe(u, replace);
         if (observation) emit("usage", observation);
       };
+      const claudeUsage = new ClaudeTurnUsage();
       const context = (u: any) => {
         const observation = contextObservation(this.id, u);
         if (observation) emit("context.usage", { ...observation });
       };
       const commands = new CommandObservations(this.id, path.join(home, turnId, "commands"), emit);
+      const transcript = new NativeTranscript(this.id, turnId, emit);
       if (this.id === "opencode") acp = new OpenCodeAcp(child, request, bridge.url, path.join(home, "native-session.json"),
         (event: any) => {
-          const safe = redact(event, c.credentialEnv); emit("native.event", { harness: this.id, event: safe }); commands.observe(safe);
-          if (event.type === "session") emit("session.native", { harness: this.id, nativeSessionId: event.id });
-          const e = event.event;
-          if (e?.sessionUpdate === "agent_message_chunk" && e.content?.type === "text") emit("transcript.delta", { id: `${turnId}:opencode`, kind: "message", delta: e.content.text });
+          const safe = redact(event, c.credentialEnv); emit("native.event", { harness: this.id, event: safe }); commands.observe(safe); transcript.observe(safe);
+          if (event.type === "session") { sessionSeen = true; emit("session.native", { harness: this.id, nativeSessionId: event.id }); }
         },
-        result => { terminal = result; const active = this.active.get(id); if (active) active.termination ??= terminateNative(child); },
+        result => { transcript.finish(result.status); terminal = result; const active = this.active.get(id); if (active) active.termination ??= terminateNative(child); },
         { prompt: conversationInput(request.input) });
       lines.on("line", (line) => {
         let event: any;
@@ -543,6 +564,7 @@ export class NativeHarness implements Harness {
         try {
           event = redact(event, c.credentialEnv);
           emit("native.event", { harness: this.id, event });
+          transcript.observe(event);
           if (this.id === "opencode") { acp!.receive(event); return; }
           commands.observe(event);
           if (this.id === "pi" || this.id === "grok") {
@@ -577,7 +599,19 @@ export class NativeHarness implements Harness {
             }
             if (event.type === "result") terminal = event;
           } else if (this.id === "claude-code") {
-            if (event.type === "control_request" && event.request?.subtype === "can_use_tool") {
+            if (event.type === "control_request" && event.request?.subtype === "can_use_tool" && event.request.tool_name === "AskUserQuestion") {
+              const r = event.request;
+              void (async () => {
+                // Claude Code always lets the user answer in their own words.
+                const questions = nativeQuestions(r.input?.questions).map(q => ({ ...q, allowOther: true }));
+                let answers: string[][] | null = null;
+                try { if (questions.length) answers = await request.onQuestion?.({ nativeId: r.tool_use_id ?? event.request_id, tool: r.tool_name, questions }, permissionAbort.signal) ?? null; } catch {}
+                if (!child.stdin.destroyed) child.stdin.write(JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: event.request_id,
+                  response: answers && !permissionAbort.signal.aborted
+                    ? { behavior: "allow", updatedInput: { ...r.input, answers: Object.fromEntries(questions.map((q, i) => [q.question, answers![i].join(", ")])) } }
+                    : { behavior: "deny", message: unansweredQuestion } } }) + "\n");
+              })();
+            } else if (event.type === "control_request" && event.request?.subtype === "can_use_tool") {
               const r = event.request;
               void (async () => {
                 let decision = "deny";
@@ -586,13 +620,14 @@ export class NativeHarness implements Harness {
                   response: decision === "allow" && !permissionAbort.signal.aborted ? { behavior: "allow", updatedInput: r.input } : { behavior: "deny", message: "Permission was denied or the task ended." } } }) + "\n");
               })();
             }
+            const perRequest = claudeUsage.observe(event,c.model);
+            if (perRequest) emit("context.usage", { ...perRequest });
             if (event.type === "system" && event.subtype === "compact_boundary") emit("context.compacted", {});
             if (event.type === "system" && event.subtype === "init") {
               nativeSession = event.session_id;
               emit("model.observed", { model: event.model });
             }
             if (event.type === "assistant") {
-              context(event.message?.usage ?? {});
               text += (event.message?.content ?? [])
                 .filter((b: any) => b.type === "text")
                 .map((b: any) => b.text)
@@ -675,12 +710,17 @@ export class NativeHarness implements Harness {
                   .map((b: any) => b.text)
                   .join("");
                 usage(fact.data?.usage);
+                const stepUsage=contextObservation(this.id,fact.data?.usage??{});
+                if (stepUsage && ((stepUsage.inputTokens??0)>0 || (stepUsage.outputTokens??0)>0))
+                  emit("context.usage",{...stepUsage});
               }
-              if (fact.type === "request/context")
+              if (fact.type === "request/context") {
+                context({contextWindow: fact.data?.contextWindow});
                 emit("model.observed", {
                   model: fact.data.model,
                   provider: fact.data.provider,
                 });
+              }
               // Raw facts are retained; only an explicit native turn end can establish success.
               if (fact.type === "turn/end") {
                 const reason = fact.data?.reason;
@@ -701,6 +741,7 @@ export class NativeHarness implements Harness {
             }
           }
           if (nativeSession) {
+            sessionSeen = true;
             emit("session.native", { nativeSessionId: nativeSession });
             nativeSession = undefined;
           }
@@ -768,6 +809,11 @@ export class NativeHarness implements Harness {
                   text,
                   error: `Native process exited (${code}) without a completion receipt. ${stderr}`,
                 });
+        // The process ran and ended without loading the session it was asked to resume:
+        // resuming the same identity again would fail the same way.
+        if (request.sessionId && !sessionSeen && child.pid !== undefined && !stopping &&
+            (result.status === "failed" || result.status === "unknown"))
+          emit("session.native_unavailable", { harness: this.id });
         try {
           receipt(result);
         } catch {

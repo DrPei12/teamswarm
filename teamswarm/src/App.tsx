@@ -1,7 +1,9 @@
-import { FieldSelect } from "./FieldSelect";
+import { WorkspaceSettings } from "./WorkspaceSettings";
+import { useAppearance } from "./appearance";
+import { NewMemberDialog } from "./NewMemberDialog";
 import { ApprovalRequests } from "./ApprovalRequests";
 import { Disclosure } from "./Disclosure";
-import { AttachmentChip } from "./AttachmentChip";
+import { AttachmentChip, isImageAttachment } from "./AttachmentChip";
 import { ViewBoundary } from "./ViewBoundary";
 import {
   useEffect,
@@ -14,13 +16,12 @@ import {
   type ReactNode,
   type CSSProperties,
 } from "react";
-import { LanguageProvider, useI18n, type Language } from "./i18n";
+import { LanguageProvider, useI18n } from "./i18n";
 import { Dialog, Tooltip, Popover } from "radix-ui";
 import {
   ChevronDown,
   Plus,
   Settings2,
-  Check,
   PanelLeft,
   PanelRight,
   X,
@@ -29,9 +30,6 @@ import {
   Pencil,
   ArrowUpRight,
   ArrowDown,
-  Monitor,
-  Sun,
-  Moon,
   Hash,
   Search,
   Keyboard,
@@ -43,7 +41,10 @@ import {
   BookmarkPlus,
   Package,
   Archive,
+  ArchiveRestore,
+  Trash2,
   Paperclip,
+  Copy,
 } from "lucide-react";
 import { ComposerInput, RuntimeControls } from "./ComposerTools";
 import { ComposerChin, ComposerSurface } from "./design-system/ComposerSurface";
@@ -65,6 +66,7 @@ import {
   ExecutionActivity,
 } from "./ExecutionSettings";
 import { MessageContent } from "./MessageContent";
+import { ExecutionReceipt } from "./ExecutionReceipt";
 import { ConversationActivity } from "./ConversationActivity";
 import { usePanelResize } from "./usePanelResize";
 import {
@@ -85,7 +87,7 @@ import {
   type Attachment,
   type DefinitionKind,
   type Message,
-  defaultRuntime,
+  type Team,
 } from "./store";
 
 type Screen =
@@ -157,6 +159,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     location.hash = `/team/${next.teamId}${target}`;
   };
   const [screen, setScreen] = useState<Screen>(null);
+  const appearance = useAppearance();
   const [executionSettings, setExecutionSettings] = useState(false);
   const [executionTab, setExecutionTab] = useState<
     "harnesses" | "connections" | "runtime"
@@ -210,6 +213,10 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [historyLoadError, setHistoryLoadError] = useState("");
   const [rename, setRename] = useState<Chat | null>(null);
+  const [teamMenu, setTeamMenu] = useState<string | null>(null);
+  const [teamRename, setTeamRename] = useState<Team | null>(null);
+  const [teamDelete, setTeamDelete] = useState<Team | null>(null);
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [searchIndex, setSearchIndex] = useState(0);
   const editor = useRef<HTMLTextAreaElement>(null);
@@ -247,8 +254,13 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   };
   const currentState = useRef(workspace);
   currentState.current = workspace;
+  // Archived teams keep their records but leave the working list.
+  const activeTeams = workspace.teams.filter((t) => !t.archived);
+  const archivedTeams = workspace.teams.filter((t) => t.archived);
   const team =
-    workspace.teams.find((t) => t.id === route.teamId) || workspace.teams[0];
+    activeTeams.find((t) => t.id === route.teamId) ||
+    activeTeams[0] ||
+    workspace.teams[0];
   const view = route.view || "host";
   const teamDeliveries = workspace.deliveries
     .filter((d) => d.teamId === team.id)
@@ -387,12 +399,15 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           : workspace.theme;
       window.teamswarmDesktop?.setTheme(
         document.documentElement.dataset.theme === "dark",
+        getComputedStyle(document.documentElement)
+          .getPropertyValue("--cds-surface-1")
+          .trim(),
       );
     };
     apply();
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);
-  }, [workspace.theme]);
+  }, [workspace.theme, appearance.value.palette]);
   useEffect(() => {
     document.title = chat ? `${chat.title} · TeamSwarm` : "TeamSwarm";
   }, [chat]);
@@ -407,10 +422,8 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
         editor.current.style.height = "0px";
         editor.current.style.height = `${Math.min(Math.max(editor.current.scrollHeight, 24), 260)}px`;
       }
-      if (followHost.current && thread.current)
-        thread.current.scrollTop = thread.current.scrollHeight;
     }
-  }, [draft.text, route]);
+  }, [draft.text, chat?.id]);
   useEffect(() => {
     inspectingHostActivity.current = false;
     const savedReading = chat
@@ -435,14 +448,17 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     const el = thread.current;
     const content = el?.querySelector(".messages");
     if (!el || !content) return;
+    // A growing editor changes the viewport, not the transcript. Only follow
+    // new or reflowed messages; typing and draft saves keep the reading anchor.
+    let height = content.getBoundingClientRect().height;
     const observer = new ResizeObserver(() => {
-      if (followHost.current) el.scrollTop = el.scrollHeight;
+      const next = content.getBoundingClientRect().height;
+      if (next !== height && followHost.current) el.scrollTop = el.scrollHeight;
+      height = next;
       syncHostScroll();
     });
     observer.observe(content);
     observer.observe(el);
-    const composer = el.querySelector(".composer-position");
-    if (composer) observer.observe(composer);
     return () => observer.disconnect();
   }, [chat?.id, view]);
   useEffect(() => {
@@ -502,7 +518,9 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
         requestAnimationFrame(() =>
           thread.current?.scrollTo({
             top: thread.current.scrollHeight,
-            behavior: "smooth",
+            behavior: matchMedia("(prefers-reduced-motion: reduce)").matches
+              ? "instant"
+              : "smooth",
           }),
         );
       }
@@ -564,6 +582,37 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     const target = workspace.teams.find((t) => t.id === teamId);
     navigate({ teamId, chatId: target?.mainChatId, view: "host" });
   };
+  const teamCommand = async (run: () => Promise<unknown>, done?: string) => {
+    if (busy) return false;
+    setBusy(true);
+    try {
+      await run();
+      if (done) setNotice(done);
+      return true;
+    } catch (error) {
+      setNotice((error as Error).message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  /** Leave a team that is about to disappear from the working list. */
+  const leaveTeam = (teamId: string) => {
+    if (team.id !== teamId) return;
+    const next = activeTeams.find((t) => t.id !== teamId);
+    if (next) openHost(next.id);
+  };
+  const archiveTeam = async (target: Team, archived: boolean) => {
+    if (
+      await teamCommand(
+        () => product.updateTeam(target.id, { archived }),
+        archived ? "Team archived" : "Team restored",
+      )
+    ) {
+      if (archived) leaveTeam(target.id);
+      else openHost(target.id);
+    }
+  };
   const addFiles = async (files: File[]) => {
     if (!files.length) return;
     const key = draftKey;
@@ -610,20 +659,22 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     />
   );
   const searchResults = [
-    ...workspace.teams.map((t) => ({
+    ...activeTeams.map((t) => ({
       id: t.id,
       label: t.name,
       detail: tr("Team"),
       icon: <Hash size={15 * ICON_SCALE} />,
       run: () => navigate({ teamId: t.id }),
     })),
-    ...workspace.chats.map((c) => ({
-      id: c.id,
-      label: c.title,
-      detail: `${workspace.teams.find((t) => t.id === c.teamId)?.name || tr("Chat")}${c.archived ? ` · ${tr("Archived")}` : ""}`,
-      icon: <Icon name="agent" />,
-      run: () => navigate({ teamId: c.teamId, chatId: c.id }),
-    })),
+    ...workspace.chats
+      .filter((c) => activeTeams.some((t) => t.id === c.teamId))
+      .map((c) => ({
+        id: c.id,
+        label: c.title,
+        detail: `${workspace.teams.find((t) => t.id === c.teamId)?.name || tr("Chat")}${c.archived ? ` · ${tr("Archived")}` : ""}`,
+        icon: <Icon name="agent" />,
+        run: () => navigate({ teamId: c.teamId, chatId: c.id }),
+      })),
   ].filter((r) =>
     `${r.label} ${r.detail}`.toLowerCase().includes(search.toLowerCase()),
   );
@@ -765,12 +816,18 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 </IconButton>
               </div>
               <Disclosure open={!collapsed}>
-                {workspace.teams.map((t) => (
+                {activeTeams.map((t) => (
                   <div
                     className={`team-block ${team.id === t.id ? "is-current-team" : ""}`}
                     key={t.id}
                   >
-                    <div className="team-heading">
+                    <div
+                      className="team-heading"
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        setTeamMenu(t.id);
+                      }}
+                    >
                       <button
                         className="nav-row"
                         onClick={() => openHost(t.id)}
@@ -780,6 +837,45 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                         </span>
                         <span>{t.name}</span>
                       </button>
+                      <Menu
+                        align="end"
+                        label={tr("Team options")}
+                        open={teamMenu === t.id}
+                        onOpenChange={(open) => setTeamMenu(open ? t.id : null)}
+                        trigger={
+                          <button
+                            className="team-collapse team-more"
+                            aria-label={tr("Team options for {name}", {
+                              name: t.name,
+                            })}
+                          >
+                            <MoreHorizontal size={14 * ICON_SCALE} />
+                          </button>
+                        }
+                      >
+                        <MenuItem
+                          icon={<Pencil size={14 * ICON_SCALE} />}
+                          onSelect={() => setTeamRename(t)}
+                        >
+                          {tr("Rename")}
+                        </MenuItem>
+                        <MenuItem
+                          icon={<Archive size={14 * ICON_SCALE} />}
+                          disabled={activeTeams.length < 2}
+                          onSelect={() => void archiveTeam(t, true)}
+                        >
+                          {tr("Archive team")}
+                        </MenuItem>
+                        <Separator />
+                        <MenuItem
+                          danger
+                          icon={<Trash2 size={14 * ICON_SCALE} />}
+                          disabled={activeTeams.length < 2}
+                          onSelect={() => setTeamDelete(t)}
+                        >
+                          {tr("Delete team")}
+                        </MenuItem>
+                      </Menu>
                       <button
                         className="team-collapse"
                         aria-label={tr("Toggle {name}", { name: t.name })}
@@ -843,6 +939,59 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 ))}
               </Disclosure>
             </section>
+            {!!archivedTeams.length && (
+              <section className="nav-group archived-teams">
+                <div className="group-title">
+                  <button
+                    className="group-heading"
+                    aria-expanded={archivedOpen}
+                    onClick={() => setArchivedOpen(!archivedOpen)}
+                  >
+                    {tr("Archived teams")} · {archivedTeams.length}
+                    <ChevronDown
+                      className={archivedOpen ? "" : "rotate-left"}
+                      size={11 * ICON_SCALE}
+                    />
+                  </button>
+                </div>
+                <Disclosure open={archivedOpen}>
+                  {archivedTeams.map((t) => (
+                    <Menu
+                      key={t.id}
+                      label={tr("Team options")}
+                      trigger={
+                        <button
+                          className="nav-row"
+                          aria-label={tr("Team options for {name}", {
+                            name: t.name,
+                          })}
+                        >
+                          <span className="team-mark">
+                            <Archive size={14 * ICON_SCALE} />
+                          </span>
+                          <span>{t.name}</span>
+                        </button>
+                      }
+                    >
+                      <MenuItem
+                        icon={<ArchiveRestore size={14 * ICON_SCALE} />}
+                        onSelect={() => void archiveTeam(t, false)}
+                      >
+                        {tr("Restore team")}
+                      </MenuItem>
+                      <Separator />
+                      <MenuItem
+                        danger
+                        icon={<Trash2 size={14 * ICON_SCALE} />}
+                        onSelect={() => setTeamDelete(t)}
+                      >
+                        {tr("Delete team")}
+                      </MenuItem>
+                    </Menu>
+                  ))}
+                </Disclosure>
+              </section>
+            )}
             {!!teamChats.length && (
               <section className="recent-chats">
                 <div className="group-heading">
@@ -988,7 +1137,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 )}
                 <button
                   type="button"
-                  className="execution-settings-trigger"
+                  className="icon-button execution-settings-trigger"
                   onClick={() => {
                     setExecutionTab("harnesses");
                     setExecutionSettings(true);
@@ -1264,225 +1413,274 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                   </Suspense>
                 </ViewBoundary>
               ) : (
-                <div
-                  className="conversation-area"
-                  ref={thread}
-                  onWheel={(event) => {
-                    inspectingHostActivity.current = false;
-                    if (event.deltaY < 0) followHost.current = false;
-                    else syncHostScroll();
-                  }}
-                  onTouchStart={() => {
-                    inspectingHostActivity.current = false;
-                    followHost.current = false;
-                  }}
-                  onKeyDown={(event) => {
-                    if (
-                      [
-                        "PageUp",
-                        "PageDown",
-                        "Home",
-                        "End",
-                        "ArrowUp",
-                        "ArrowDown",
-                      ].includes(event.key)
-                    )
+                <div className="host-conversation">
+                  <div
+                    className="conversation-area"
+                    ref={thread}
+                    onWheel={(event) => {
                       inspectingHostActivity.current = false;
-                  }}
-                  onClickCapture={(event) => {
-                    if (
-                      (event.target as Element).closest(
-                        ".activity-summary, .activity-toggle",
-                      )
-                    ) {
-                      inspectingHostActivity.current = true;
+                      if (event.deltaY < 0) followHost.current = false;
+                      else syncHostScroll();
+                    }}
+                    onTouchStart={() => {
+                      inspectingHostActivity.current = false;
                       followHost.current = false;
-                    }
-                  }}
-                  onScroll={syncHostScroll}
-                  onPointerDownCapture={(event) => {
-                    if (
-                      !(event.target as Element).closest(
-                        ".activity-summary, .activity-toggle",
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        [
+                          "PageUp",
+                          "PageDown",
+                          "Home",
+                          "End",
+                          "ArrowUp",
+                          "ArrowDown",
+                        ].includes(event.key)
                       )
-                    )
-                      inspectingHostActivity.current = false;
-                  }}
-                >
-                  {chat && (
-                    <div className="messages" aria-label={tr("Conversation")}>
-                      <ApprovalRequests
-                        teamId={team.id}
-                        workspace={workspace}
-                      />
-                      {chat.historyBefore && (
-                        <button
-                          className="load-older-messages"
-                          disabled={loadingOlder}
-                          onClick={async () => {
-                            const element = thread.current;
-                            const height = element?.scrollHeight ?? 0;
-                            const top = element?.scrollTop ?? 0;
-                            followHost.current = false;
-                            setLoadingOlder(true);
-                            try {
-                              await product.loadOlder(chat.id);
-                              requestAnimationFrame(() => {
-                                if (element)
-                                  element.scrollTop =
-                                    top + element.scrollHeight - height;
-                              });
-                            } catch (error) {
-                              setNotice((error as Error).message);
-                            } finally {
-                              setLoadingOlder(false);
-                            }
-                          }}
-                        >
-                          {tr(
-                            loadingOlder
-                              ? "Loading earlier messages…"
-                              : "Load earlier messages",
-                          )}
-                        </button>
-                      )}
-                      {chat.parent && (
-                        <div className="branch-context">
-                          <GitBranch size={14 * ICON_SCALE} />
-                          <span>{chat.title}</span>
+                        inspectingHostActivity.current = false;
+                    }}
+                    onClickCapture={(event) => {
+                      if (
+                        (event.target as Element).closest(
+                          ".activity-summary, .activity-toggle",
+                        )
+                      ) {
+                        inspectingHostActivity.current = true;
+                        followHost.current = false;
+                      }
+                    }}
+                    onScroll={syncHostScroll}
+                    onPointerDownCapture={(event) => {
+                      if (
+                        !(event.target as Element).closest(
+                          ".activity-summary, .activity-toggle",
+                        )
+                      )
+                        inspectingHostActivity.current = false;
+                    }}
+                  >
+                    {chat && (
+                      <div
+                        className="messages"
+                        role="log"
+                        aria-live="polite"
+                        aria-relevant="additions text"
+                        aria-label={tr("Conversation")}
+                      >
+                        {chat.historyBefore && (
                           <button
-                            onClick={() =>
-                              navigate({ teamId: team.id, view: "history" })
-                            }
+                            className="load-older-messages"
+                            disabled={loadingOlder}
+                            onClick={async () => {
+                              const element = thread.current;
+                              const height = element?.scrollHeight ?? 0;
+                              const top = element?.scrollTop ?? 0;
+                              followHost.current = false;
+                              setLoadingOlder(true);
+                              try {
+                                await product.loadOlder(chat.id);
+                                requestAnimationFrame(() => {
+                                  if (element)
+                                    element.scrollTop =
+                                      top + element.scrollHeight - height;
+                                });
+                              } catch (error) {
+                                setNotice((error as Error).message);
+                              } finally {
+                                setLoadingOlder(false);
+                              }
+                            }}
                           >
-                            {tr("{count} retained", {
-                              count: chat.inheritedDefinitions?.length || 0,
-                            })}
-                            <ArrowUpRight size={12 * ICON_SCALE} />
+                            {tr(
+                              loadingOlder
+                                ? "Loading earlier messages…"
+                                : "Load earlier messages",
+                            )}
                           </button>
-                        </div>
-                      )}
-                      {!!chat.inheritedDefinitions?.length && (
-                        <details className="branch-definitions">
-                          <summary>{tr("Context")}</summary>
-                          {chat.inheritedDefinitions.map((d) => (
-                            <div key={d.id}>
-                              <span>{tr(definitionLabels[d.kind])}</span>
-                              <strong>{d.title}</strong>
-                              <p>{d.text}</p>
-                            </div>
-                          ))}
-                        </details>
-                      )}
-                      {chat.messages.map((m) => (
-                        <article
-                          className={`message message-${m.role} ${focusedHostMessageId === m.id ? "highlighted" : ""}`}
-                          key={m.id}
-                          id={`message-${m.id}`}
-                          tabIndex={-1}
-                        >
-                          <div className="message-heading">
-                            <span className="message-avatar">
-                              {m.role === "host" && <SwarmMark size={16} />}
-                              {m.role === "host" ? "Host" : tr("You")}
-                            </span>
-                            <time
-                              dateTime={new Date(m.createdAt).toISOString()}
-                            >
-                              {new Date(m.createdAt).toLocaleTimeString(
-                                locale,
-                                {
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                },
-                              )}
-                            </time>
-                            <Menu
-                              align="end"
-                              trigger={
-                                <IconButton
-                                  label={tr("Save definition")}
-                                  className="message-save"
-                                >
-                                  <BookmarkPlus size={14 * ICON_SCALE} />
-                                </IconButton>
+                        )}
+                        {chat.parent && (
+                          <div className="branch-context">
+                            <GitBranch size={14 * ICON_SCALE} />
+                            <span>{chat.title}</span>
+                            <button
+                              onClick={() =>
+                                navigate({ teamId: team.id, view: "history" })
                               }
                             >
-                              <MenuItem
-                                onSelect={() => {
-                                  setInsightSource(m);
-                                  setRecordsOpen(true);
-                                }}
-                              >
-                                {tr("Save an idea or decision")}
-                              </MenuItem>
-                              {Object.entries(definitionLabels).map(
-                                ([kind, label]) => (
+                              {tr("{count} retained", {
+                                count: chat.inheritedDefinitions?.length || 0,
+                              })}
+                              <ArrowUpRight size={12 * ICON_SCALE} />
+                            </button>
+                          </div>
+                        )}
+                        {!!chat.inheritedDefinitions?.length && (
+                          <details className="branch-definitions">
+                            <summary>{tr("Context")}</summary>
+                            {chat.inheritedDefinitions.map((d) => (
+                              <div key={d.id}>
+                                <span>{tr(definitionLabels[d.kind])}</span>
+                                <strong>{d.title}</strong>
+                                <p>{d.text}</p>
+                              </div>
+                            ))}
+                          </details>
+                        )}
+                        {chat.messages.map((m) => {
+                          const images =
+                            m.role === "host"
+                              ? []
+                              : m.files.filter(isImageAttachment);
+                          const attachments = images.length
+                            ? m.files.filter((file) => !isImageAttachment(file))
+                            : m.files;
+                          return (
+                            <article
+                              className={`message message-${m.role ?? "user"} ${focusedHostMessageId === m.id ? "highlighted" : ""}`}
+                              key={m.id}
+                              id={`message-${m.id}`}
+                              tabIndex={-1}
+                            >
+                              <div className="message-heading">
+                                <span className="message-avatar">
+                                  {m.role === "host" && <SwarmMark size={16} />}
+                                  {m.role === "host" ? "Host" : tr("You")}
+                                </span>
+                                <time
+                                  dateTime={new Date(m.createdAt).toISOString()}
+                                >
+                                  {new Date(m.createdAt).toLocaleTimeString(
+                                    locale,
+                                    {
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                    },
+                                  )}
+                                </time>
+                                <Menu
+                                  align="end"
+                                  trigger={
+                                    <IconButton
+                                      label={tr("Message actions")}
+                                      className="message-save"
+                                    >
+                                      <MoreHorizontal size={16 * ICON_SCALE} />
+                                    </IconButton>
+                                  }
+                                >
                                   <MenuItem
-                                    key={kind}
-                                    onSelect={() => {
-                                      setDefinitionKind(kind as DefinitionKind);
-                                      setDefinitionSource(m);
+                                    icon={<Copy size={14 * ICON_SCALE} />}
+                                    onSelect={async () => {
+                                      try {
+                                        await navigator.clipboard.writeText(
+                                          m.text,
+                                        );
+                                        setNotice(tr("Message copied"));
+                                      } catch {
+                                        setNotice(tr("Copy failed"));
+                                      }
                                     }}
                                   >
-                                    {tr(label)}
+                                    {tr("Copy message")}
                                   </MenuItem>
-                                ),
+                                  <Separator />
+                                  <MenuItem
+                                    onSelect={() => {
+                                      setInsightSource(m);
+                                      setRecordsOpen(true);
+                                    }}
+                                  >
+                                    {tr("Save an idea or decision")}
+                                  </MenuItem>
+                                  {Object.entries(definitionLabels).map(
+                                    ([kind, label]) => (
+                                      <MenuItem
+                                        key={kind}
+                                        onSelect={() => {
+                                          setDefinitionKind(
+                                            kind as DefinitionKind,
+                                          );
+                                          setDefinitionSource(m);
+                                        }}
+                                      >
+                                        {tr(label)}
+                                      </MenuItem>
+                                    ),
+                                  )}
+                                </Menu>
+                              </div>
+                              {m.execution &&
+                                m.execution.status !== "submitted" && (
+                                  <ExecutionReceipt execution={m.execution} />
+                                )}
+                              {m.skill && (
+                                <span className="skill-tag">
+                                  <Icon name="skills" />
+                                  {m.skill}
+                                </span>
                               )}
-                            </Menu>
-                          </div>
-                          {m.skill && (
-                            <span className="skill-tag">
-                              <Icon name="skills" />
-                              {m.skill}
-                            </span>
-                          )}
-                          {!!m.activity?.length && (
-                            <ConversationActivity
-                              items={m.activity}
-                              members={workspace.members.filter(
-                                (member) => member.teamId === team.id,
+                              {!!m.activity?.length && (
+                                <ConversationActivity
+                                  items={m.activity}
+                                  members={workspace.members.filter(
+                                    (member) => member.teamId === team.id,
+                                  )}
+                                  running={m.pending}
+                                />
                               )}
-                              running={m.pending}
-                            />
-                          )}
-                          <MessageContent
-                            text={m.text}
-                            pending={m.pending}
-                            artifacts={(m.artifacts ?? []).map((a) => ({
-                              ...a,
-                              teamId: team.id,
-                            }))}
-                          />
-                          {workspace.definitions
-                            .filter(
-                              (d) =>
-                                d.chatId === chat.id && d.messageId === m.id,
-                            )
-                            .map((d) => (
-                              <button
-                                key={d.id}
-                                className="message-definition"
-                                onClick={() =>
-                                  navigate({ teamId: team.id, view: "history" })
-                                }
-                              >
-                                <BookmarkPlus size={12 * ICON_SCALE} />
-                                {d.title}
-                                <ArrowUpRight size={11 * ICON_SCALE} />
-                              </button>
-                            ))}
+                              {images.length > 0 && (
+                                <div className="files-row sent-images">
+                                  {images.map((file) => fileButton(file))}
+                                </div>
+                              )}
+                              {(m.text.trim() ||
+                                m.pending ||
+                                (!m.files.length && !m.execution)) && (
+                                <MessageContent
+                                  text={m.text}
+                                  pending={m.pending}
+                                  artifacts={(m.artifacts ?? []).map((a) => ({
+                                    ...a,
+                                    teamId: team.id,
+                                  }))}
+                                />
+                              )}
+                              {workspace.definitions
+                                .filter(
+                                  (d) =>
+                                    d.chatId === chat.id &&
+                                    d.messageId === m.id,
+                                )
+                                .map((d) => (
+                                  <button
+                                    key={d.id}
+                                    className="message-definition"
+                                    onClick={() =>
+                                      navigate({
+                                        teamId: team.id,
+                                        view: "history",
+                                      })
+                                    }
+                                  >
+                                    <BookmarkPlus size={12 * ICON_SCALE} />
+                                    {d.title}
+                                    <ArrowUpRight size={11 * ICON_SCALE} />
+                                  </button>
+                                ))}
 
-                          {m.files.length > 0 && (
-                            <div className="files-row">
-                              {m.files.map((f) => fileButton(f))}
-                            </div>
-                          )}
-                        </article>
-                      ))}
-                    </div>
-                  )}
+                              {attachments.length > 0 && (
+                                <div className="files-row">
+                                  {attachments.map((f) => fileButton(f))}
+                                </div>
+                              )}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                   <div className="composer-position">
+                    <ApprovalRequests teamId={team.id} workspace={workspace} />
                     {!chat && (
                       <div className="welcome">
                         <SwarmMark size={48} />
@@ -1678,21 +1876,13 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                               workspace.executions?.[team.id]?.host?.config ??
                               workspace.executions?.[team.id]?.settings?.config
                             }
-                            running={workspace.executions?.[
-                              team.id
-                            ]?.works.some(
-                              (w) =>
-                                w.memberId ===
-                                  workspace.executions?.[team.id]?.host
-                                    ?.memberId &&
-                                ["running", "stopping"].includes(w.status),
-                            )}
-                            onPermissionChange={(permissions) =>
-                              product.configurePermissions(
-                                team.id,
-                                `host:${team.id}`,
-                                permissions,
-                              )
+                            runningConfig={
+                              workspace.executions?.[team.id]?.host
+                                ?.runningConfig
+                            }
+                            running={
+                              !!workspace.executions?.[team.id]?.host
+                                ?.runningConfig
                             }
                             onChange={(runtime, choice) =>
                               product.configure(team.id, runtime, choice)
@@ -1855,6 +2045,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                       key={`${team.id}:${branchId}`}
                       teamId={team.id}
                       branchId={branchId}
+                      projectName={team.name}
                       open={filesOpen}
                       onClose={() => setFilesOpen(false)}
                     />
@@ -2052,92 +2243,17 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           </button>
         </div>
       )}
-      <Modal
-        open={screen === "member"}
-        onOpenChange={(open) => !open && setScreen(null)}
-        title={tr("Add member")}
-      >
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (busy) return;
-            const data = new FormData(e.currentTarget),
-              name = String(data.get("name")).trim(),
-              responsibility = String(data.get("responsibility")).trim();
-            const settings = workspace.executions?.[team.id]?.settings;
-            if (!name || !responsibility || !settings) return;
-            const model = String(data.get("model")).trim();
-            setBusy(true);
-            try {
-              await product.addMember(
-                team.id,
-                name,
-                responsibility,
-                {
-                  harness: String(data.get("harness")).trim(),
-                  model,
-                  effort: settings.config.effort ?? "Default",
-                },
-                crypto.randomUUID(),
-              );
-              setScreen(null);
-            } catch (error) {
-              setNotice((error as Error).message);
-            } finally {
-              setBusy(false);
-            }
+      {screen === "member" && (
+        <NewMemberDialog
+          team={team}
+          workspace={workspace}
+          onClose={() => setScreen(null)}
+          onSettings={(tab = "harnesses") => {
+            setExecutionTab(tab);
+            setExecutionSettings(true);
           }}
-        >
-          <div className="form-body">
-            <label>
-              {tr("Name")}
-              <input
-                name="name"
-                placeholder={tr("Member name")}
-                maxLength={60}
-                required
-              />
-            </label>
-            <label>
-              {tr("Responsibility")}
-              <input
-                name="responsibility"
-                placeholder={tr("e.g. Design & typography")}
-                maxLength={160}
-                required
-              />
-            </label>
-            <div className="form-columns">
-              <label>
-                {tr("Harness")}
-                <input
-                  name="harness"
-                  defaultValue={(team.runtime || defaultRuntime).harness}
-                  required
-                />
-              </label>
-              <label>
-                {tr("Model")}
-                <input
-                  name="model"
-                  defaultValue={(team.runtime || defaultRuntime).model}
-                  required
-                />
-              </label>
-            </div>
-          </div>
-          <div className="form-footer">
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => setScreen(null)}
-            >
-              {tr("Cancel")}
-            </button>
-            <button className="primary-button">{tr("Add member")}</button>
-          </div>
-        </form>
-      </Modal>
+        />
+      )}
       <Modal
         open={screen === "plugins"}
         onOpenChange={(open) => !open && setScreen(null)}
@@ -2218,93 +2334,15 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           </div>
         </form>
       </Modal>
-      <Modal
-        open={screen === "settings"}
-        onOpenChange={(open) => !open && setScreen(null)}
-        title={tr("Settings")}
-      >
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            const data = new FormData(e.currentTarget);
-            if (
-              update((old) => ({
-                ...old,
-                name: String(data.get("name")).trim() || old.name,
-              }))
-            )
-              setScreen(null);
-          }}
-        >
-          <div className="form-body">
-            <label>
-              {tr("Workspace name")}
-              <input
-                name="name"
-                defaultValue={workspace.name}
-                required
-                maxLength={60}
-              />
-            </label>
-            <label>
-              {tr("Language")}
-              <FieldSelect
-                name="language"
-                value={workspace.language}
-                onValueChange={(value) =>
-                  update((old) => ({
-                    ...old,
-                    language: value as Language,
-                  }))
-                }
-              >
-                <option value="en">English</option>
-                <option value="zh-CN">简体中文</option>
-              </FieldSelect>
-            </label>
-            <label>{tr("Appearance")}</label>
-            <div className="theme-options">
-              {(["light", "dark", "system"] as const).map((value) => (
-                <button
-                  type="button"
-                  key={value}
-                  className={workspace.theme === value ? "selected" : ""}
-                  aria-pressed={workspace.theme === value}
-                  onClick={() => update((old) => ({ ...old, theme: value }))}
-                >
-                  <span
-                    className={`theme-preview ${value}`}
-                    aria-hidden="true"
-                  />
-                  <span className="theme-label">
-                    {value === "light" ? (
-                      <Sun size={18 * ICON_SCALE} />
-                    ) : value === "dark" ? (
-                      <Moon size={18 * ICON_SCALE} />
-                    ) : (
-                      <Monitor size={18 * ICON_SCALE} />
-                    )}
-                    <span>{tr(value[0].toUpperCase() + value.slice(1))}</span>
-                  </span>
-                  {workspace.theme === value && (
-                    <Check size={13 * ICON_SCALE} />
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="form-footer">
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => setScreen(null)}
-            >
-              {tr("Cancel")}
-            </button>
-            <button className="primary-button">{tr("Save changes")}</button>
-          </div>
-        </form>
-      </Modal>
+      {screen === "settings" && (
+        <WorkspaceSettings
+          workspace={workspace}
+          nextWindow={workspace.executions?.[team.id]?.host?.nextContextWindow}
+          appearance={appearance}
+          close={() => setScreen(null)}
+          update={update}
+        />
+      )}
       <Modal
         open={screen === "team"}
         onOpenChange={(open) => !open && setScreen(null)}
@@ -2321,7 +2359,10 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
             setBusy(true);
             try {
               const created = await product.createTeam(name);
-              navigate({ teamId: created.id });
+              navigate({
+                teamId: created.id,
+                chatId: created.mainChatId,
+              });
             } catch (error) {
               setNotice((error as Error).message);
             } finally {
@@ -2433,6 +2474,97 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
               <kbd>{key}</kbd>
             </div>
           ))}
+        </div>
+      </Modal>
+      <Modal
+        open={!!teamRename}
+        onOpenChange={(open) => !open && !busy && setTeamRename(null)}
+        title={tr("Rename team")}
+      >
+        <form
+          key={teamRename?.id}
+          onSubmit={async (e: FormEvent<HTMLFormElement>) => {
+            e.preventDefault();
+            const name = String(
+              new FormData(e.currentTarget).get("name"),
+            ).trim();
+            const target = teamRename;
+            if (!name || !target) return;
+            if (
+              name === target.name ||
+              (await teamCommand(() => product.updateTeam(target.id, { name })))
+            )
+              setTeamRename(null);
+          }}
+        >
+          <div className="form-body">
+            <label>
+              {tr("Team name")}
+              <input
+                name="name"
+                required
+                maxLength={60}
+                autoComplete="off"
+                defaultValue={teamRename?.name}
+              />
+            </label>
+          </div>
+          <div className="form-footer">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={busy}
+              onClick={() => setTeamRename(null)}
+            >
+              {tr("Cancel")}
+            </button>
+            <button className="primary-button" disabled={busy}>
+              {tr("Save")}
+            </button>
+          </div>
+        </form>
+      </Modal>
+      <Modal
+        open={!!teamDelete}
+        onOpenChange={(open) => !open && !busy && setTeamDelete(null)}
+        title={tr("Delete team")}
+        className="checkpoint-delete-modal"
+      >
+        <div className="form-body">
+          <p>{tr("Delete “{title}”?", { title: teamDelete?.name ?? "" })}</p>
+          <p>
+            {tr(
+              "The team, its conversations and its history leave TeamSwarm and cannot be restored from the app. Files in the project folder are kept. Archive the team instead to keep it available.",
+            )}
+          </p>
+        </div>
+        <div className="form-footer">
+          <button
+            className="secondary-button"
+            disabled={busy}
+            onClick={() => setTeamDelete(null)}
+          >
+            {tr("Cancel")}
+          </button>
+          <button
+            className="primary-button danger-button"
+            disabled={busy}
+            onClick={async () => {
+              const target = teamDelete;
+              if (!target) return;
+              if (
+                await teamCommand(
+                  () => product.deleteTeam(target.id),
+                  "Team deleted",
+                )
+              ) {
+                setTeamDelete(null);
+                leaveTeam(target.id);
+              }
+            }}
+          >
+            {tr("Delete team")}
+          </button>
         </div>
       </Modal>
       <Modal

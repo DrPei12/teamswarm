@@ -115,7 +115,7 @@ async function answerPermission(message: any) {
   else if (outcome.outcome === "selected" && spec.config.permissions?.harness === "grok") {
     const policy = spec.config.permissions;
     if (policy.mode === "dontAsk" || policy.mode === "plan" && ["Bash", "Write", "SearchReplace"].includes(message.params?.toolCall?.rawInput?.variant)) outcome = { outcome: "cancelled" };
-    else {
+    else if (policy.mode !== "bypassPermissions") {
       try {
         const call = message.params.toolCall;
         const response = await fetch(spec.permissionUrl, { method: "POST", headers: { "content-type": "application/json" },

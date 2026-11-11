@@ -34,6 +34,24 @@
 .team-collapse:hover {
   background: var(--hover);
 }
+/* Team actions stay out of the way until the row is pointed at or focused. */
+.team-more {
+  opacity: 0;
+}
+.team-heading:hover .team-more,
+.team-heading:focus-within .team-more,
+.team-more[data-state="open"] {
+  opacity: 1;
+}
+@media (hover: none) {
+  .team-more {
+    opacity: 1;
+  }
+}
+.archived-teams .nav-row {
+  width: 100%;
+  color: var(--secondary);
+}
 .team-views {
   margin: 6px 0 20px 10px;
   padding-left: 8px;
@@ -67,7 +85,7 @@
   color: var(--secondary);
   font-size: calc(11px * var(--font-scale));
   border-radius: 5px;
-  max-width: 150px;
+  max-width: min(220px, 100%);
   white-space: nowrap;
   min-height: 32px;
 }
@@ -86,7 +104,7 @@
   color: var(--subtle);
 }
 .runtime-popover {
-  z-index: 60;
+  z-index: 350;
   min-width: 218px;
   max-width: calc(100vw - 24px);
   background: var(--panel);
@@ -132,6 +150,37 @@
   min-height: 32px;
   display: grid;
   place-items: center;
+}
+.context-details {
+  z-index: 130;
+  width: max-content;
+  max-width: min(234px, calc(100vw - 28px));
+  padding: 9px 13px 10px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface-top);
+  color: var(--text);
+  box-shadow: var(--cds-shadow-lg);
+  text-align: center;
+  font: 500 0.96rem/1.38 var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: break-word;
+}
+.context-details > :not([role="tooltip"]) {
+  display: block;
+}
+.context-details .context-details-heading {
+  color: var(--secondary);
+  font-weight: 550;
+  margin-bottom: 2px;
+}
+.context-details strong {
+  font-weight: 600;
+}
+.context-details small {
+  color: var(--secondary);
+  font-size: 0.83rem;
+  margin-top: 2px;
 }
 .context-ring:hover {
   background: var(--hover);
@@ -463,7 +512,6 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  margin-left: 10px;
   padding: 6px 10px;
   min-height: 36px;
   border-radius: 6px;
@@ -605,22 +653,23 @@
 .member-state > span {
   width: 6px;
   height: 6px;
-  background: #a9acb7;
+  background: var(--cds-status-idle);
   border-radius: 50%;
 }
 .member-state.working > span {
-  background: #6b83c1;
-  box-shadow: 0 0 0 4px #6b83c114;
+  background: var(--cds-status-running);
+  box-shadow: 0 0 0 4px
+    color-mix(in srgb, var(--cds-status-running) 8%, transparent);
   animation: working-pulse 2s ease-in-out infinite;
 }
 .member-state.waiting > span {
-  background: #b69a64;
+  background: var(--cds-status-waiting);
 }
 .member-state.complete > span {
-  background: #67917b;
+  background: var(--cds-status-done);
 }
 .member-state.error > span {
-  background: #c77777;
+  background: var(--cds-status-error);
 }
 .member-state.paused > span {
   border-radius: 1px;
@@ -645,12 +694,12 @@
   stroke: var(--graph-selected);
 }
 .react-flow__edge.collaboration-active .react-flow__edge-path {
-  stroke: #8193bc;
+  stroke: var(--cds-status-running);
   stroke-dasharray: 5 12;
   animation: collaboration-flow 1.6s linear infinite;
 }
 .react-flow__edge.branch-edge .react-flow__edge-path {
-  stroke: #949ac6;
+  stroke: color-mix(in srgb, var(--accent) 55%, var(--graph-line));
 }
 .canvas-tools {
   display: flex;
@@ -887,10 +936,10 @@ body:has(.detail-resize-handle[data-dragging]) * {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #a2a7b4;
+  background: var(--cds-status-idle);
 }
 .detail-status.working > span {
-  background: #6b83c1;
+  background: var(--cds-status-running);
 }
 .detail-scroll dl {
   display: grid;
@@ -1234,7 +1283,7 @@ body:has(.detail-resize-handle[data-dragging]) * {
 }
 .plugin-config code {
   color: var(--secondary);
-  font-size: calc(11px * var(--font-scale));
+  font-size: calc(11px * var(--code-scale));
 }
 .delivery-summary {
   color: var(--secondary);
@@ -1249,7 +1298,7 @@ body:has(.detail-resize-handle[data-dragging]) * {
 }
 .form-error {
   font-size: calc(11px * var(--font-scale));
-  color: #b45656;
+  color: var(--danger);
   margin-top: 12px;
 }
 @keyframes collaboration-flow {
@@ -1259,7 +1308,8 @@ body:has(.detail-resize-handle[data-dragging]) * {
 }
 @keyframes working-pulse {
   50% {
-    box-shadow: 0 0 0 5px #6b83c10a;
+    box-shadow: 0 0 0 5px
+      color-mix(in srgb, var(--cds-status-running) 4%, transparent);
   }
 }
 @keyframes detail-in {

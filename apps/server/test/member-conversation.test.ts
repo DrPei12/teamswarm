@@ -1,3 +1,4 @@
+import { autonomousWorkers } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync } from "node:fs";
@@ -80,6 +81,7 @@ async function fixture() {
     dataDir: path.join(root, "data"),
     harnesses: [harness],
   });
+  autonomousWorkers(service.runtime);
   const server = service.app.listen(0, "127.0.0.1");
   await new Promise<void>((r) => server.once("listening", r));
   const api = async (route: string, body?: unknown) => {
@@ -876,6 +878,7 @@ test("queued correspondence survives a service restart and keeps the same anchor
       dataDir: path.join(f.root, "data"),
       harnesses: [harness],
     });
+      autonomousWorkers(restarted.runtime);
     await until(() => harness.requests.length === 1);
     const input = JSON.parse(harness.requests[0].input);
     assert.equal(input.incomingMessages[0].id, mail.id);
@@ -913,6 +916,8 @@ test("pre-start resource failure settles mail once and retry reuses the work", a
     const conversation = memberConversation(f.service.runtime, f.team.id, f.a.id);
     assert.equal(conversation.entries.filter(e => e.id.startsWith("error:")).length, 1);
     assert.equal(conversation.entries.find(e => e.retryWorkId)?.retryWorkId, failed[0].id);
+    // Older services also reported independent pre-dispatch failures on the original assignment.
+    f.store.event(f.team.id, "communication.failed", { messageId: message.id, error: "Historical run limit" }, f.wa);
     assert.throws(() => f.service.runtime.retry(f.team.id, failed[0].id, failed[0].revision), /changed to version/);
     delete f.a.selection;
     f.store.save("members", f.a);
@@ -921,6 +926,10 @@ test("pre-start resource failure settles mail once and retry reuses the work", a
     assert.equal(f.store.list<Work>("works", f.team.id).filter(w => w.interaction?.messageIds.includes(message.id)).length, 1);
     f.harness.finish();
     await until(() => f.service.runtime.correspondence.list(f.team.id).find(m => m.id === message.id)?.status === "delivered");
+    const delivered = memberConversation(f.service.runtime, f.team.id, f.a.id).entries.find(e => e.id === message.id);
+    assert.deepEqual(delivered?.deliveryHistory?.map(outcome => outcome.status), ["failed", "failed", "delivered"]);
+    assert.match(delivered!.deliveryHistory![0].error!, /changed to version/);
+    assert.equal(delivered!.deliveryHistory![1].error, "Historical run limit");
   } finally { await f.close(); }
 });
 
@@ -952,6 +961,7 @@ test("restart settles legacy queued mail without duplicating work or dropping a 
     await f.service.close();
     const harness = new MailHarness();
     reopened = createApp({ dataDir: path.join(f.root, "data"), harnesses: [harness] });
+      autonomousWorkers(reopened.runtime);
     await until(() => harness.requests.length === 1);
     const messages = reopened.runtime.correspondence.list(f.team.id);
     assert.equal(messages.find(m => m.id === old.id)?.status, "failed");

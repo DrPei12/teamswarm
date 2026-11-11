@@ -14,7 +14,10 @@ export class CommandObservations {
   constructor(private harness: string, private directory: string, private emit: (type: string, data: Record<string, unknown>) => void, private protocol?: "acp") {}
   start(id: unknown, tool: string, input: any, startedAt = new Date().toISOString()) {
     if (typeof id !== "string" || !id || this.finished.has(id) || this.calls.has(id)) return;
-    this.calls.set(id, { id, tool, startedAt, command: String(input?.command ?? input?.cmd ?? input?.script ?? "") });
+    const call = { id, tool, startedAt, command: String(input?.command ?? input?.cmd ?? input?.script ?? "") };
+    this.calls.set(id, call);
+    // A public start is progress, never successful-command verification evidence.
+    this.emit("transcript.item", { id, kind: "command", title: call.command || tool, text: call.command, status: "running" });
   }
   finish(id: unknown, value: { output: string; exitCode?: number | null; outcome: "succeeded" | "failed" | "cancelled" | "unknown"; raw: unknown }) {
     if (typeof id !== "string" || this.finished.has(id)) return;
@@ -75,7 +78,10 @@ export class CommandObservations {
       // original identity and start time, then merge the native input updates.
       const call = this.calls.get(e.toolCallId);
       const command = e.rawInput?.command ?? e.rawInput?.cmd ?? e.rawInput?.script;
-      if (call && typeof command === "string" && command) call.command = command;
+      if (call && typeof command === "string" && command && call.command !== command) {
+        call.command = command;
+        this.emit("transcript.item", { id: call.id, kind: "command", title: command, text: command, status: "running" });
+      }
       if (["completed", "failed"].includes(e.status)) {
         const r = e.rawOutput ?? {}, code = integer(r.exitCode ?? r.exit_code ?? r.metadata?.exit ?? r.exit);
         this.finish(e.toolCallId, { output: textOf(e.content) || textOf(r.output) || (typeof r === "string" ? r : ""), exitCode: code,

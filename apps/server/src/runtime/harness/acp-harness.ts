@@ -18,8 +18,12 @@ import { inspectExecution, type PreflightInput } from './preflight.js';
 import { prepareExecutionEnvironment } from './execution-environment.js';
 import { packageFor } from './device-tools.js';
 import { systemBootTime, rebootConfirmsTermination } from './native-recovery.js';
+import { NativeTranscript } from './native-transcript.js';
 
 export interface AcpPackageOptions {
+  classifyResult?: (result: HarnessResult) => HarnessResult;
+  failureUpdate?: (update: Record<string, any>) => string | undefined;
+  configureSession?: (request: HarnessRequest, call: (method: string, params: unknown) => Promise<any>, sessionId: string, description: any) => Promise<Record<string, unknown>>;
   prepare(input: { request: HarnessRequest; home: string; entry: string; env: NodeJS.ProcessEnv; bridge: string }): Promise<{
     args: string[]; env?: NodeJS.ProcessEnv; sessionParams?: Record<string, unknown>;
   }> | { args: string[]; env?: NodeJS.ProcessEnv; sessionParams?: Record<string, unknown> };
@@ -36,11 +40,11 @@ export class AcpHarness implements Harness {
   private unconfirmed = new Map<string, ChildProcessWithoutNullStreams>();
   constructor(readonly manifest: HarnessManifest, private options: AcpPackageOptions) {
     this.id = manifest.id;
-    this.capabilities = { sessions: true, resume: manifest.session.resume, streaming: true, dynamicTools: true, interrupt: true, nativeChecks: true, dispatchTracking: true, customModel: true, customProvider: true, protocol: manifest.models.preferredProtocol, isolation: String(manifest.description.isolation[process.platform] ?? manifest.description.isolation.default ?? 'Native permissions') };
+    this.capabilities = { sessions: true, resume: manifest.session.resume, streaming: true, dynamicTools: true, interrupt: true, nativeChecks: true, dispatchTracking: true, customModel: true, customProvider: !manifest.models.nativeOnly, ...(manifest.models.preferredProtocol ? { protocol: manifest.models.preferredProtocol } : {}), isolation: String(manifest.description.isolation[process.platform] ?? manifest.description.isolation.default ?? 'Native permissions') };
   }
   get sessionScope() { return `${sessionStoreScope(nativeHome(this.id))}:acp:${this.manifest.packageVersion}`; }
   resources() { return [...[...this.active].map(([id, a]) => [id, a.child] as const), ...this.unconfirmed].flatMap(([id, child]) => child.pid ? [{ id: `${this.id}:${id}`, pid: child.pid, sessions: 1 }] : []); }
-  async inspect() {
+  async inspect(): Promise<Record<string, unknown>> {
     try {
       const entry = nativeEntry(this.id), pkg = this.manifest.runtime && packageFor(entry, this.manifest.runtime.package);
       return { id: this.id, available: true, installed: true, entry, version: pkg?.version ?? null, testedVersion: !!pkg && this.manifest.runtime!.testedVersions.includes(pkg.version), capabilities: this.capabilities };
@@ -82,7 +86,8 @@ export class AcpHarness implements Harness {
     try {
       const entry = nativeEntry(this.id), env = childEnvironment(request);
       const launch = await this.options.prepare({ request, home, entry, env, bridge: bridge.url });
-      request.onSession(id, { harness: this.id, model: request.config.model, protocol: request.config.protocol, nativeCommands: true, nativePermissions: request.config.permissions ?? null, workspace: request.workspace });
+      request.onSession(id, { harness: this.id, model: request.config.model, protocol: request.config.protocol, nativeCommands: true, nativePermissions: request.config.permissions ?? null, workspace: request.workspace,
+        nativeSession: request.sessionId ? 'inherited' : 'unconfirmed' });
       request.onTurn(turnId); request.onDispatch?.();
       const child = spawned = await spawnOwned(/\.[cm]?js$/i.test(entry) ? process.execPath : entry, [...(/\.[cm]?js$/i.test(entry) ? [entry] : []), ...launch.args], { cwd: request.workspace, env: launch.env ?? env, windowsHide: true, detached: process.platform !== 'win32' });
       const receiptFile = path.join(home, `${turnId}.json`);
@@ -93,28 +98,51 @@ export class AcpHarness implements Harness {
       receipt();
       const emit = (type: string, data: Record<string, unknown>) => request.onEvent({ type, data: redact(data, request.config.credentialEnv) });
       const observations = new CommandObservations(this.id, path.join(home, turnId, 'commands'), emit, 'acp');
+      const transcript = new NativeTranscript(this.id, turnId, emit);
       let terminal: HarnessResult | undefined, settle!: (result: HarnessResult) => void;
       const done = new Promise<HarnessResult>(resolve => { settle = resolve; });
-      let finishing = false;
+      let finishing = false, sessionSeen = false, nativeFailure: string | undefined;
       const finish = async (result: HarnessResult) => {
         if (finishing) return; finishing = true;
+        result = this.options.classifyResult?.(result) ?? result;
+        if (nativeFailure && result.status === 'completed')
+          result = { ...result, status: 'failed', error: nativeFailure };
         terminal = result;
         rpc.close();
         let stopped = await confirmOwnedExit(child);
         if (!stopped) stopped = await terminateNative(child);
+        if (!stopped) stopped = await confirmOwnedExit(child);
         if (!stopped) terminal = { ...result, status: 'unknown', error: 'Native process termination could not be confirmed.' };
-        try { observations.close(result.status === 'interrupted'); receipt(terminal); }
+        if (stopped && request.sessionId && !sessionSeen && result.status !== 'interrupted')
+          emit('session.native_unavailable', { harness: this.id });
+        try { observations.close(result.status === 'interrupted'); transcript.finish(result.status); receipt(terminal); }
         catch { terminal = { status: 'unknown', text: result.text, error: 'Native execution receipt could not be saved.' }; }
         await bridge.close();
         if (stopped) this.active.delete(id);
         settle(terminal);
       };
       const rpc = new AcpSession(child, request, bridge.url, path.join(home, 'native-session.json'), (event: any) => {
+        if (event.type === 'acp.event')
+          nativeFailure = this.options.failureUpdate?.(event.event) ?? nativeFailure;
         observations.observe(event);
+        transcript.observe(event);
         emit('native.event', { harness: this.id, ...event });
-        if (event.type === 'session') emit('native.session', { id: event.id });
+        if (event.type === 'session') {
+          sessionSeen = true;
+          if (this.options.configureSession) request.onSession(id, { harness: this.id, model: event.model, effort: event.effort, nativeSessionId: event.id, nativeCommands: true, nativePermissions: request.config.permissions ?? null });
+          emit('native.session', { id: event.id });
+          emit('session.native', { harness: this.id, nativeSessionId: event.id });
+        }
+        if (event.event?.sessionUpdate === 'usage_update') {
+          const used = event.event.used, capacity = event.event.size;
+          if (Number.isFinite(used) && used >= 0 && Number.isFinite(capacity) && capacity > 0)
+            emit('context.usage', { inputTokens: used, outputTokens: 0, contextWindowTokens: capacity });
+        }
         if (event.event?.sessionUpdate === 'agent_message_chunk') emit('message.delta', { text: event.event.content?.text ?? '' });
-      }, result => { void finish(result); }, { name: this.manifest.name, eventType: 'acp.event', prompt: `${request.instructions}\n\n${request.input}`, sessionParams: launch.sessionParams });
+      }, result => { void finish(result); }, { name: this.manifest.name, eventType: 'acp.event', prompt: `${request.instructions}\n\n${request.input}`, sessionParams: launch.sessionParams,
+        configure: this.options.configureSession ? (call, sessionId, description) => this.options.configureSession!(request, call, sessionId, description) : undefined,
+        denyNativePermissions: this.manifest.models.nativeOnly && request.config.access === 'read-only',
+      });
       this.active.set(id, { child, rpc, done, finish, stopping: false, turnId });
       child.stdin.on('error', () => {});
       child.stderr.resume();

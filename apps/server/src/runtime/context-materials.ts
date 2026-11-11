@@ -1,3 +1,4 @@
+import { conversationMessageSql } from "./resource-notifications.js";
 import { conflict, notFound } from "../errors.js";
 import { RuntimeStore, hash } from "./store.js";
 import { ProjectHistory } from "./project-history.js";
@@ -608,7 +609,7 @@ export class ContextMaterials {
     if (options.boundary && !boundary) throw notFound();
     const terms = queryTerms(options.query ?? "");
     const args: (string | number)[] = [conversationId];
-    let where = "conversation_id=?";
+    let where = `conversation_id=? AND ${conversationMessageSql}`;
     if (boundary) {
       where += " AND rowid<=?";
       args.push(Number(boundary.n));

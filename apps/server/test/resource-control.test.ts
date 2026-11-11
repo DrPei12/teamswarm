@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { createApp } from "../src/app.js";
+import { RuntimeSelections } from "../src/runtime/selection-source.js";
 import { executionConfig } from "../src/runtime/validation.js";
 import { deleteResource, resolveExecution } from "../src/runtime/allocation.js";
 import { executionObservation } from "../src/runtime/resource-planning.js";
@@ -66,6 +67,237 @@ async function setup() {
 }
 const call = (r: HarnessRequest, name: string, args: unknown) => r.onTool(name, withJudgmentEvidence(name, args), randomUUID());
 
+test("paused client pins cannot replace Host or worker harness requests, or block them on a stale version", async () => {
+  const app = await setup();
+  try {
+    const {store,catalog}=app.service.runtime, team=app.team.id, branch=app.branch.id;
+    const edge=app.add("Existing", {harness:"grok",model:"alternate",access:"read-only"});
+    const pin={resourceId:edge.id,resourceVersion:edge.version,reason:"Selected by user"};
+    const host=store.list<Member>("members",team).find(m=>m.kind==="host")!;
+    host.config={...host.config,model:"host-chat",effort:"medium"};
+    host.hostSelections={[branch]:{revision:2,selection:{...pin,resourceVersion:99},config:edge.config}};
+    store.save("members",host);
+    const worker=store.createMember(team,"Worker","Read",executionConfig.parse({harness:"pi",model:"worker-chat",effort:"low",access:"read-only"}),branch);
+    worker.selection={...pin,reason:"Member default set for Worker"};store.save("members",worker);
+    assert.equal(catalog.memberExecution(team,branch,host).model,"host-chat");
+    assert.equal(catalog.memberExecution(team,branch,worker).model,"worker-chat");
+    const other=store.createMember(team,"Directed","Read",worker.config,branch);
+    let taskId="";
+    app.codex.action=async r=>{
+      if(taskId) return {status:"completed",text:"Recorded follow-up"};
+      assert.equal(r.config.model,"host-chat");assert.equal(r.config.effort,"medium");
+      const own=store.get<Work>("works",team,JSON.parse(r.input).work.id);
+      const task=store.createWork(store.get("runs",team,own.runId),worker.id,"Read input","Read",[],[],[]);
+      task.selection={...pin,resourceId:"missing-old-resource",reason:"Task resource set for Read input"};
+      store.save("works",task);taskId=task.id;
+      // A legitimate Host instruction can have exactly the same free-text reason as an old panel.
+      await call(r,"team_select_resource",{target:"member",targetId:other.id,expectedRevision:1,resourceId:edge.id,expectedResourceVersion:1,reason:"Selected by user"});
+      return {status:"completed",text:"Configured member"};
+    };
+    const result=await app.send("Read with the chosen configurations.");
+    assert.equal(result.status,"submitted",result.error??"");
+    await until(()=>app.pi.requests.length>0);
+    assert.equal(app.pi.requests[0].config.model,"worker-chat");assert.equal(app.pi.requests[0].config.effort,"low");
+    assert.equal(JSON.parse(app.pi.requests[0].input).work.selection,undefined);
+    const attempt=store.list<Attempt>("attempts",team).find(a=>a.workId===taskId)!;
+    assert.equal(attempt.allocation?.selection,null);
+    assert.equal(store.get<Work>("works",team,taskId).selection!.resourceId,"missing-old-resource");
+    const directed=store.get<Member>("members",team,other.id);
+    assert.equal(catalog.memberExecution(team,branch,directed).config.model,"alternate");
+    assert.equal(directed.selectionSource,"runtime");
+    const legacy = {...directed, selectionSource:undefined};
+    assert.deepEqual(new RuntimeSelections(store,false).active(team,"member",legacy.id,legacy),directed.selection);
+    const previewOnly={...directed,selectionSource:"resource-panel" as const,selection:{...pin,reason:"Arbitrary label"}};
+    assert.equal(catalog.memberExecution(team,branch,previewOnly).config.model,"worker-chat");
+  } finally {await app.close();}
+});
+
+test("Host and workers expose frozen current executions separately from future defaults and request receipts", async () => {
+  const app = await setup();
+  const releases: (() => void)[] = [];
+  let first: Promise<Work> | undefined;
+  try {
+    const runtime = app.service.runtime, store = runtime.store;
+    const endpoint = `/product/teams/${app.team.id}/branches/${app.branch.id}/host/runtime`;
+    const initial = (await app.request("/product")).body.executions[app.team.id].host;
+    assert.equal((await app.request(endpoint, { expectedVersion: initial.configurationVersion,
+      config: { ...initial.config, model: "host-model", effort: "high" } }, "PUT")).status, 200);
+    app.codex.action = () => new Promise(resolve => releases.push(() => resolve({ status: "completed", text: "Controlled execution completed" })));
+    first = app.send("Inspect current model, Harness and effort.");
+    await until(() => releases.length === 1);
+    const hostRequest = app.codex.requests[0];
+    const input = JSON.parse(hostRequest.input);
+    const own = store.get<Work>("works", app.team.id, input.work.id);
+    assert.equal(input.member.model, "host-model");
+    assert.equal(input.member.effort, "high");
+    assert.equal(input.execution.currentExecution.effort, "high");
+    assert.equal(input.execution.currentExecution.modelRequest, null, "No wire receipt is invented before dispatch");
+    store.publishRequirement(own, "Inspect execution state", []);
+    const run = store.get<any>("runs", app.team.id, own.runId);
+    const worker = store.createMember(app.team.id, "Worker", "Read state", executionConfig.parse({ harness: "codex", model: "worker-current", effort: "low", access: "read-only" }), app.branch.id);
+    const work = store.createWork(run, worker.id, "Read state", "Read state", ["State reported"], [], []);
+    await until(() => releases.length === 2);
+    const workerInput = JSON.parse(app.codex.requests[1].input);
+    assert.equal(workerInput.member.effort, "low");
+    assert.equal(workerInput.execution.currentExecution.model, "worker-current");
+    const host = (await app.request("/product")).body.executions[app.team.id].host;
+    assert.equal((await app.request(endpoint, { expectedVersion: host.configurationVersion,
+      config: { ...host.config, model: "host-next", effort: "low" } }, "PUT")).status, 200);
+    assert.equal((await app.request(`/product/teams/${app.team.id}/members/${worker.id}/runtime`, {
+      expectedVersion: 1, config: { ...worker.config, model: "worker-next", effort: "medium" },
+    }, "PUT")).status, 200);
+    // This synthetic event exercises persistence, while model-gateway tests
+    // compare the real serialized HTTP request against these receipts.
+    const receipt = { id: randomUUID(), at: new Date().toISOString(), source: "model_gateway",
+      harness: "codex", nativeProtocol: "responses", protocol: "responses", model: "host-model",
+      effort: "high", effortParameter: "reasoning.effort", status: "accepted", httpStatus: 200 };
+    hostRequest.onEvent({ type: "model.request", data: receipt });
+    const state: any = await call(hostRequest, "team_state", {});
+    assert.equal(state.self.currentExecution.model, "host-model");
+    assert.equal(state.self.currentExecution.effort, "high");
+    assert.deepEqual(state.self.currentExecution.modelRequest, receipt);
+    assert.equal(state.self.nextExecution.model, "host-next");
+    assert.equal(state.self.nextExecution.effort, "low");
+    const observed = state.members.find((m: any) => m.id === worker.id);
+    assert.equal(observed.currentExecution.model, "worker-current");
+    assert.equal(observed.currentExecution.effort, "low");
+    assert.equal(observed.nextExecution.model, "worker-next");
+    assert.equal(observed.nextExecution.effort, "medium");
+    assert.equal(state.works.find((w: any) => w.id === work.id).execution.effort, "low");
+    const directory: any = await call(hostRequest, "team_directory", { kind: "members" });
+    const entry = directory.items.find((m: any) => m.id === worker.id);
+    assert.deepEqual(entry.currentExecution, observed.currentExecution);
+    assert.deepEqual(entry.nextExecution, observed.nextExecution);
+    const detail: any = await call(hostRequest, "team_directory_detail", { kind: "member", id: worker.id });
+    assert.deepEqual(detail.currentExecution, observed.currentExecution);
+    assert.deepEqual(detail.nextExecution, observed.nextExecution);
+    const workDetail: any = await call(hostRequest, "team_read_work", { workId: work.id });
+    assert.deepEqual(workDetail.currentExecution, observed.currentExecution);
+    assert.equal(workDetail.nextExecution.effort, "medium");
+    const workerState: any = await call(app.codex.requests[1], "team_state", {});
+    assert.equal(workerState.self.currentExecution.model, "worker-current");
+    assert.equal(workerState.self.currentExecution.effort, "low");
+    assert.equal(workerState.self.nextExecution.effort, "medium");
+    assert.equal(JSON.stringify(state.self).includes("credentialEnv"), false);
+    run.state = "paused";
+    store.save("runs", run);
+    releases.forEach(release => release());
+    await first;
+    await until(() => !store.list<Attempt>("attempts", app.team.id).some(a => a.status === "running"));
+    const finished = runtime.catalog.memberExecutionStatus(app.team.id, app.branch.id, store.get<Member>("members", app.team.id, worker.id));
+    assert.equal(finished.currentExecution, null);
+    assert.equal(finished.lastExecution?.effort, "low");
+    assert.equal(finished.nextExecution.effort, "medium");
+  } finally { releases.forEach(release => release()); await first?.catch(() => {}); await app.close(); }
+});
+
+test("Host composer saves next-turn configuration while running, with branch isolation and frozen Attempts", async () => {
+  const app = await setup();
+  let release: (() => void) | undefined;
+  let first: Promise<Work> | undefined;
+  try {
+    const runtime = app.service.runtime, store = runtime.store;
+    const defaults = store.settings(app.team.id)!;
+    const resource = app.add("Pinned low", { harness: "codex", model: "fixture-model", effort: "low", access: "read-only" });
+    const allocation = `/teams/${app.team.id}/branches/${app.branch.id}/host-allocation`;
+    assert.equal((await app.request(allocation, { expectedRevision: 1,
+      selection: { resourceId: resource.id, resourceVersion: 1, reason: "Pinned fixture" } }, "PUT")).status, 200);
+    app.codex.action = () => new Promise(resolve => { release = () => resolve({ status: "completed", text: "First turn completed" }); });
+    first = app.send("Hold this turn while changing effort.");
+    await until(() => !!release);
+    const attempt = store.list<Attempt>("attempts", app.team.id).at(-1)!;
+    const endpoint = `/product/teams/${app.team.id}/branches/${app.branch.id}/host/runtime`;
+    const current = (await app.request("/product")).body.executions[app.team.id].host;
+    assert.equal(current.config.effort, "low");
+    assert.equal(current.runningConfig.effort, "low");
+    const next = { ...current.config, effort: "high" };
+    const saved = await app.request(endpoint, { expectedVersion: current.configurationVersion, config: next }, "PUT");
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    const reloaded = (await app.request("/product")).body.executions[app.team.id].host;
+    assert.equal(reloaded.config.effort, "high");
+    assert.equal(reloaded.runningConfig.effort, "low");
+    assert.equal(reloaded.configurationVersion, current.configurationVersion + 1);
+    assert.deepEqual(store.get<Attempt>("attempts", app.team.id, attempt.id), attempt);
+    assert.equal(app.codex.requests[0].config.effort, "low");
+    assert.deepEqual(store.settings(app.team.id), defaults);
+    assert.deepEqual(runtime.catalog.resource(app.team.id, resource.id), resource);
+    const host = store.get<Member>("members", app.team.id, attempt.memberId);
+    assert.equal(runtime.catalog.memberExecution(app.team.id, "another-branch", host).config.effort, defaults.config.effort);
+
+    const stale = await app.request(endpoint, { expectedVersion: current.configurationVersion, config: next }, "PUT");
+    assert.equal(stale.status, 409);
+    assert.equal(stale.body.error.code, "version_conflict");
+    const escalated = await app.request(endpoint, { expectedVersion: reloaded.configurationVersion, config: { ...next, access: "workspace-write" } }, "PUT");
+    assert.equal(escalated.status, 409);
+    assert.equal(escalated.body.error.code, "access_escalation");
+    const noOp = await app.request(`/product/teams/${app.team.id}/runtime`, {
+      expectedVersion: defaults.version, workspace: defaults.workspace, config: defaults.config,
+    }, "PUT");
+    assert.equal(noOp.status, 200);
+    assert.equal(noOp.body.version, defaults.version);
+    const structural = await app.request(`/product/teams/${app.team.id}/runtime`, {
+      expectedVersion: defaults.version, workspace: defaults.workspace, config: { ...defaults.config, model: "other-default" },
+    }, "PUT");
+    assert.equal(structural.status, 409);
+    assert.equal(structural.body.error.code, "active_execution");
+
+    release!();
+    assert.equal((await first).status, "submitted");
+    app.codex.action = async () => ({ status: "completed", text: "Next turn completed" });
+    assert.equal((await app.send("Use the saved effort.")).status, "submitted");
+    assert.equal(app.codex.requests.at(-1)?.config.effort, "high");
+    assert.equal(store.list<Attempt>("attempts", app.team.id).at(-1)?.config.effort, "high");
+    assert.equal(store.get<Attempt>("attempts", app.team.id, attempt.id).config.effort, "low");
+    assert.equal((await app.request("/product")).body.executions[app.team.id].host.runningConfig, undefined);
+  } finally { release?.(); await first?.catch(() => {}); await app.close(); }
+});
+
+test("running members do not block Host or future member-default changes, and task pins still win", async () => {
+  const app = await setup();
+  let release: (() => void) | undefined;
+  try {
+    clearInterval((app.service.runtime as any).timer);
+    const runtime = app.service.runtime, store = runtime.store;
+    const low = app.add("Member low", { harness: "codex", model: "fixture-model", effort: "low", access: "read-only" });
+    const high = app.add("Member high", { ...low.config, effort: "high" });
+    const member = store.createMember(app.team.id, "Reader", "Read", low.config, app.branch.id);
+    let hostWork!: Work;
+    store.teams.recordMessage(app.team.id, app.chat.id, "Create work", randomUUID(), message => {
+      hostWork = store.enqueueHost(app.team.id, app.chat.id, message.id, true, false);
+    });
+    store.publishRequirement(hostWork, "Create work", []);
+    const run = store.get<any>("runs", app.team.id, hostWork.runId);
+    store.setStatus(hostWork, "accepted");
+    const work = store.createWork(run, member.id, "Read", "Read", ["Read completed"], [], []);
+    app.codex.action = () => new Promise(resolve => { release = () => resolve({ status: "completed", text: "Member completed" }); });
+    (runtime as any).pump();
+    await until(() => !!release);
+    const attempt = store.list<Attempt>("attempts", app.team.id).find(a => a.workId === work.id)!;
+    const host = (await app.request("/product")).body.executions[app.team.id].host;
+    assert.equal(host.runningConfig, undefined);
+    const saved = await app.request(`/product/teams/${app.team.id}/branches/${app.branch.id}/host/runtime`, {
+      expectedVersion: host.configurationVersion, config: { ...host.config, effort: "high" },
+    }, "PUT");
+    assert.equal(saved.status, 200);
+    const memberSaved = await app.request(`/teams/${app.team.id}/members/${member.id}/allocation`, {
+      expectedRevision: 1, selection: { resourceId: high.id, resourceVersion: 1, reason: "Next execution" },
+    }, "PUT");
+    assert.equal(memberSaved.status, 200, JSON.stringify(memberSaved.body));
+    assert.deepEqual(store.get<Attempt>("attempts", app.team.id, attempt.id), attempt);
+    assert.equal(app.codex.requests[0].config.effort, "low");
+    const currentMember = store.get<Member>("members", app.team.id, member.id);
+    const nextWork = store.createWork(run, member.id, "Next read", "Read", ["Read completed"], [], []);
+    assert.equal(resolveExecution(runtime, app.team.id, currentMember, nextWork).config.effort, "high");
+    nextWork.selection = { resourceId: low.id, resourceVersion: 1, reason: "Pinned task" };
+    assert.equal(resolveExecution(runtime, app.team.id, currentMember, nextWork).config.effort, "low");
+    store.setStatus(nextWork, "superseded");
+    run.state = "paused";
+    store.save("runs", run);
+    release!();
+    await until(() => store.get<Attempt>("attempts", app.team.id, attempt.id).status !== "running");
+  } finally { release?.(); await app.close(); }
+});
+
 async function until(check: () => boolean) {
   const start = Date.now();
   while (!check()) {
@@ -100,13 +332,13 @@ for (const harnessId of ["codex", "pi", "grok"] as const) {
         if (phase === "initial") {
           phase = "idle";
           assert.equal(input.current.allocation.memberConcurrencyLimit, undefined);
-          assert.equal(input.current.allocation.deviceResources.policy.reserveMemoryMiB, null);
+          assert.equal("reserveMemoryMiB" in input.current.allocation.deviceResources.policy, false);
           assert.deepEqual(runtime.catalog.resourceSharing(app.team.id, app.branch.id, "team-default"), {
             mode: "shared", selectedMemberCount: 1, activeAttemptCount: 1, scope: "current_branch"});
           await call(r, "team_define_requirements", {content: "Three independent read-only analyses", affectedWorkIds: []});
           const before = store.list<Member>("members", app.team.id).length;
           await assert.rejects(call(r, "team_add_member", {name: "Invalid", responsibility: "Read", resourceId: resource.id,
-            expectedResourceVersion: 1, access: "workspace-write"}), (e: any) => e.code === "access_escalation");
+            expectedResourceVersion: 1, permissionPreset: "full-access"}), (e: any) => e.code === "permission_choice");
           assert.equal(store.list<Member>("members", app.team.id).length, before);
           for (let i = 0; i < 3; i++) {
             const member = await call(r, "team_add_member", {name: `Reader ${i}`, responsibility: `Independent part ${i}`,
@@ -269,8 +501,10 @@ test("Host selections enforce branch, member permissions, optimistic versions, b
       const outsider = store.createMember(app.team.id, "Other branch", "Read", ro.config, "different-branch");
       const select = (id: string, resourceId = ro.id, revision = 1) => call(r, "team_select_resource", { target: "member", targetId: id, expectedRevision: revision, resourceId, expectedResourceVersion: 1, reason: "Fixture" });
       await assert.rejects(select(outsider.id), (e: any) => e.code === "branch_scope");
-      await assert.rejects(select(reader.id, rw.id), (e: any) => e.code === "access_escalation");
-      const selected: any = await select(reader.id); assert.equal(selected.allocationRevision, 2);
+      const narrowed: any = await select(reader.id, rw.id);
+      assert.equal(narrowed.allocationRevision, 2);
+      assert.equal(runtime.catalog.memberExecution(app.team.id, app.branch.id, store.get<Member>("members", app.team.id, reader.id)).config.access, "read-only");
+      const selected: any = await select(reader.id, ro.id, 2); assert.equal(selected.allocationRevision, 3);
       await assert.rejects(select(reader.id), (e: any) => e.code === "version_conflict");
       const waiting = store.createWork(run, reader.id, "Waiting", "Read", [], [], []);
       store.setStatus(waiting, "waiting");
@@ -278,7 +512,9 @@ test("Host selections enforce branch, member permissions, optimistic versions, b
       assert.equal(assigned.selection.resourceId, ro.id);
       const queued = store.get<Work>("works", app.team.id, waiting.id); store.setStatus(queued, "queued");
       const attempt = store.start(queued, ro.config);
-      await assert.rejects(select(reader.id, ro.id, 2), (e: any) => e.code === "busy");
+      const nextDefault: any = await select(reader.id, ro.id, 3);
+      assert.equal(nextDefault.allocationRevision, 4);
+      assert.deepEqual(store.get<Attempt>("attempts", app.team.id, attempt.id).config, attempt.config);
       await assert.rejects(runtime.tool(app.team.id, waiting.id, attempt.id, "team_select_resource", { target: "host", expectedRevision: 1, resourceId: ro.id, expectedResourceVersion: 1, reason: "Forbidden member call" }, randomUUID()), (e: any) => e.code === "host_required");
       await assert.rejects(runtime.tool(app.team.id, waiting.id, attempt.id, "team_check_resource", { resourceId: ro.id, expectedResourceVersion: 1 }, randomUUID()), (e: any) => e.code === "host_required");
       Object.assign(waiting, store.get<Work>("works", app.team.id, waiting.id)); store.setStatus(waiting, "self_checked");

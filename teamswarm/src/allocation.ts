@@ -5,6 +5,7 @@ import type {
 } from "@team/contracts/allocation";
 import { harnessManifest } from "@team/contracts/harness-catalog";
 import type { ExecutionConfig } from "@team/contracts/runtime";
+import { permissionMode } from "./permissions";
 import { executionCompatibility } from "../../apps/server/src/runtime/model-routing";
 
 export type {
@@ -145,7 +146,11 @@ export function configFields(config: ExecutionConfig): ResourceConfigField[] {
     {
       label: "Access",
       value:
-        config.access === "read-only" ? "Read only" : "Project read and write",
+        config.access === "read-only"
+          ? "Read-only"
+          : permissionMode(config) === "full-access"
+            ? "Full access"
+            : "Custom permissions",
     },
   ];
 }

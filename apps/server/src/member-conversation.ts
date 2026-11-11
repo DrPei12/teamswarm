@@ -115,17 +115,23 @@ export function transcriptItems(
       items.set(id, item);
     } else if (row.type === "transcript.item") {
       const previous = items.get(id);
+      const { replaceText, ...item } = data;
       items.set(id, {
         ...previous,
-        ...data,
-        text: data.text || previous?.text || "",
+        ...item,
+        text: replaceText ? data.text ?? "" : data.text || previous?.text || "",
       });
-    } else if (!items.has(id)) {
+    } else {
       const item = codexDisplayItem(
-        { ...data, aggregatedOutput: data.output },
-        true,
+        { ...data, aggregatedOutput: data.aggregatedOutput ?? data.output },
+        !["running", "inProgress"].includes(data.status),
       );
-      if (item) items.set(id, item);
+      if (item) {
+        if (data.nativeOutcome === "failed") item.status = "failed";
+        if (data.nativeOutcome === "cancelled") item.status = "interrupted";
+        if (data.nativeOutcome === "unknown") item.status = "unknown";
+        items.set(id, { ...items.get(id), ...item });
+      }
     }
   }
   return [...items.values()].map((item) =>
@@ -220,9 +226,8 @@ export function memberConversation(
   const selected = options.workId
     ? runtime.store.get<Work>("works", teamId, options.workId)
     : undefined;
-  const works = runtime.store
-    .list<Work>("works", teamId)
-    .filter(
+  const teamWorks = runtime.store.list<Work>("works", teamId);
+  const works = teamWorks.filter(
       (w) =>
         w.memberId === member.id &&
         (!selected || threadOf(w) === threadOf(selected)),
@@ -392,6 +397,7 @@ export function memberConversation(
       ),
     };
   });
+  attachDeliveryHistory(runtime, teamId, page, teamWorks, messages);
   return {
     memberId,
     workId: selected?.id,
@@ -401,4 +407,63 @@ export function memberConversation(
     before: start,
     canSend: !member.removedAt && works.length > 0 && !!runtime.store.settings(teamId),
   };
+}
+
+/**
+ * Pre-start failures in old workspaces have a work event but no native attempt.
+ * Keep retry outcomes attached to the original message even after it is delivered.
+ */
+function attachDeliveryHistory(
+  runtime: TeamRuntime, teamId: string, page: ConversationEntry[], works: Work[],
+  messages: {id: string}[],
+) {
+  const entries = new Map(page.filter(e => e.exchangeId === e.id).map(e => [e.id, e]));
+  if (!entries.size) return;
+  const messageIds = messages.filter(m => entries.has(m.id)).map(m => m.id);
+  if (!messageIds.length) return;
+  const prestart = new Map<string, string[]>();
+  for (const work of works) {
+    const ids = work.interaction?.messageIds.filter(id => entries.has(id));
+    if (ids?.length) {
+      prestart.set(work.id, ids);
+    }
+  }
+  const rows = runtime.store.db.prepare(
+    `SELECT id, work_id, type, data, created_at, sequence FROM runtime_events
+       WHERE team_id=? AND type='work.failed' AND attempt_id IS NULL AND work_id IN (SELECT value FROM json_each(?))
+     UNION ALL
+     SELECT id, work_id, type, data, created_at, sequence FROM runtime_events
+       WHERE team_id=? AND type IN ('communication.failed','communication.settled')
+         AND json_extract(data,'$.messageId') IN (SELECT value FROM json_each(?))
+     ORDER BY sequence`,
+  ).all(teamId, JSON.stringify([...prestart.keys()]), teamId, JSON.stringify(messageIds));
+  type Outcome = NonNullable<ConversationEntry["deliveryHistory"]>[number];
+  const histories = new Map<string, Outcome[]>();
+  const recordedFailures = new Map<string, string>();
+  for (const row of rows) {
+    const workId = String(row.work_id), data = JSON.parse(String(row.data));
+    const ids = row.type === "work.failed" ? prestart.get(workId) ?? [] : [data.messageId];
+    for (const id of ids) {
+      if (!entries.has(id)) continue;
+      const pair = workId + "/" + id;
+      // failBeforeStart records communication.failed immediately after work.failed for the same failure.
+      if (row.type === "communication.failed") {
+        const previous = recordedFailures.get(pair);
+        recordedFailures.delete(pair);
+        if (previous && previous === data.error) continue;
+      } else if (row.type === "work.failed" && typeof data.error === "string") {
+        recordedFailures.set(pair, data.error);
+      } else recordedFailures.delete(pair);
+      const status = row.type === "communication.settled" ? data.status : "failed";
+      if (status !== "delivered" && status !== "failed") continue;
+      const history = histories.get(id) ?? [];
+      history.push({ id: String(row.id), createdAt: Date.parse(String(row.created_at)), status,
+        ...(typeof data.error === "string" && data.error ? {error: data.error} : {}) });
+      histories.set(id, history);
+    }
+  }
+  for (const [id, history] of histories) {
+    if (history.length > 1 && history.some(entry => entry.status === "failed"))
+      entries.get(id)!.deliveryHistory = history;
+  }
 }

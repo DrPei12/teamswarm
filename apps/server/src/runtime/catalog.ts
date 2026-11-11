@@ -1,12 +1,15 @@
+import { apiEffortPolicy, type ApiEffortPolicy } from "@team/contracts/model-effort";
 import { readOnlyExecution } from "./harness/permissions.js";
-import { memberPermissions } from "./permission-options.js";
+import { memberPermissions, hostPermissions } from "./permission-options.js";
 import { z } from "zod";
 import { conflict, notFound } from "../errors.js";
 import { RuntimeStore, activeStates, hash } from "./store.js";
 import { ProjectHistory } from "./project-history.js";
 import { executionConfig, key } from "./validation.js";
 import { executionObservation } from "./resource-planning.js";
+import { attemptExecution, executionConfiguration, executionStatusGuidance, isCurrentAttempt } from "./execution-status.js";
 import { CapabilityStore } from "./capabilities.js";
+import { RuntimeSelections } from "./selection-source.js";
 import { harnessDescription } from "./harness/description.js";
 import type {
   Attempt,
@@ -59,12 +62,15 @@ const matchesConfiguration = (actual: ExecutionConfig, configured: ExecutionConf
 
 /** A configured execution option, not an assertion about task quality or remaining credit. */
 export class TeamCatalog {
+  readonly selections: RuntimeSelections;
   readonly capabilities: CapabilityStore;
   constructor(
     readonly store: RuntimeStore,
     readonly history: ProjectHistory,
     readonly harnesses: Map<string, Harness>,
+    readonly manualResourceConfiguration = false,
   ) {
+    this.selections = new RuntimeSelections(store, manualResourceConfiguration);
     store.db.exec(`CREATE TABLE IF NOT EXISTS runtime_resources (
       team_id TEXT NOT NULL REFERENCES teams(id), id TEXT NOT NULL, data TEXT NOT NULL CHECK(json_valid(data)), PRIMARY KEY(team_id,id));
       CREATE TABLE IF NOT EXISTS runtime_harness_observations (id TEXT PRIMARY KEY, data TEXT NOT NULL CHECK(json_valid(data)));`);
@@ -109,16 +115,19 @@ export class TeamCatalog {
         model: string | null;
         resourceIds: string[];
         harnesses: string[];
+        effortPolicy?: ApiEffortPolicy;
       }
     >();
     for (const resource of this.resources(teamId)) {
       if (!this.capabilities.allowed(teamId, resource.config)) continue;
       const { provider, model } = resource.config;
       const id = hash(JSON.stringify([provider, model])).slice(0, 24);
+      const policy = apiEffortPolicy(resource.config);
       const entry = models.get(id) ?? {
         id,
         provider,
         model,
+        ...(policy ? {effortPolicy: policy} : {}),
         resourceIds: [],
         harnesses: [],
       };
@@ -178,7 +187,7 @@ export class TeamCatalog {
       observation: row ? JSON.parse(String(row.data)) : null,
       availability: row ? "last_observation" : "not_checked",
       guidance:
-        "Use observed capabilities and task requirements. Installation does not prove provider access, quota or task quality.",
+        "Capabilities describe native Harness connections. Shared model connections can apply effort through the model gateway. Read currentExecution and modelRequest for the active turn; nextExecution is a future default. Use observed capabilities and task requirements. Installation does not prove provider access, quota or task quality.",
     };
   }
   harnessIndex(teamId: string) {
@@ -235,6 +244,8 @@ export class TeamCatalog {
     input: z.infer<typeof directoryQuery>,
   ) {
     const scope = this.scoped(teamId, branchId);
+    const executionScope = { works: scope.works,
+      attempts: input.kind === "members" ? this.store.list<Attempt>("attempts", teamId) : [] };
     let items: unknown[];
     if (input.kind === "harnesses")
       items = [...this.harnesses.keys()].map((id) => {
@@ -286,6 +297,7 @@ export class TeamCatalog {
           kind: m.kind,
           responsibility: m.responsibility.slice(0, 160),
           ...this.memberExecution(teamId, branchId, m),
+          ...this.memberExecutionStatus(teamId, branchId, m, executionScope),
           activeCount: works.length,
           workIds: works.slice(-5).map((w) => w.id),
           busy: works.some((w) => activeStates.has(w.status)),
@@ -294,6 +306,7 @@ export class TeamCatalog {
       });
     items = items.filter((item) => matches(item, input.query));
     return {
+      ...(input.kind === "members" ? { executionGuidance: executionStatusGuidance } : {}),
       ...(input.kind === "resources" || input.kind === "models" ? { catalogue: {
         scope: "configured_enabled_choices" as const,
         capabilityVersion: this.capabilities.read(teamId).version,
@@ -308,18 +321,38 @@ export class TeamCatalog {
           : null,
     };
   }
+  memberExecutionStatus(teamId: string, branchId: string, member: Member,
+    snapshot?: { works: Work[]; attempts: Attempt[] }) {
+    const scope = snapshot ?? { works: this.scoped(teamId, branchId).works,
+      attempts: this.store.list<Attempt>("attempts", teamId) };
+    const workIds = new Set(scope.works.filter(w => w.memberId === member.id).map(w => w.id));
+    const attempts = scope.attempts.filter(a => workIds.has(a.workId));
+    const current = attempts.find(isCurrentAttempt);
+    const last = attempts.filter(a => !isCurrentAttempt(a)).at(-1);
+    const next = this.memberExecution(teamId, branchId, member);
+    return {
+      currentExecution: current ? attemptExecution(current) : null,
+      lastExecution: last ? attemptExecution(last) : null,
+      nextExecution: { ...executionConfiguration(next.config), scope: "member_default" as const,
+        allocationRevision: next.allocationRevision, selection: next.selection,
+        available: next.selectionCurrent || next.selectionRetained },
+    };
+  }
   memberExecution(teamId: string, branchId: string, member: Member) {
     const choice = member.kind === "host" ? member.hostSelections?.[branchId] : undefined;
-    const saved = member.kind === "host" ? choice?.selection ?? null : member.selection ?? null;
+    const saved = member.kind === "host"
+      ? this.selections.active(teamId, "host", branchId, choice)
+      : this.selections.active(teamId, "member", member.id, member);
     // Older Host choices pinned the synthetic default; preserve its follow-default meaning.
     const selection = member.kind === "host" && saved?.resourceId === "team-default" ? null : saved;
     const selected = selection ? this.resources(teamId).find(r => r.id === selection.resourceId) : undefined;
     const selectionCurrent = !selection || selected?.version === selection.resourceVersion;
     const selectionRetained = !selectionCurrent && !!choice?.config && !!selection?.resourceId.startsWith("cap_");
-    const configuration = memberPermissions(selectionCurrent ? selected?.config ?? member.config : choice?.config ?? member.config, member);
+    const branchConfig = choice?.selection === null ? choice.config : undefined;
+    const configuration = memberPermissions(selectionCurrent ? selected?.config ?? branchConfig ?? member.config : choice?.config ?? member.config, member);
     return {
       harness: configuration.harness, model: configuration.model, effort: configuration.effort,
-      config: member.config.access === "read-only" ? readOnlyExecution(configuration) : configuration,
+      config: member.kind === "host" ? hostPermissions(configuration,member,branchId,this.harnesses) : member.config.access === "read-only" ? readOnlyExecution(configuration) : configuration,
       selection, allocationRevision: member.kind === "host" ? choice?.revision ?? 1 : member.allocationVersion ?? 1,
       selectionCurrent,
       selectionRetained,
@@ -335,8 +368,9 @@ export class TeamCatalog {
     if (input.kind === "run") {
       const run = scope.runs.find((r) => r.id === input.id);
       if (!run) throw notFound();
+      const { maxWorksPerRun: _workLimit, maxConcurrent: _concurrency, ...settings } = run.settings;
       return {
-        run,
+        run: { ...run, settings },
         requirement: this.store.get("requirements", teamId, run.requirementId),
         hostWorks: scope.works
           .filter(
@@ -405,6 +439,7 @@ export class TeamCatalog {
     return {
       member,
       allocation: this.memberExecution(teamId, branchId, member),
+      ...this.memberExecutionStatus(teamId, branchId, member),
       recentWorks: works.slice(-10).map((w) => ({
         id: w.id,
         title: w.title,
@@ -420,6 +455,7 @@ export class TeamCatalog {
         workId: a.workId,
         sessionId: a.sessionId,
         status: a.status,
+        execution: attemptExecution(a),
         contextCurrent:
           (a.acknowledgedContextVersion ?? a.contextVersion) === version,
         sameConfig: JSON.stringify(a.config) === JSON.stringify(member.config),
@@ -427,7 +463,7 @@ export class TeamCatalog {
           this.harnesses.get(a.config.harness)?.capabilities.resume === true,
       })),
       guidance:
-        "Recent work is evidence of participation, not guaranteed retained understanding. Resume requires compatible configuration, definition, tools and session state.",
+        executionStatusGuidance + " Recent work is evidence of participation, not guaranteed retained understanding. Resume requires compatible configuration, definition, tools and session state.",
     };
   }
 }

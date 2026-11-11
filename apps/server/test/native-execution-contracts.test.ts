@@ -1,3 +1,4 @@
+import { autonomousWorkers } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -20,7 +21,8 @@ function fixture() {
   const harnesses: Harness[] = ["codex", "claude-code", "grok", "pi", "deepseek-harness", "opencode"].map(id => ({
     id, capabilities: { nativeChecks: true }, inspect: async () => ({}), execute: async () => { throw Error("No native loop in contract tests"); }, interrupt: async () => {}, close: async () => {},
   }));
-  const runtime = new TeamRuntime(teams, harnesses); (runtime as any).pump = () => {}; clearInterval((runtime as any).timer);
+  const runtime = new TeamRuntime(teams, harnesses);
+  autonomousWorkers(runtime); (runtime as any).pump = () => {}; clearInterval((runtime as any).timer);
   const { store, history } = runtime;
   const team = teams.createTeam("Native contracts", "Independent members"), conversation = teams.createConversation(team.id, "Discussion", null)!;
   const { expectedVersion, ...settings } = runtimeSettings.parse({ workspace, config: { harness: "pi" }, maxWorksPerRun: 100, expectedVersion: 0 });
@@ -93,15 +95,19 @@ test("native command observations route 64 interleaved calls, retain full output
       const event = { type: "pi.event", event: { type: "tool_execution_end", toolName: "powershell", toolCallId: `call-${i}`, result: { structuredContent: { output: `output-${i}:` + "x".repeat(100000), exit_code: i % 2 } } } };
       observer.observe(event); observer.observe(event);
     }
-    assert.equal(events.length, 64);
-    for (const { data } of events) {
+    assert.equal(events.length, 128);
+    const terminal = events.filter(({ data }) => data.status === "completed");
+    assert.equal(terminal.length, 64);
+    const starts = events.filter(({ data }) => data.status === "running");
+    assert.equal(starts.length, 64);
+    for (const { data } of terminal) {
       const i = Number(data.id.slice(5)); assert.equal(data.command, `command-${i}`); assert.equal(successfulCommand(data), i % 2 === 0);
       assert.ok(data.aggregatedOutput.length <= 65536); assert.match(readFileSync(data.outputPath, "utf8"), new RegExp(`^output-${i}:`));
       assert.ok(readFileSync(data.nativeResultPath).length > 100000);
     }
     observer.start("cancelled", "powershell", { command: "pending" }); observer.close(true);
     assert.equal(events.at(-1).data.nativeOutcome, "cancelled"); assert.equal(successfulCommand(events.at(-1).data), false);
-    observer.finish("missing-start", { output: "", outcome: "succeeded", exitCode: 0, raw: {} }); assert.equal(events.length, 65);
+    observer.finish("missing-start", { output: "", outcome: "succeeded", exitCode: 0, raw: {} }); assert.equal(events.length, 130);
     const claude = new CommandObservations("claude-code", root, (type, data) => events.push({ type, data }));
     claude.observe({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", id: "native-claude", input: { command: "echo ok" } }] } });
     claude.observe({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "native-claude", content: "ok", is_error: false }] }, tool_use_result: { stdout: "ok", stderr: "", interrupted: false } });
@@ -122,9 +128,11 @@ test("ACP command arguments arriving after the pending event retain call identit
     emit({ sessionUpdate: "tool_call_update", toolCallId: "b", rawInput: { command: "replayed command" } });
     finish("b"); finish("a");
     emit({ sessionUpdate: "tool_call_update", toolCallId: "unobserved", rawInput: { command: "unobserved command" } }); finish("unobserved");
-    assert.equal(events.length, 2);
-    assert.deepEqual(events.map(e => [e.nativeItemId, e.command, e.aggregatedOutput]), [["b", "node second.cjs", "b"], ["a", "node first.cjs", "a"]]);
-    assert.ok(events.every(e => e.tool === "bash" && e.startedAt && successfulCommand(e)));
+    assert.equal(events.length, 6);
+    const terminal = events.filter(e => e.status === "completed");
+    assert.deepEqual(terminal.map(e => [e.nativeItemId, e.command, e.aggregatedOutput]), [["b", "node second.cjs", "b"], ["a", "node first.cjs", "a"]]);
+    assert.equal(events.filter(e => e.status === "running").length, 4);
+    assert.ok(terminal.every(e => e.tool === "bash" && e.startedAt && successfulCommand(e)));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

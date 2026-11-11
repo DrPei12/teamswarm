@@ -1,8 +1,12 @@
-import { PermissionSelect } from "./PermissionSelect";
-import { permissionsForAccess } from "./permissions";
+import { apiEffortPolicy } from "@team/contracts/model-effort";
+import {
+  MemberPermissionPicker,
+  currentMemberPreset,
+} from "./MemberPermissionPicker";
+import type { MemberPermissionPreset } from "@team/contracts/allocation";
 import { FieldSelect } from "./FieldSelect";
 import { Disclosure } from "./Disclosure";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   AlertCircle,
@@ -17,7 +21,6 @@ import {
 } from "lucide-react";
 import type { RuntimeSettings } from "@team/contracts/runtime";
 import type { Workspace } from "./store";
-import { AllocationSettings } from "./AllocationSettings";
 import { CapabilitySettings } from "./CapabilitySettings";
 import { ModelPicker } from "./ModelPicker";
 import { SwarmMark } from "./SwarmMark";
@@ -31,6 +34,7 @@ import { cachedCatalog, invalidateModelCatalog } from "./modelCatalogCache";
 import type { TeamCapabilities } from "@team/contracts/allocation";
 import { HarnessInstallation } from "./HarnessInstallation";
 import { HarnessAccount, hasSubscription } from "./HarnessAccount";
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import { api, product, resolveModelConnection } from "./service";
 import { useI18n } from "./i18n";
 import { Modal } from "./ui";
@@ -40,8 +44,15 @@ import {
   useHarnessCatalog,
   supportedEfforts,
   effortLabel,
+  effortChoiceLabel,
   type HarnessInspection,
 } from "./harnessCatalog.ts";
+
+const AllocationSettings = lazy(() =>
+  import("./AllocationSettings").then(({ AllocationSettings }) => ({
+    default: AllocationSettings,
+  })),
+);
 
 export function Startup({
   state,
@@ -237,6 +248,7 @@ function ManualExecutionSettings({
     [error, setError] = useState(""),
     [inspection, setInspection] = useState<Inspection | null>(null);
   const [inspectionRevision, refreshInspection] = useState(0);
+  const [timeLimit, setTimeLimit] = useState("");
   const [sharedInspection, setSharedInspection] = useState<Inspection | null>(
     null,
   );
@@ -246,9 +258,14 @@ function ManualExecutionSettings({
     settings?.config.harness ?? "codex",
     open,
   );
+  const manualResources =
+    workspace.service?.manualResourceConfiguration === true;
+  const showResources = manualResources && tab === "resources";
   useEffect(() => {
     if (open) {
       setSettings(workspace.executions?.[teamId]?.settings ?? null);
+      const seconds = workspace.executions?.[teamId]?.settings?.timeoutSeconds;
+      setTimeLimit(seconds == null ? "" : String(seconds / 60));
       setTab("settings");
       setError("");
       setInspection(null);
@@ -313,15 +330,18 @@ function ManualExecutionSettings({
     settings?.config.model,
   );
   const configuredEffort = settings?.config.effort ?? "";
-  const effortChoices = customProvider
-    ? configuredEffort
-      ? [configuredEffort]
-      : []
-    : efforts.map((option) => option.reasoningEffort);
-  const effortUnavailable =
-    !customProvider &&
-    !!configuredEffort &&
-    !efforts.some((option) => option.reasoningEffort === configuredEffort);
+  const providerEffort = apiEffortPolicy(settings?.config);
+  const effortChoices = providerEffort
+    ? providerEffort.supported
+    : customProvider
+      ? configuredEffort
+        ? [configuredEffort]
+        : []
+      : efforts.map((option) => option.reasoningEffort);
+  const savedEffortMissing =
+    !!configuredEffort && !effortChoices.includes(configuredEffort);
+  const effortCatalogReady =
+    !checking && !error && !!(sharedAccount ? sharedInspection : inspection);
   const customCredential = customProvider && !!settings?.config.credentialEnv;
   const connectionNeedsAction = Boolean(
     inspection &&
@@ -388,51 +408,65 @@ function ManualExecutionSettings({
       title={t("Advanced settings")}
       className="execution-modal"
     >
-      <div
-        className="modal-tabs"
-        role="tablist"
-        aria-label={t("Advanced settings")}
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "settings"}
-          className={tab === "settings" ? "active" : ""}
-          onClick={() => setTab("settings")}
+      {manualResources && (
+        <div
+          className="modal-tabs"
+          role="tablist"
+          aria-label={t("Advanced settings")}
         >
-          {t("Runtime")}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "resources"}
-          className={tab === "resources" ? "active" : ""}
-          onClick={() => setTab("resources")}
-        >
-          {t("Resources and allocation")}
-        </button>
-      </div>
-      {tab === "resources" && (
-        <AllocationSettings teamId={teamId} workspace={workspace} />
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "settings"}
+            className={tab === "settings" ? "active" : ""}
+            onClick={() => setTab("settings")}
+          >
+            {t("Runtime")}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "resources"}
+            className={tab === "resources" ? "active" : ""}
+            onClick={() => setTab("resources")}
+          >
+            {t("Resources and allocation")}
+          </button>
+        </div>
       )}
-      {tab === "settings" && settings && (
+      {showResources && (
+        <Suspense fallback={<p role="status">{t("Loading…")}</p>}>
+          <AllocationSettings teamId={teamId} workspace={workspace} />
+        </Suspense>
+      )}
+      {!showResources && settings && (
         <form
           className="execution-form"
           onSubmit={async (e) => {
             e.preventDefault();
             if (busy) return;
+            const seconds = Math.round(Number(timeLimit) * 60);
+            if (
+              !timeLimit.trim() ||
+              !Number.isFinite(seconds) ||
+              seconds < 10 ||
+              seconds > 3600
+            ) {
+              setError(t("Enter a duration from 10 seconds to 60 minutes."));
+              return;
+            }
             setBusy(true);
             setError("");
             try {
-              let next = settings;
+              let next = { ...settings, timeoutSeconds: seconds };
               if (secret.trim()) {
                 const result = await api<{ reference: string }>(
                   `/product/teams/${teamId}/credential`,
-                  { secret: secret.trim() },
+                  { secret: secret.trim(), purpose: "runtime" },
                   "PUT",
                 );
                 next = {
-                  ...settings,
+                  ...next,
                   config: {
                     ...settings.config,
                     credentialEnv: result.reference,
@@ -530,49 +564,51 @@ function ManualExecutionSettings({
               harness={settings.config.harness}
               onInstalled={inspect}
             />
-            {subscriptionHarness && !sharedAccount && (
-              <div
-                className="account-mode"
-                role="group"
-                aria-label={t("Connection method")}
-              >
-                <button
-                  type="button"
-                  aria-pressed={subscriptionMode}
-                  onClick={() => {
-                    if (subscriptionMode) return;
-                    config({
-                      provider: null,
-                      baseUrl: null,
-                      credentialEnv: null,
-                      protocol: null,
-                      model: null,
-                      effort: null,
-                      thinkingFormat: null,
-                    });
-                    setSecret("");
-                    setApiMode(false);
-                    setAdvanced(false);
-                  }}
+            {subscriptionHarness &&
+              !sharedAccount &&
+              !harnessManifest(settings.config.harness)?.models.nativeOnly && (
+                <div
+                  className="account-mode"
+                  role="group"
+                  aria-label={t("Connection method")}
                 >
-                  {t("Subscription sign-in")}
-                </button>
-                {
                   <button
                     type="button"
-                    aria-pressed={!subscriptionMode}
+                    aria-pressed={subscriptionMode}
                     onClick={() => {
-                      if (!subscriptionMode) return;
-                      config({ model: null, effort: null });
-                      setApiMode(true);
-                      setAdvanced(true);
+                      if (subscriptionMode) return;
+                      config({
+                        provider: null,
+                        baseUrl: null,
+                        credentialEnv: null,
+                        protocol: null,
+                        model: null,
+                        effort: null,
+                        thinkingFormat: null,
+                      });
+                      setSecret("");
+                      setApiMode(false);
+                      setAdvanced(false);
                     }}
                   >
-                    {t("API connection")}
+                    {t("Subscription sign-in")}
                   </button>
-                }
-              </div>
-            )}
+                  {
+                    <button
+                      type="button"
+                      aria-pressed={!subscriptionMode}
+                      onClick={() => {
+                        if (!subscriptionMode) return;
+                        config({ model: null, effort: null });
+                        setApiMode(true);
+                        setAdvanced(true);
+                      }}
+                    >
+                      {t("API connection")}
+                    </button>
+                  }
+                </div>
+              )}
             {subscriptionMode && hasSubscription(settings.config.harness) && (
               <HarnessAccount
                 key={"account:" + settings.config.harness}
@@ -712,49 +748,75 @@ function ManualExecutionSettings({
                 {t("Effort")}
                 <FieldSelect
                   value={settings.config.effort ?? ""}
-                  disabled={!settings.config.model}
+                  disabled={busy || !settings.config.model}
                   onValueChange={(value) => config({ effort: value || null })}
                 >
-                  {settings.config.effort && effortUnavailable && (
-                    <option value={settings.config.effort} disabled>
-                      {effortLabel(settings.config.effort)} · {t("Unavailable")}
+                  {savedEffortMissing && (
+                    <option
+                      value={configuredEffort}
+                      disabled={effortCatalogReady}
+                    >
+                      {effortLabel(configuredEffort)}
+                      {effortCatalogReady && ` · ${t("Unavailable")}`}
                     </option>
                   )}
                   {["", ...effortChoices].map((v) => (
                     <option key={v} value={v}>
-                      {v ? effortLabel(v) : t("Default")}
+                      {effortChoiceLabel(v, providerEffort, t)}
                     </option>
                   ))}
                 </FieldSelect>
               </label>
               <label>
-                {t("File access")}
-                <FieldSelect
-                  value={settings.config.access}
-                  onValueChange={(value) =>
-                    config({
-                      access: value as "read-only" | "workspace-write",
-                      permissions: permissionsForAccess(
-                        settings.config,
-                        value as "read-only" | "workspace-write",
-                      ),
-                    })
-                  }
-                >
-                  <option value="workspace-write">
-                    {t("Project read and write")}
-                  </option>
-                  <option value="read-only">{t("Read only")}</option>
-                </FieldSelect>
+                {t("Execution permissions")}
+                <MemberPermissionPicker
+                  teamId={teamId}
+                  harness={settings.config.harness}
+                  value={currentMemberPreset(settings.config)}
+                  disabled={busy}
+                  onChange={async (preset) => {
+                    setBusy(true);
+                    try {
+                      config(
+                        await product.resolvePermissionConfiguration(
+                          teamId,
+                          settings.config,
+                          preset as MemberPermissionPreset,
+                        ),
+                      );
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                />
               </label>
             </div>
             <label>
-              {t("Default execution permissions")}
-              <PermissionSelect
-                config={settings.config}
+              {t("Time limit per turn (minutes)")}
+              <input
+                type="number"
+                inputMode="decimal"
+                min={10 / 60}
+                max={60}
+                step="any"
+                required
                 disabled={busy}
-                onChange={(permissions) => config({ permissions })}
+                value={timeLimit}
+                onChange={(e) => {
+                  e.currentTarget.setCustomValidity("");
+                  setTimeLimit(e.target.value);
+                }}
+                onInvalid={(e) => {
+                  e.currentTarget.setCustomValidity(
+                    t("Enter a duration from 10 seconds to 60 minutes."),
+                  );
+                }}
               />
+              <small>
+                {t(
+                  "A turn that runs longer is stopped and kept as interrupted. Applies to new requests; 10 seconds–60 minutes.",
+                )}
+              </small>
             </label>
             {!subscriptionMode && !sharedAccount && (
               <div

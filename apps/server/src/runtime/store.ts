@@ -1,3 +1,5 @@
+import type { ContextWindowPlan } from "@team/contracts/context-window";
+import { nativeAccess } from "./permission-options.js";
 import { bindEvidence, evidenceFor, resolvedEvidence, reviewEvidenceContext } from "./acceptance-evidence.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -12,6 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { DatabaseSync } from "node:sqlite";
 import { TeamStore } from "../store.js";
 import { badRequest, conflict, notFound } from "../errors.js";
@@ -144,6 +147,9 @@ export class RuntimeStore {
             team_id TEXT NOT NULL REFERENCES teams(id), run_id TEXT, work_id TEXT, attempt_id TEXT,
             type TEXT NOT NULL, data TEXT NOT NULL CHECK(json_valid(data)), created_at TEXT NOT NULL);
           CREATE INDEX IF NOT EXISTS runtime_events_team ON runtime_events(team_id, sequence);
+          CREATE INDEX IF NOT EXISTS runtime_events_work ON runtime_events(team_id, work_id, sequence);
+          CREATE INDEX IF NOT EXISTS runtime_events_mail ON runtime_events(team_id,json_extract(data,'$.messageId'),sequence)
+            WHERE type IN ('communication.failed','communication.settled');
           CREATE INDEX IF NOT EXISTS runtime_events_attempt ON runtime_events(attempt_id, type, sequence);
           CREATE INDEX IF NOT EXISTS runtime_works_status ON runtime_works(json_extract(data,'$.status'),team_id);
           CREATE INDEX IF NOT EXISTS runtime_works_run ON runtime_works(team_id,json_extract(data,'$.runId'));
@@ -308,7 +314,10 @@ export class RuntimeStore {
       .all(teamId).map(r => JSON.parse(String(r.data)));
   }
   settings(teamId: string): RuntimeSettings | null {
-    return this.list<RuntimeSettings>("settings", teamId)[0] ?? null;
+    const saved = this.list<RuntimeSettings>("settings", teamId)[0];
+    if (!saved) return null;
+    const { maxWorksPerRun: _workLimit, maxConcurrent: _concurrency, ...current } = saved;
+    return current;
   }
   artifactHeaders(teamId: string): Omit<ArtifactVersion, "content">[] {
     return this.db
@@ -409,6 +418,12 @@ export class RuntimeStore {
           "version_conflict",
           "Runtime settings changed. Reload before saving.",
         );
+      const { maxConcurrent: _legacyConcurrency, maxWorksPerRun: _legacyWorkLimit, ...deviceManagedInput } = input;
+      if (current) {
+        const { maxConcurrent: _concurrency, maxWorksPerRun: _workLimit, ...saved } = current;
+        if (isDeepStrictEqual(saved, { ...deviceManagedInput, workspace,
+          teamId, version: current.version, policyVersion: current.policyVersion })) return current;
+      }
       if (
         this.list<Work>("works", teamId).some(
           (w) => w.status === "queued" || activeStates.has(w.status),
@@ -418,7 +433,6 @@ export class RuntimeStore {
           "active_execution",
           "Stop and reconcile pending work before changing runtime settings.",
         );
-      const { maxConcurrent: _legacyConcurrency, ...deviceManagedInput } = input;
       const settings = {
         ...deviceManagedInput,
         workspace,
@@ -436,7 +450,7 @@ export class RuntimeStore {
         name: "Host",
         responsibility: "User dialogue, work organization and delivery",
         kind: "host",
-        config: { ...settings.config, access: "read-only" },
+        config: { ...settings.config, access: nativeAccess(settings.config) === "full-access" ? "workspace-write" : "read-only" },
         createdAt: host?.createdAt ?? timestamp(),
         ...(host?.hostSelections ? { hostSelections: host.hostSelections } : {}),
         ...(host?.permissionOverride ? { permissionOverride: host.permissionOverride } : {}),
@@ -503,6 +517,20 @@ export class RuntimeStore {
       member.removedAt = timestamp();
       this.save("members", member);
       this.event(teamId, "member.removed", { memberId, name: member.name });
+      return member;
+    });
+  }
+  purgeMemberEntry(teamId: string, memberId: string, expectedRemovedAt: string): Member {
+    return this.transaction(() => {
+      const member = this.get<Member>("members", teamId, memberId);
+      if (member.kind === "host" || !member.removedAt)
+        throw conflict("member_not_removed", "Delete the member from the active roster first.");
+      if (member.removedAt !== expectedRemovedAt)
+        throw conflict("version_conflict", "Member status changed. Reload before removing its entry.");
+      if (member.purgedAt) return member;
+      member.purgedAt = timestamp();
+      this.save("members", member);
+      this.event(teamId, "member.entry_removed", { memberId });
       return member;
     });
   }
@@ -608,15 +636,8 @@ export class RuntimeStore {
           "A work dependency must belong to the same project branch.",
         );
     }
-    if (
-      this.list<Work>("works", run.teamId).filter((w) => w.runId === run.id)
-        .length >= run.settings.maxWorksPerRun
-    )
-      throw conflict(
-        "run_budget",
-        "The work limit for this run has been reached.",
-      );
     const work: Work = {
+      permissionVersion: this.get<Member>("members", run.teamId, memberId).permissionVersion ?? 1,
       id: randomUUID(),
       teamId: run.teamId,
       runId: run.id,
@@ -716,7 +737,7 @@ export class RuntimeStore {
     );
     return requirement;
   }
-  start(work: Work, config: ExecutionConfig): Attempt {
+  start(work: Work, config: ExecutionConfig, contextWindow?: ContextWindowPlan): Attempt {
     if (work.status !== "queued")
       throw conflict("invalid_state", "Only queued work can start.");
     const attempt: Attempt = {
@@ -725,6 +746,7 @@ export class RuntimeStore {
       workId: work.id,
       memberId: work.memberId,
       config,
+      ...(contextWindow ? {contextWindow} : {}),
       sessionId: null,
       turnId: null,
       dispatch: { state: "prepared" },

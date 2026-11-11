@@ -71,8 +71,8 @@ test("event streaming drains a 1500-event burst in order and resumes from the la
   } finally {stream.abort();await service.close();server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));rmSync(root,{recursive:true,force:true});}
 });
 
-test("resource admission accounts for outstanding starts and per-attempt process ownership without an implicit reserve",async()=>{
-  const root=mkdtempSync(path.join(tmpdir(),"teamswarm-resource-budget-"));
+test("process ownership remains tracked while memory observations do not restrict execution",async()=>{
+  const root=mkdtempSync(path.join(tmpdir(),"teamswarm-process-observation-"));
   const service=createApp({dataDir:root,harnesses:[]}),MiB=1024*1024;
   let sample={totalPhysical:4096*MiB,availablePhysical:1100*MiB,availableCommit:700*MiB,processes:[] as any[]};
   let currentPhysical=sample.availablePhysical;
@@ -80,10 +80,9 @@ test("resource admission accounts for outstanding starts and per-attempt process
   try {
     await resources.refresh();
     assert.equal(resources.canStart("codex",false),true);resources.reserve("first","codex");
-    assert.equal(resources.canStart("codex",false),false);assert.equal(resources.canStart("codex",true),true);
+    assert.equal(resources.canStart("codex",false),true);assert.equal(resources.canStart("codex",true),true);
     resources.finish("first");assert.equal(resources.canStart("codex",false),true);
     currentPhysical=600*MiB;assert.equal(resources.canStart("codex",false),true);
-    currentPhysical=resources.admission("codex",false).cost.physical-1;assert.equal(resources.canStart("codex",false),false);
     currentPhysical=sample.availablePhysical;
     const team=service.store.createTeam("Owner","");
     const work={id:"first",teamId:team.id,memberId:"reader"} as Work;
@@ -93,8 +92,8 @@ test("resource admission accounts for outstanding starts and per-attempt process
     resources.observe(work,attempt,{type:"resource.released",data:{id:"group",pid:123}});
     assert.equal(resources.state(team.id).groups[0].state,"released");
     await resources.refresh(); // Finish the acquisition-triggered sample before changing the fixture.
-    sample={...sample,availableCommit:resources.admission("codex",true).cost.commit-1};await resources.refresh();
-    assert.equal(resources.canStart("codex",true),false);
+    sample={...sample,availableCommit:200*MiB};await resources.refresh();
+    assert.equal(resources.canStart("codex",true),true);
   } finally {await resources.close();await harness.close();await service.close();rmSync(root,{recursive:true,force:true});}
 });
 
@@ -104,7 +103,7 @@ test("Codex idle reclamation closes the owned process and resumes the same nativ
   writeFileSync(entry,`const fs=require('node:fs');const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(r)+'\\n');if(r.id===undefined)return;const result=r.method==='thread/start'||r.method==='thread/resume'?{thread:{id:'kept-session'},sandbox:{type:'readOnly'}}:r.method==='thread/read'?{thread:{turns:[]}}:r.method==='config/read'?{config:{mcp_servers:{unused:{}}}}:r.method==='turn/start'?{turn:{id:'turn'}}:{};send({id:r.id,result});if(r.method==='turn/start')setTimeout(()=>send({method:'turn/completed',params:{threadId:'kept-session',turn:{id:'turn',status:'completed'}}}),30);});`);
   const prior=process.env.TEAM_CODEX_BIN;process.env.TEAM_CODEX_BIN=entry;
   const harness=new CodexHarness(),events:any[]=[];
-  const request:HarnessRequest={workspace:root,config:{harness:"codex",model:"fixture",provider:null,baseUrl:null,credentialEnv:null,effort:null,access:"read-only"},instructions:"Read",input:"Work",tools:[],onSession:()=>{},onTurn:()=>{},onEvent:e=>events.push(e),onTool:async()=>({})};
+  const request:HarnessRequest={workspace:root,config:{harness:"codex",model:"fixture",provider:null,baseUrl:null,credentialEnv:null,effort:null,access:"read-only"},contextWindow:{preset:"1m",rawTokens:872000,usableTokens:828400,modelMaxTokens:872000,effectivePercent:95,source:"model",overrideNative:true},instructions:"Read",input:"Work",tools:[],onSession:()=>{},onTurn:()=>{},onEvent:e=>events.push(e),onTool:async()=>({})};
   try {
     assert.equal((await harness.execute(request)).status,"completed");
     const first=harness.resources()[0];assert.ok(first.pid);
@@ -116,6 +115,8 @@ test("Codex idle reclamation closes the owned process and resumes the same nativ
     const requests=readFileSync(calls,"utf8").trim().split("\n").map(JSON.parse as any);
     const resumed=requests.find(r=>r.method==="thread/resume");assert.equal(resumed.params.threadId,"kept-session");
     for(const r of requests.filter(r=>["thread/start","thread/resume"].includes(r.method))) {
+      assert.equal(r.params.config.model_context_window,872000);
+      assert.equal(r.params.config.model_auto_compact_token_limit,828400);
       assert.equal(r.params.config["features.plugins"],false);assert.equal(r.params.config["mcp_servers.unused.enabled"],false);
     }
   } finally {await harness.close();if(prior===undefined)delete process.env.TEAM_CODEX_BIN;else process.env.TEAM_CODEX_BIN=prior;rmSync(root,{recursive:true,force:true});}

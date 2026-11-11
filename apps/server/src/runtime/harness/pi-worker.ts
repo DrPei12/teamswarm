@@ -44,7 +44,7 @@ try {
             }
           : {}),
         input: ["text"],
-        contextWindow: spec.config.contextWindowTokens ?? 131072,
+        contextWindow: spec.contextWindow?.rawTokens ?? spec.config.contextWindowTokens ?? 131072,
         maxTokens: spec.config.maxOutputTokens ?? 8192,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       },
@@ -119,7 +119,7 @@ try {
     resourceLoader,
     sessionManager: manager,
     settingsManager: pi.SettingsManager.inMemory({
-      compaction: { enabled: true },
+      compaction: { enabled: true, ...(spec.contextWindow?.overrideNative ? {reserveTokens:spec.contextWindow.rawTokens-spec.contextWindow.usableTokens}: {}) },
       retry: { enabled: false },
     }),
     tools: [
@@ -140,14 +140,18 @@ try {
     ],
     customTools,
   }));
+  let messageSequence = 0;
   session.subscribe((event: any) => {
+    if (event.type === "message_start" && event.message?.role === "assistant") messageSequence++;
+    if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta")
+      emit({ type: "pi.message.delta", sequence: messageSequence, delta: event.assistantMessageEvent.delta });
     // Native tool arguments/results and final messages only; no internal runtime objects.
     if (
       ["message_end", "tool_execution_start", "tool_execution_end", "compaction_end"].includes(
         event.type,
       )
     )
-      emit({ type: "pi.event", event });
+      emit({ type: "pi.event", event, sequence: messageSequence });
   });
   emit({ type: "session", id: manager.getSessionId() });
   if (!stopping) await session.prompt(spec.input);

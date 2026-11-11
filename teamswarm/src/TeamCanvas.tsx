@@ -1,6 +1,8 @@
+import { DeletedMembers } from "./DeletedMembers";
 import { CanvasViewport } from "./CanvasViewport";
 import { SwarmMark } from "./SwarmMark";
 import { collaborationEdgeTypes, connectionPorts } from "./Visuals";
+import { StatusDot, statusKind } from "./design-system/StatusIndicators";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Tooltip, ContextMenu } from "radix-ui";
 import { product } from "./service";
@@ -46,8 +48,6 @@ import {
 import {
   DetailPanel,
   Modal,
-  Menu,
-  MenuItem,
   IconButton,
   ICON_SCALE,
   useMediaQuery,
@@ -218,16 +218,7 @@ function CanvasNode({ data, selected }: NodeProps<CardNode>) {
                   )}
                 </span>
                 <span className="graph-copy">
-                  <strong>
-                    {data.kind === "member" && (
-                      <i
-                        className={`member-presence ${data.status || "idle"}`}
-                        title={tr(data.status || "idle")}
-                        aria-label={tr(data.status || "idle")}
-                      />
-                    )}
-                    {data.title}
-                  </strong>
+                  <strong>{data.title}</strong>
                   {data.detail && (
                     <span>
                       {data.detail.replace(/^Review: /, `${tr("Review")} · `)}
@@ -265,7 +256,10 @@ function CanvasNode({ data, selected }: NodeProps<CardNode>) {
           </Tooltip.Root>
           {data.kind === "member" && (
             <div className="member-result-line">
-              <span>{tr(data.status || "idle")}</span>
+              <StatusDot
+                kind={statusKind(data.status)}
+                label={tr(data.status || "idle")}
+              />
               {data.conversationStatus && (
                 <span className="member-conversation-warning">
                   {tr(
@@ -890,33 +884,16 @@ function CanvasContent({
               {tr("Add member")}
             </button>
           )}
-          {mode === "collaboration" &&
-            workspace.members.some(
-              (m) => m.teamId === team.id && m.removedAt,
-            ) && (
-              <Menu
-                label={tr("Deleted members")}
-                trigger={
-                  <button className="text-button">
-                    {tr("Deleted members")}
-                  </button>
-                }
-              >
-                {workspace.members
-                  .filter((m) => m.teamId === team.id && m.removedAt)
-                  .map((m) => (
-                    <MenuItem
-                      key={m.id}
-                      icon={<MessageSquare size={15} />}
-                      onSelect={() =>
-                        setSelection({ kind: "member", id: m.id })
-                      }
-                    >
-                      {m.name}
-                    </MenuItem>
-                  ))}
-              </Menu>
-            )}
+          {mode === "collaboration" && (
+            <DeletedMembers
+              members={workspace.members.filter((m) => m.teamId === team.id)}
+              onView={(m) => setSelection({ kind: "member", id: m.id })}
+              onRemoved={(id) => {
+                if (selection?.kind === "member" && selection.id === id)
+                  setSelection(null);
+              }}
+            />
+          )}
           {mode === "history" && chatId && (
             <button
               className="text-button"
@@ -1038,7 +1015,9 @@ function CanvasContent({
         {!nodes.length && (
           <div className="canvas-empty">
             <GitBranch size={26 * ICON_SCALE} />
-            <span>{tr("No history yet")}</span>
+            <span>
+              {tr(mode === "history" ? "No history yet" : "No members yet")}
+            </span>
             <button className="secondary-button" onClick={() => onNavigate("")}>
               {tr("Open Host")}
               <ArrowUpRight size={13 * ICON_SCALE} />
@@ -1050,6 +1029,8 @@ function CanvasContent({
             <Search size={14 * ICON_SCALE} />
             <input
               autoFocus
+              role="combobox"
+              aria-expanded={Boolean(query.trim())}
               aria-autocomplete="list"
               aria-controls={query.trim() ? "canvas-find-results" : undefined}
               aria-activedescendant={

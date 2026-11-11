@@ -1,4 +1,4 @@
-import { codexPermissionOptions, withDefaultPermissions } from "../permission-options.js";
+import { nativeAccess, codexPermissionOptions, withDefaultPermissions } from "../permission-options.js";
 import { conversationInput } from "./conversation-input.js";
 import { productVersion } from "../../version.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -14,10 +14,11 @@ import { HarnessTransportError } from "../types.js";
 import { codexDisplayItem } from "./codex-items.js";
 import { sessionStoreScope } from "./session-scope.js";
 import { deviceEntry } from "./device-tools.js";
-import { preflight, probeCodexExecution, type PreflightInput } from "./preflight.js";
+import { inspectExecution, preflight, probeCodexExecution, type PreflightInput } from "./preflight.js";
 import { prepareExecutionEnvironment } from "./execution-environment.js";
 import { contextObservation } from "../context-budget.js";
 import { readOnlyPermissions, validateNativePermissions, policyFor } from "./permissions.js";
+import { nativeQuestions } from "../native-questions.js";
 
 type Obj = Record<string, any>;
 type Pending = {
@@ -549,11 +550,15 @@ export class CodexHarness implements Harness {
           : { decision: liveAccepted ? "accept" : "decline" };
         request?.onEvent({ type: liveAccepted ? "approval.accepted" : "approval.denied", data: { method: message.method } });
       } else if (message.method === "item/tool/requestUserInput") {
-        result = { answers: {} };
-        execution?.request.onEvent({
-          type: "input.required",
-          data: { questions: message.params.questions },
-        });
+        const raw: Obj[] = Array.isArray(message.params?.questions) ? message.params.questions : [];
+        // Secret answers would be stored with the conversation, so those stay unanswered.
+        const questions = raw.some(q => q?.isSecret === true || typeof q?.id !== "string") ? []
+          : nativeQuestions(raw.map(q => ({ ...q, allowOther: q.isOther === true, options: q.options ?? [] })));
+        const answers = questions.length && questions.length === raw.length && execution && !execution.permissionAbort.signal.aborted
+          ? await execution.request.onQuestion?.({ nativeId: String(message.params?.itemId ?? message.id), tool: message.method, questions }, execution.permissionAbort.signal) ?? null
+          : null;
+        result = { answers: answers && !execution?.permissionAbort.signal.aborted ? Object.fromEntries(questions.map((q, i) => [q.id!, { answers: answers[i] }])) : {} };
+        if (!answers) execution?.request.onEvent({ type: "input.required", data: { questions: message.params?.questions } });
       } else throw new Error("Unsupported harness request.");
     } catch (error) {
       result = {
@@ -670,6 +675,11 @@ export class CodexHarness implements Harness {
     const command = codexCommand();
     if (!Object.values(request.requirements).some(Boolean))
       return preflight(request, command.args[0] ?? command.command, true);
+    if (nativeAccess(request.config) === "full-access") {
+      const identity = inspectExecution(request, command.args[0] ?? command.command);
+      const environment = prepareExecutionEnvironment(request.scratchDirectory, request.requirements);
+      return { passed: true, mode: "native-full-access", identity, environment, modelRequests: 0 };
+    }
     const permissions = codexReviewPermissions(request.workspace, request.scratchDirectory);
     const environment = prepareExecutionEnvironment(request.scratchDirectory, request.requirements);
     const report = await preflight(request, command.args[0] ?? command.command, true, () =>
@@ -696,6 +706,10 @@ export class CodexHarness implements Harness {
       "features.memories": false,
       "features.plugins": false,
       "features.apps": false,
+      ...(request.contextWindow?.overrideNative ? {
+        model_context_window: request.contextWindow.rawTokens,
+        model_auto_compact_token_limit: request.contextWindow.usableTokens,
+      } : {}),
     };
     const verificationDirectory = request.verificationDirectory;
     let environment = request.executionEnvironment;

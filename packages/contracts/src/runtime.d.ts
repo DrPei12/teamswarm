@@ -1,12 +1,14 @@
+import type { ContextWindowPlan } from "./context-window";
 import type { AttemptExecutionSnapshot, ResourceSelection } from "./allocation.js";
 
 export type Access = "read-only" | "workspace-write";
 export type BuiltinNativePermissions =
+  | { harness: "antigravity"; mode: "plan" | "default" | "bypassPermissions" }
   | { harness: "codex"; approvalPolicy: "untrusted" | "never" | "on-request"; sandbox?: Access | "danger-full-access" }
   | { harness: "claude-code"; mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions"; allow?: string[]; deny?: string[] }
   | { harness: "grok"; mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions"; allow?: string[]; deny?: string[] }
   | { harness: "pi"; tools: ("read" | "grep" | "find" | "ls" | "write" | "edit" | "bash" | "powershell")[] }
-  | { harness: "deepseek-harness"; sandbox: Access; approval: "ask" | "never" }
+  | { harness: "deepseek-harness"; sandbox: Access | "danger-full-access"; approval: "ask" | "never" }
   | { harness: "opencode"; permission: Record<string, "allow" | "ask" | "deny" | Record<string, "allow" | "ask" | "deny">> };
 export interface NativePermissionRequest {
   nativeId: string;
@@ -14,14 +16,32 @@ export interface NativePermissionRequest {
   input: unknown;
   reason?: string;
 }
+export interface NativeQuestion {
+  /** Native identity of the question when the Harness keys answers by it. */
+  id?: string;
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  /** The user may answer in their own words instead of choosing an option. */
+  allowOther?: boolean;
+  options: { label: string; description?: string }[];
+}
+export interface NativeQuestionRequest {
+  nativeId: string;
+  tool: string;
+  questions: NativeQuestion[];
+}
 export interface PermissionOptions {
   defaultId: string;
   options: { id: string; label: string; group?: "native"; requiresWrite?: boolean; permissions: NativePermissions }[];
 }
 export interface ExecutionApproval {
+  kind?: "member-permissions" | "question";
   id: string; teamId: string; memberId: string; workId: string; attemptId: string;
   tool: string; details: string; createdAt: string;
   status: "pending" | "accepted" | "declined" | "cancelled";
+  memberChange?: { name: string; current: string; requested: string; reason: string };
+  questions?: NativeQuestion[];
 }
 export type NativePermissions = { harness: string; [option: string]: unknown };
 export interface ExecutionConfig {
@@ -50,7 +70,8 @@ export interface RuntimeSettings {
   config: ExecutionConfig;
   /** Legacy saved value, ignored. Admission follows current device resources. */
   maxConcurrent?: number;
-  maxWorksPerRun: number;
+  /** Legacy saved value, ignored. Work count does not limit conversation or delegation. */
+  maxWorksPerRun?: number;
   maxTurnsPerWork?: number;
   timeoutSeconds: number;
   /** Legacy persisted setting; context selection now uses model-aware token budgets. */
@@ -73,15 +94,19 @@ export interface Member {
   kind: "host" | "member";
   /** Removed from the active roster; history and attribution stay readable. */
   removedAt?: string;
+  /** Roster entry hidden permanently; attribution and work history remain. */
+  purgedAt?: string;
   config: ExecutionConfig;
   createdAt: string;
   branchId?: string;
   /** Member default resource; seeds a future Attempt only when the task has none. */
   selection?: ResourceSelection;
+  selectionSource?: "runtime" | "resource-panel";
   /** Optimistic revision for member-default allocation updates. */
   allocationVersion?: number;
-  /** Host defaults are branch-scoped and affect future Attempts only. */
-    hostSelections?: Record<string, { revision: number; selection: ResourceSelection | null; config?: ExecutionConfig }>;
+  /** Host defaults are branch-scoped and affect future Attempts only.
+   * A null selection with config is a composer override; without config it follows Team settings. */
+    hostSelections?: Record<string, { revision: number; selection: ResourceSelection | null; selectionSource?: "runtime" | "resource-panel"; config?: ExecutionConfig; permissionPreset?: "read-only" | "full-access" }>;
 }
 export interface Requirement {
   id: string;
@@ -130,6 +155,11 @@ export interface AcceptanceEvidence {
   evidenceType: "review_judgment" | "native_check" | "unresolved";
 }
 export interface Work {
+  selectionSource?: "runtime" | "resource-panel";
+  /** Hidden from the allocation list only. Work state, mail and attempts remain addressable. */
+  allocationDismissedAt?: string;
+  /** Work-level native grants belong to the member's permission epoch. */
+  permissionVersion?: number;
   permissions?: NativePermissions;
   /** Publication source; native execution uses the member-owned working copy. */
   sourceWorkspace?: string;
@@ -204,6 +234,8 @@ export interface ExecutionRequirements {
   fileLinks?: boolean;
 }
 export interface MemberMessage {
+  /** Notices and replies do not require an acknowledgement loop. Missing is legacy request behavior. */
+  replyExpected?: boolean;
   sourceWorkId?: string;
   targetWorkId?: string;
   threadId?: string;
@@ -256,7 +288,26 @@ export interface ProjectInsight {
   author: "user" | "host" | "member";
   createdAt: string;
 }
+/** Safe projection of the serialized upstream request, never prompts or credentials. */
+export interface ModelRequestReceipt {
+  id: string;
+  at: string;
+  source: "model_gateway";
+  harness: string;
+  nativeProtocol: string;
+  protocol: string;
+  model: string | null;
+  effort: string | null;
+  effortParameter: string | null;
+  effortParameterValue?: string | null;
+  effectiveEffort?: string;
+  effortSource?: "explicit" | "provider_default";
+  status: "prepared" | "accepted" | "rejected";
+  httpStatus?: number;
+}
 export interface Attempt {
+  contextWindow?: ContextWindowPlan;
+  modelRequest?: ModelRequestReceipt;
   reviewEvidenceContext?: string;
   reviewInstructionsRevision?: number;
   reviewInstructionsAcknowledgedAt?: string;
@@ -270,6 +321,13 @@ export interface Attempt {
   /** Opaque native session-store identity; a changed store requires fresh native context. */
   nativeSessionScope?: string;
   sessionId: string | null;
+  /**
+   * Whether the native session behind sessionId is known to exist. An adapter that commits its
+   * identity before the native process starts reports "unconfirmed" (new) or "inherited" (resumed);
+   * native evidence makes it "confirmed"; a resume the native side never loaded is "lost".
+   * Missing means the adapter binds only sessions that already exist.
+   */
+  nativeSession?: "unconfirmed" | "inherited" | "confirmed" | "lost";
   turnId: string | null;
   /** Durable boundary: only dispatched attempts may have started a native turn. Missing means legacy/unknown. */
   dispatch?: { state: "prepared" | "preparing" | "dispatched"; native?: Record<string, unknown> };
@@ -402,6 +460,7 @@ export interface ToolSpec {
   inputSchema: Record<string, unknown>;
 }
 export interface HarnessRequest {
+  contextWindow?: ContextWindowPlan;
   onPermission?: (request: NativePermissionRequest, signal?: AbortSignal) => Promise<"allow" | "deny">;
   /** Native tools may work in this private copy; publication still checks ownership. */
   isolatedWorkspace?: boolean;
@@ -429,6 +488,8 @@ export interface HarnessRequest {
   onContextRebuild?: () => string;
   onEvent: (event: HarnessEvent) => void;
   onPermission?: (request: NativePermissionRequest, signal?: AbortSignal) => Promise<"allow" | "deny">;
+  /** One answer list per question, in order; null when nobody answers before the attempt ends. */
+  onQuestion?: (request: NativeQuestionRequest, signal?: AbortSignal) => Promise<string[][] | null>;
   onTool: (name: string, args: unknown, callId: string) => Promise<unknown>;
 }
 export interface HarnessResult {

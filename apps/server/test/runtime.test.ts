@@ -1,3 +1,4 @@
+import { autonomousWorkers } from "./evidence-fixture.js";
 import { judgmentEvidence, withJudgmentEvidence } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -85,6 +86,7 @@ async function setup(harness: FixtureHarness) {
   mkdirSync(workspace);
   const dataDir = path.join(root, "data");
   const service = createApp({ dataDir, harnesses: [harness] });
+  autonomousWorkers(service.runtime);
   const server = service.app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));
   const address = server.address() as { port: number };
@@ -822,6 +824,7 @@ test("explicit local harness modules load; remote paths and duplicate adapters a
         "pi",
         "deepseek-harness",
         "opencode",
+        "antigravity",
         "test-extension",
       ],
     );

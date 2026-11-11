@@ -1,4 +1,14 @@
-import { PermissionSelect } from "./PermissionSelect";
+import { apiEffortPolicy } from "@team/contracts/model-effort";
+import { ContextIndicator } from "./ContextIndicator";
+import {
+  MemberPermissionPicker,
+  currentMemberPreset,
+} from "./MemberPermissionPicker";
+import type { MemberPermissionPreset } from "@team/contracts/allocation";
+import {
+  hasPendingRuntimeConfiguration,
+  hasPendingPermissionConfiguration,
+} from "./runtimeConfiguration";
 import { isComposing } from "./design-system/motion";
 import {
   forwardRef,
@@ -7,7 +17,7 @@ import {
   useState,
   useImperativeHandle,
 } from "react";
-import { Popover, Tooltip } from "radix-ui";
+import { Popover } from "radix-ui";
 import {
   ChevronDown,
   Check,
@@ -21,8 +31,8 @@ import {
 import type { Draft, RuntimeConfig, Team, Workspace } from "./store";
 import { defaultRuntime } from "./store";
 import { useI18n } from "./i18n";
-import { ICON_SCALE, useTooltipContainer } from "./ui";
-import { api } from "./service";
+import { ICON_SCALE } from "./ui";
+import { api, product } from "./service";
 import { ModelPicker } from "./ModelPicker";
 import type { ExecutionConfig } from "@team/contracts/runtime";
 import { selectedModelChoice, type ModelChoice } from "./modelCatalog";
@@ -31,29 +41,33 @@ import { clipboardFiles } from "./AttachmentChip";
 import {
   harnessId,
   supportedEfforts,
-  effortLabel,
+  effortChoiceLabel,
   useHarnessCatalog,
 } from "./harnessCatalog";
 
 export function RuntimeControls({
   team,
   executionConfig,
+  runningConfig,
   config: runtimeConfig,
   showContext = true,
+  showPermissions = true,
   disabled = false,
   running = false,
-  onPermissionChange,
+  onMemberPermissionPreset,
   onChange,
   onSettings,
 }: {
   team: Team;
   executionConfig?: ExecutionConfig;
+  runningConfig?: ExecutionConfig;
   config?: RuntimeConfig;
   showContext?: boolean;
+  showPermissions?: boolean;
   disabled?: boolean;
   running?: boolean;
-  onPermissionChange?: (
-    permissions: NonNullable<ExecutionConfig["permissions"]>,
+  onMemberPermissionPreset?: (
+    preset: MemberPermissionPreset,
   ) => Promise<unknown>;
   onChange: (
     config: RuntimeConfig,
@@ -61,7 +75,7 @@ export function RuntimeControls({
   ) => Promise<unknown> | void;
   onSettings: (tab?: "harnesses" | "connections" | "runtime") => void;
 }) {
-  const { t: tr, locale } = useI18n();
+  const { t: tr } = useI18n();
   const config = runtimeConfig ?? team.runtime ?? defaultRuntime;
   const hasModel = !!config.model && config.model !== "Default model";
   const [edit, setEdit] = useState<string | null>(null);
@@ -71,11 +85,17 @@ export function RuntimeControls({
   const selected = executionConfig
     ? selectedModelChoice(catalog.models, executionConfig)
     : undefined;
-  const efforts = executionConfig?.chatgptAccountId
-    ? (selected?.reasoningEfforts ?? [])
-    : executionConfig?.baseUrl || executionConfig?.credentialEnv
-      ? []
-      : supportedEfforts(catalog.inspection, config.model);
+  const policy = apiEffortPolicy(executionConfig);
+  const efforts = policy
+    ? policy.supported.map((reasoningEffort) => ({
+        reasoningEffort,
+        description: undefined,
+      }))
+    : executionConfig?.chatgptAccountId
+      ? (selected?.reasoningEfforts ?? [])
+      : executionConfig?.baseUrl || executionConfig?.credentialEnv
+        ? []
+        : supportedEfforts(catalog.inspection, config.model);
   const [saveError, setSaveError] = useState("");
   const [saving, setSaving] = useState(false);
   const harnesses = useHarnessCatalog((error) => setSaveError(error.message));
@@ -99,10 +119,6 @@ export function RuntimeControls({
     (!executionConfig?.baseUrl && !executionConfig?.credentialEnv
       ? (catalog.inspection?.error ?? "")
       : "");
-  const { trigger, container } = useTooltipContainer();
-  const context = team.context;
-  const known = context && context.limit > 0 && context.used >= 0;
-  const fraction = known ? Math.min(1, context.used / context.limit) : 0;
   return (
     <div className="runtime-controls">
       {(["harness", "model", "effort"] as const).map((key) =>
@@ -154,14 +170,14 @@ export function RuntimeControls({
                 type="button"
                 className={`runtime-choice ${key === "effort" ? "effort-choice" : ""}`}
                 aria-label={tr(`Choose ${key}`)}
-                disabled={disabled || (key === "effort" && !hasModel)}
+                disabled={disabled || saving || (key === "effort" && !hasModel)}
               >
                 <span>
-                  {key === "effort" && config[key] !== "Default"
-                    ? effortLabel(config[key])
+                  {key === "effort"
+                    ? effortChoiceLabel(config[key], policy, tr)
                     : tr(config[key])}
                 </span>
-                <ChevronDown size={10 * ICON_SCALE} />
+                <ChevronDown size={14 * ICON_SCALE} />
               </button>
             </Popover.Trigger>
             <Popover.Portal>
@@ -197,6 +213,7 @@ export function RuntimeControls({
                     type="button"
                     className="menu-item"
                     key={value}
+                    disabled={saving}
                     title={
                       key === "effort"
                         ? efforts.find((e) => e.reasoningEffort === value)
@@ -219,19 +236,20 @@ export function RuntimeControls({
                     }}
                   >
                     <span className="item-label">
-                      {key === "effort" && value !== "Default"
-                        ? effortLabel(value)
+                      {key === "effort"
+                        ? effortChoiceLabel(value, policy, tr)
                         : tr(value)}
                     </span>
                     {(key === "harness"
                       ? harnessId(config.harness) === harnessId(value)
                       : config[key] === value) && (
-                      <Check size={13 * ICON_SCALE} />
+                      <Check size={16 * ICON_SCALE} />
                     )}
                   </button>
                 ))}
                 <div className="separator" />
                 {key === "effort" &&
+                  !policy &&
                   (error || (checking && !catalog.inspection)) && (
                     <div
                       className="menu-note"
@@ -267,78 +285,35 @@ export function RuntimeControls({
           </Popover.Root>
         ),
       )}
-      {executionConfig && (
-        <PermissionSelect
+      {showPermissions && executionConfig && (
+        <MemberPermissionPicker
           compact
-          config={executionConfig}
-          disabled={disabled}
-          running={running}
-          open={!disabled && edit === "permissions"}
-          onOpenChange={(open) =>
-            setEdit((current) =>
-              open ? "permissions" : current === "permissions" ? null : current,
-            )
-          }
-          onChange={(permissions) =>
-            onPermissionChange
-              ? onPermissionChange(permissions)
-              : onChange({ ...config, permissions })
+          teamId={team.id}
+          harness={executionConfig.harness}
+          value={currentMemberPreset(executionConfig)}
+          disabled={disabled || saving}
+          onChange={(preset) =>
+            onMemberPermissionPreset
+              ? onMemberPermissionPreset(preset as MemberPermissionPreset)
+              : product.configureHostPermissionPreset(
+                  team.id,
+                  preset as MemberPermissionPreset,
+                )
           }
           onAdvanced={() => onSettings("runtime")}
         />
       )}
-      {showContext && (
-        <Tooltip.Root>
-          <Tooltip.Trigger asChild>
-            <button
-              type="button"
-              className="context-ring"
-              ref={trigger}
-              aria-label={
-                known
-                  ? tr("Context {percent}% used", {
-                      percent: Math.round(fraction * 100),
-                    })
-                  : tr("Context usage unavailable")
-              }
-            >
-              <svg
-                width={16 * ICON_SCALE}
-                height={16 * ICON_SCALE}
-                viewBox="0 0 20 20"
-                aria-hidden="true"
-              >
-                <circle
-                  cx="10"
-                  cy="10"
-                  r="7"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  opacity=".18"
-                />
-                <circle
-                  cx="10"
-                  cy="10"
-                  r="7"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  strokeDasharray={`${fraction * 43.982} 43.982`}
-                  transform="rotate(-90 10 10)"
-                />
-              </svg>
-            </button>
-          </Tooltip.Trigger>
-          <Tooltip.Portal container={container}>
-            <Tooltip.Content className="tooltip" side="top" sideOffset={8}>
-              {known
-                ? `${context.used.toLocaleString(locale)} / ${context.limit.toLocaleString(locale)} tokens · ${Math.round(fraction * 100)}%`
-                : tr("Context · —")}
-            </Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
-      )}
+      {showContext && <ContextIndicator usage={team.context} />}
+      {running &&
+        (hasPendingRuntimeConfiguration(executionConfig, runningConfig) ||
+          hasPendingPermissionConfiguration(
+            executionConfig,
+            runningConfig,
+          )) && (
+          <span className="runtime-pending" role="status">
+            {tr("Applies next turn")}
+          </span>
+        )}
     </div>
   );
 }
@@ -475,10 +450,15 @@ export const ComposerInput = forwardRef<
     setDismissed(false);
   }, [value]);
   useEffect(() => {
-    if (open)
-      document
-        .getElementById(`command-${index}`)
-        ?.scrollIntoView({ block: "nearest" });
+    if (!open) return;
+    const option = document.getElementById(`command-${index}`);
+    const list = option?.closest<HTMLElement>(".command-menu");
+    if (!option || !list) return;
+    const item = option.getBoundingClientRect(),
+      bounds = list.getBoundingClientRect();
+    if (item.top < bounds.top) list.scrollTop += item.top - bounds.top;
+    else if (item.bottom > bounds.bottom)
+      list.scrollTop += item.bottom - bounds.bottom;
   }, [index, open]);
   const pick = (choice: Choice) => {
     const start = caret - (fragment?.[2].length || 0) - 1;
@@ -502,7 +482,7 @@ export const ComposerInput = forwardRef<
     else if (choice.id === "plugins") onPlugins();
     else
       requestAnimationFrame(() => {
-        input.current?.focus();
+        input.current?.focus({ preventScroll: true });
         input.current?.setSelectionRange(
           start + insertion.length,
           start + insertion.length,
@@ -571,6 +551,8 @@ export const ComposerInput = forwardRef<
       <textarea
         ref={input}
         aria-label={tr("Message")}
+        aria-haspopup="listbox"
+        aria-autocomplete="list"
         aria-controls={open ? "composer-commands" : undefined}
         aria-activedescendant={
           open && choices[index] ? `command-${index}` : undefined

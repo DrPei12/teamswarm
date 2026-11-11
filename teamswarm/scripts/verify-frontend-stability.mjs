@@ -16,7 +16,7 @@ await new Promise((resolve) => probe.close(resolve));
 const service = createApp({
   apiPort: port,
   dataDir: path.join(output, "data"),
-  harnesses: ["codex", "claude-code", "grok"].map((id) => ({
+  harnesses: ["codex", "claude-code", "grok", "antigravity"].map((id) => ({
     id,
     capabilities: { resume: true },
     async inspect() {
@@ -271,7 +271,10 @@ try {
     .getByRole("button", { name: "Deleted members", exact: true })
     .click();
   await page
-    .getByRole("menuitem", { name: "Temporary member", exact: true })
+    .getByRole("dialog", { name: "Deleted members" })
+    .locator(".deleted-member-row")
+    .filter({ hasText: "Temporary member" })
+    .getByRole("button", { name: "View history", exact: true })
     .click();
   await page.locator(".member-conversation").waitFor();
   assert.equal(await page.locator(".member-composer").count(), 0);

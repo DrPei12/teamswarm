@@ -73,7 +73,14 @@ test("safe boundary rejects active/recovery/terminal work, stale revisions and e
   const input = { status: "queued" as const, currentRevision: 2, expectedRevision: 2, access: "read-only" as const, maximumAccess: "read-only" as const };
   assert.equal(allocationBoundary(input), null);
   for (const status of ["running", "stopping", "recovery_required"] as const) assert.equal(allocationBoundary({ ...input, status }), "busy");
-  for (const status of ["submitted", "self_checked", "accepted", "superseded", "rejected"] as const) assert.equal(allocationBoundary({ ...input, status }), "invalid_state");
+  for (const status of ["running", "stopping", "recovery_required"] as const) {
+    const nextDefault = { ...input, status, scope: "member-default" as const };
+    assert.equal(allocationBoundary(nextDefault), null);
+    assert.equal(allocationBoundary({ ...nextDefault, expectedRevision: 1 }), "version_conflict");
+    assert.equal(allocationBoundary({ ...nextDefault, access: "workspace-write" }), "access_escalation");
+  }
+  for (const status of ["submitted", "self_checked", "accepted", "superseded"] as const) assert.equal(allocationBoundary({ ...input, status }), "invalid_state");
+  assert.equal(allocationBoundary({ ...input, status: "rejected" }), null, "a rejected task can receive a different resource before retry");
   assert.equal(allocationBoundary({ ...input, expectedRevision: 1 }), "version_conflict");
   assert.equal(allocationBoundary({ ...input, access: "workspace-write" }), "access_escalation");
   assert.equal(allocationRequest.safeParse({ expectedRevision: 1, selection: { resourceId: "example", resourceVersion: 1, reason: "explicit choice" } }).success, true);

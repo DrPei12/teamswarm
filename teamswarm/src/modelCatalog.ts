@@ -1,7 +1,15 @@
+import {
+  apiEffortPolicy,
+  canonicalApiEffort,
+} from "@team/contracts/model-effort";
 import { permissionsForHarness } from "./permissions";
 import type { ModelAccess, TeamCapabilities } from "@team/contracts/allocation";
 import type { ExecutionConfig } from "@team/contracts/runtime";
 import type { HarnessInspection } from "./harnessCatalog";
+import {
+  harnessManifest,
+  harnessManifests,
+} from "@team/contracts/harness-catalog";
 
 export function subscriptionCatalogId(
   connection: Pick<ModelAccess, "chatgptAccountId" | "subscriptionHarness">,
@@ -23,6 +31,12 @@ export function connectionUnavailable(
   harness: string,
   inspection?: HarnessInspection,
 ) {
+  if (
+    harnessManifest(harness)?.models.nativeOnly &&
+    (connection.kind !== "subscription" ||
+      connection.subscriptionHarness !== harness)
+  )
+    return "Use this Harness's native account";
   if (connection.kind === "subscription") {
     if (connection.chatgptAccountId)
       return inspection?.authenticated === false
@@ -48,6 +62,7 @@ export function connectionSource(connection: ModelAccess) {
     codex: "Codex local sign-in",
     "claude-code": "Claude Code local sign-in",
     grok: "Grok local sign-in",
+    antigravity: "Antigravity local sign-in",
   };
   return (
     nativeSources[connection.subscriptionHarness ?? ""] ??
@@ -91,7 +106,9 @@ export function modelChoices(
   }
   // Legacy teams can use a native account before configuring a capabilities directory.
   if (capabilities.version === 0) {
-    for (const id of ["codex", "claude-code", "grok"]) {
+    for (const { id, name } of harnessManifests().filter(
+      (h) => h.models.nativeLogin,
+    )) {
       if (
         capabilities.connections.some(
           (c) => c.kind === "subscription" && c.subscriptionHarness === id,
@@ -100,7 +117,7 @@ export function modelChoices(
         continue;
       const connection: ModelAccess = {
         id: `native:${id}`,
-        name: id === "codex" ? "Codex" : id === "grok" ? "Grok" : "Claude Code",
+        name,
         kind: "subscription",
         enabled: true,
         subscriptionHarness: id,
@@ -213,6 +230,11 @@ export async function switchHarness(
     ...config,
     permissions: permissionsForHarness(config, harness),
   };
+  if (
+    harnessManifest(harness)?.models.nativeOnly ||
+    harnessManifest(config.harness)?.models.nativeOnly
+  )
+    return chooseModel({ ...config, harness }, null, undefined, resolve);
   if (config.chatgptAccountId)
     return {
       ...config,
@@ -231,19 +253,30 @@ export async function switchHarness(
         Object.values(c.endpoints).includes(config.baseUrl ?? "") &&
         c.models.includes(config.model ?? ""),
     );
-    if (connection && config.model)
+    if (connection && config.model) {
+      const resolved = await resolve(
+        connection,
+        harness,
+        config.model,
+        config.access,
+      );
+      const sameProvider = apiEffortPolicy(config) && apiEffortPolicy(resolved);
       return {
         thinkingFormat: null,
         maxOutputTokens: null,
         contextWindowTokens: null,
-        ...(await resolve(connection, harness, config.model, config.access)),
+        ...resolved,
+        effort: sameProvider
+          ? canonicalApiEffort(sameProvider, config.effort)
+          : resolved.effort,
         permissions: config.permissions,
       };
+    }
     // Advanced manual connections retain their identity; the server checks compatibility.
     return {
       ...config,
       harness,
-      effort: null,
+      effort: canonicalApiEffort(apiEffortPolicy(config), config.effort),
       thinkingFormat: null,
       maxOutputTokens: null,
       contextWindowTokens: null,

@@ -76,7 +76,7 @@ export default function CodeEditor({
           EditorView.theme({
             "&": {
               height: "100%",
-              fontSize: "12px",
+              fontSize: "calc(15px * var(--code-scale))",
               backgroundColor: "var(--panel)",
               color: "var(--text)",
             },

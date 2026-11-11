@@ -1,3 +1,4 @@
+import type { ContextWindowPlan, ContextWindowPreset } from "./context-window";
 import type {
   RuntimeSettings,
   ExecutionConfig,
@@ -11,10 +12,12 @@ import type {
   TeamExchangeMessage,
 } from "./runtime";
 export type { ProjectNode, ProjectBranch, ProjectDocument } from "./runtime";
+import type { ResourceSelection } from "./allocation";
 export type TeamExecution = {
-  host?: { config: ExecutionConfig; permissionVersion: number; memberId: string; branchId: string };
+  host?: { nextContextWindow?: ContextWindowPlan; config: ExecutionConfig; configurationVersion: number; runningConfig?: ExecutionConfig; permissionVersion: number; memberId: string; branchId: string; selection?: ResourceSelection | null; selectionCurrent?: boolean };
   settings: RuntimeSettings | null;
   works: Work[];
+  allocationTaskIds?: string[];
   runs: Run[];
   attempts: Attempt[];
   latestEvent: number;
@@ -24,6 +27,18 @@ export type Attachment = {
   name: string;
   size: number;
   type: string;
+};
+export type HostExecution = {
+  workId: string;
+  attemptId?: string;
+  sourceMessageId: string;
+  status: Work["status"];
+  startedAt: string;
+  finishedAt?: string;
+  /** Primary stop/failure cause, not a model-authored reply. */
+  error?: string;
+  /** Subsequent observation, for example confirmed process-tree termination. */
+  detail?: string;
 };
 export type Message = {
   id: string;
@@ -39,6 +54,7 @@ export type Message = {
   runtime?: RuntimeConfig;
   references?: { id: string; kind: string; label: string }[];
   activity?: TranscriptItem[];
+  execution?: HostExecution;
 };
 export type Chat = {
   id: string;
@@ -70,8 +86,10 @@ export type Definition = {
   author: "user" | "host";
 };
 export type Member = {
+  resourceSelection?: ResourceSelection | null;
   id: string;
   removedAt?: string;
+  purgedAt?: string;
   teamId: string;
   name: string;
   responsibility: string;
@@ -82,6 +100,8 @@ export type Member = {
   effort?: string;
   /** Configuration for the next execution, separate from the last attempt. */
   executionConfig?: ExecutionConfig;
+  /** Frozen configuration of the current Attempt, if one is executing. */
+  runningExecutionConfig?: ExecutionConfig;
   configurationVersion?: number;
   sessionId?: string;
   x?: number;
@@ -124,10 +144,10 @@ export type Exchange = {
 };
 export type TranscriptItem = {
   id: string;
-  kind: "message" | "reasoning" | "command" | "tool" | "file";
+  kind: "message" | "reasoning" | "command" | "tool" | "file" | "status";
   text: string;
   title?: string;
-  status: "running" | "completed" | "failed" | "interrupted";
+  status: "running" | "completed" | "failed" | "interrupted" | "unknown";
   phase?: string;
   output?: string;
   changes?: { path: string; kind: string; diff?: string }[];
@@ -145,6 +165,7 @@ export type ConversationEntry = {
   error?: string;
   /** Original failed delivery; retry reuses its existing work instead of resending. */
   retryWorkId?: string;
+  deliveryHistory?: { id: string; createdAt: number; status: "failed" | "delivered"; error?: string }[];
   items?: TranscriptItem[];
   elapsedMs?: number;
   exchangeId?: string;
@@ -206,13 +227,23 @@ export type Plugin = {
   command: string;
   description: string;
 };
+export type ContextWindowUsage = {
+  used: number | null;
+  limit: number | null;
+  estimated?: boolean;
+  limitSource?: "reported" | "configured" | "estimate";
+  rawLimit?: number;
+  nextLimit?: number;
+};
 export type Team = {
   id: string;
   name: string;
   color: string;
   runtime?: RuntimeConfig;
-  context?: { used: number; limit: number };
+  context?: ContextWindowUsage;
   configured?: boolean;
+  /** Hidden from the working list; restorable from the workspace menu. */
+  archived?: boolean;
   lastChatId?: string;
   mainChatId?: string;
   canvasViewports?: Record<string, { x: number; y: number; zoom: number }>;
@@ -237,6 +268,7 @@ export type Workspace = {
   version: 1;
   name: string;
   theme: "light" | "dark" | "system";
+  contextWindowPreset?: ContextWindowPreset;
   language: "en" | "zh-CN";
   teams: Team[];
   chats: Chat[];
@@ -249,7 +281,7 @@ export type Workspace = {
   updates?: Delivery[];
   plugins: Plugin[];
   eventIds?: string[];
-  service?: { revision: number; migrated: boolean };
+  service?: { revision: number; migrated: boolean; manualResourceConfiguration?: boolean };
   executions?: Record<string, TeamExecution>;
   projectNodes?: ProjectNode[];
   projectBranches?: ProjectBranch[];

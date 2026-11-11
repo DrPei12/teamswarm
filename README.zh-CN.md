@@ -96,15 +96,15 @@ node report.mjs <json-file> --status open|done|blocked
 
 “协作”中的“已删除成员”保留成员的历史对话和工作。删除成员后无法再向其发送消息。消息因执行配置冲突而失败时，修正配置后可在原消息上重试；重试保留原消息和工作身份。
 
+## 对话上下文
+
+「设置 → 常规 → 上下文窗口」提供自动、128K、256K、512K 和 1M。选择从本工作空间 Host 与成员的下一轮生效。运行时按模型和 Harness 允许的容量限制预设，给上下文整理预留空间。圆环显示预留后的可用预算，以及最近一次模型请求的用量。上轮和下轮的窗口不同时，分别标明。
+
 ## 设备资源与任务排队
 
-Host 在安排工作时读取设备内存、CPU、进程占用、已运行任务和资源配置。运行时在每次启动前重新核算预算；单 Team 和整个服务的并发成员数由设备余量与实测执行开销决定。
+运行时采集可用内存、Windows 提交空间、CPU 负载和进程占用。Host 可以查看内存与进程数据。调度器依据 CPU 采样和正在启动的任务判断何时派发更多原生工作。CPU 容量恢复后，排队任务可以继续执行。队列变化记录在运行事件中，实际执行错误显示在任务状态里。
 
-可以直接在对话中要求“为其他程序预留 8 GiB 内存”，或“恢复自动预留”。设置保存在本机，作用于该服务中的全部 Team。Windows 同时检查物理内存和提交空间；CPU 使用独立预算。各 Harness 的后续估算会随实际执行数据调整，正在启动的任务也会提前占用预算。
-
-任务因资源不足排队时，对话会显示原因、受影响的任务和默认处理方式。正在执行的工作继续进行；用户可以调整预留或任务安排。用户没有新指示时，任务保持排队，资源恢复后自动接续，并在实际开始执行后再次通知。同一次持续等待合并提示，重启服务后继续保留排队记录和通知状态。Host 保留一个受实际设备余量约束的控制通道，用于调整过高的预留。
-
-Windows 使用逐进程采样和进程组统计。其他系统使用设备内存、CPU 采样和启动开销估算。
+Windows 支持逐进程采样和所属进程组统计。其他平台使用各自采样器提供的数据。
 
 <a id="harnesses-and-models"></a>
 ## Harness 与模型
@@ -119,8 +119,11 @@ Harness 执行代理工具与运行循环，模型连接提供模型 API。执�
 | Pi | 本机单独安装 | 支持 |
 | DeepSeek Harness | 本机单独安装 | 新原生会话读取保存的 TeamSwarm 工作 |
 | OpenCode | 本机单独安装 | 支持 |
+| Antigravity | 安装 Google 官方 Antigravity CLI（agy） | ACP 会话接续 |
 
-集成版本固定在 [config/harnesses.json](config/harnesses.json)。Harness 负责自己的工具、权限与会话，模型来源由独立的连接提供。同一模型连接可以分配给六种 Harness；跨协议组合由本机服务转换 Responses、Chat Completions 和 Anthropic Messages。
+通过 npm 管理的集成版本固定在 [config/harnesses.json](config/harnesses.json)。Harness 负责自己的工具、权限与会话。Codex、Claude Code、Grok、Pi、DeepSeek Harness 和 OpenCode 可以使用共享的模型连接；跨协议组合由本机服务转换 Responses、Chat Completions 和 Anthropic Messages。
+
+Antigravity 使用 Google 官方 CLI 的本机登录。安装 CLI 后，在团队能力中启用 Antigravity，并添加 Antigravity 订阅连接。模型与推理强度由原生目录提供，首次使用可在账号区域发起 Google 登录。实际调用需要账号及所在地区满足 Google 的服务条件。接入使用官方 ACP 的会话、工具和权限流程。[Antigravity CLI 安装与 ACP](https://antigravity.google/docs/cli/acp/)
 
 在团队能力中分别启用 Harness 和添加模型连接。选择 **ChatGPT → Continue with ChatGPT**，在官方页面授权后加载账号模型目录，再选择提供给 Host 分配的模型。ChatGPT 连接也可用于 Claude Code；Claude Code 自己执行命令、处理工具结果和继续会话。**ChatGPT (Codex)** 使用 Codex 原生账号授权。
 

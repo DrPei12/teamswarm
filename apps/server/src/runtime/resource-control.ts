@@ -1,3 +1,4 @@
+import { apiEffortPolicy } from "@team/contracts/model-effort";
 import { conflict } from "../errors.js";
 import { createResource, setHostAllocation, setMemberAllocation, setWorkAllocation } from "./allocation.js";
 import { checkExecutionCompatibility } from "./allocation-contract.js";
@@ -6,7 +7,7 @@ import type { Member, Work, Run } from "./types.js";
 import type { z } from "zod";
 import type { tools } from "./validation.js";
 
-export const resourceTools = ["team_check_resource", "team_select_resource", "team_derive_resource", "team_device_resources", "team_set_device_reserve", "team_pending_permissions", "team_answer_permission"];
+export const resourceTools = ["team_check_resource", "team_select_resource", "team_derive_resource", "team_device_resources", "team_pending_permissions", "team_answer_permission"];
 
 function resource(runtime: TeamRuntime, teamId: string, id: string, version: number) {
   const value = runtime.catalog.resource(teamId, id);
@@ -28,12 +29,13 @@ export async function checkResource(runtime: TeamRuntime, teamId: string, id: st
   try { runtime.validateConfig(config); } catch { valid = false; }
   const installed = typeof inspection.installed === "boolean" ? inspection.installed
     : inspection.available === false ? false : inspection.id || inspection.available === true ? true : null;
+  const policy = apiEffortPolicy(config);
   const models = subscription && Array.isArray(inspection.models) ? inspection.models.flatMap((m: any) => {
     if (typeof m.model !== "string") return [];
     return [{ model: m.model, name: typeof m.name === "string" ? m.name : m.model,
       isDefault: m.isDefault === true,
       efforts: Array.isArray(m.reasoningEfforts) ? m.reasoningEfforts.flatMap((e: any) => typeof e.reasoningEffort === "string" ? [e.reasoningEffort] : []) : [] }];
-  }) : [];
+  }) : policy ? [{model:config.model, name:config.model, efforts:policy.supported, defaultEffort:policy.defaultEffort}] : [];
   return {
     resourceId: id, resourceVersion: version, checkedAt: new Date().toISOString(),
     harness: config.harness, model: config.model,

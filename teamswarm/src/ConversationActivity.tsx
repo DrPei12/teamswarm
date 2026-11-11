@@ -1,5 +1,6 @@
 import { memo, useState } from "react";
 import { Disclosure as ActivityBody } from "./Disclosure";
+import { QuietDots } from "./design-system/StatusIndicators";
 import {
   ChevronRight,
   FileCode2,
@@ -17,6 +18,7 @@ import {
   delegationRows,
   toolValue,
   canExpandActivity,
+  commandSummary,
   field,
   type ActivityGroup,
 } from "./activityPresentation.ts";
@@ -114,6 +116,10 @@ function ToolDetails({ item }: { item: TranscriptItem }) {
 }
 
 const toolLabels: Record<string, string> = {
+  team_set_member_permissions: "Manage member permissions",
+  team_pending_permissions: "Check pending approvals",
+  team_answer_permission: "Answer permission request",
+  AskUserQuestion: "Asked the user",
   team_write_file: "Wrote file",
   team_edit_file: "Edited file",
   team_read_work: "Read work details",
@@ -130,7 +136,6 @@ const toolLabels: Record<string, string> = {
   team_save_insight: "Preserve an idea",
   team_state: "Read team progress",
   team_device_resources: "Read device resources",
-  team_set_device_reserve: "Set device memory reserve",
   team_submit_result: "Submit work result",
   team_read_artifact: "Read submitted file",
   team_accept_work: "Record independent review",
@@ -167,7 +172,7 @@ const ActivityItem = memo(function ActivityItem({
       : item.kind === "file" ||
           ["team_write_file", "team_edit_file"].includes(item.title ?? "")
         ? FileCode2
-        : item.kind === "reasoning"
+        : item.kind === "reasoning" || item.kind === "status"
           ? Circle
           : Wrench;
   const filePath = ["team_write_file", "team_edit_file"].includes(
@@ -176,26 +181,29 @@ const ActivityItem = memo(function ActivityItem({
     ? field(toolValue(item.text), "path").split(/[\\/]/).at(-1)
     : undefined;
   const title =
-    (item.kind === "command"
-      ? t(
-          item.status === "running"
-            ? "Running {command}"
-            : item.status === "completed"
-              ? "Ran {command}"
-              : "Command did not complete: {command}",
-          { command: commandLabel(item.title || item.text) },
-        )
-      : item.title
-        ? [t(toolLabels[item.title] ?? item.title), filePath]
-            .filter(Boolean)
-            .join(" ")
-        : "") ||
-    (item.kind === "reasoning"
-      ? t("Thinking")
-      : item.kind === "file"
-        ? item.changes?.map((c) => c.path.split(/[\\/]/).at(-1)).join(", ") ||
-          t("File changes")
-        : t("Tool activity"));
+    item.kind === "status"
+      ? [t(item.title ?? "Working"), item.text].filter(Boolean).join(" · ")
+      : (item.kind === "command"
+          ? t(
+              item.status === "running"
+                ? "Running {command}"
+                : item.status === "completed"
+                  ? "Ran {command}"
+                  : "Command did not complete: {command}",
+              { command: commandLabel(item.title || item.text) },
+            )
+          : item.title
+            ? [t(toolLabels[item.title] ?? item.title), filePath]
+                .filter(Boolean)
+                .join(" ")
+            : "") ||
+        (item.kind === "reasoning"
+          ? t("Thinking")
+          : item.kind === "file"
+            ? item.changes
+                ?.map((c) => c.path.split(/[\\/]/).at(-1))
+                .join(", ") || t("File changes")
+            : t("Tool activity"));
   if (!canExpandActivity(item))
     return (
       <div className={`activity-item ${item.status}`}>
@@ -250,6 +258,49 @@ const ActivityItem = memo(function ActivityItem({
   );
 });
 
+/** One row for a run of commands. Successful commands stay behind the count;
+ * running and unsuccessful ones remain visible without expanding. */
+function CommandGroup({ group }: { group: ActivityGroup }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const summary = commandSummary(group.items);
+  const shown = open ? group.items : summary.visible;
+  return (
+    <div
+      className={`activity-item activity-commands ${summary.running ? "running" : ""}`}
+    >
+      <button
+        className="activity-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        <Terminal size={15} />
+        <span>
+          {t(
+            summary.running
+              ? "Running commands · {count}"
+              : "Ran {count} commands",
+            { count: summary.total },
+          )}
+        </span>
+        <ChevronRight size={13} className={open ? "expanded" : ""} />
+        {summary.failed > 0 && (
+          <small>
+            {t("{count} did not succeed", { count: summary.failed })}
+          </small>
+        )}
+      </button>
+      {shown.length > 0 && (
+        <div className="activity-command-list">
+          {shown.map((item) => (
+            <ActivityItem item={item} key={item.id} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const ConversationActivity = memo(function ConversationActivity({
   items,
   running = false,
@@ -264,7 +315,8 @@ export const ConversationActivity = memo(function ConversationActivity({
   const { t } = useI18n();
   const [choice, setChoice] = useState<boolean | null>(null);
   const open = choice ?? running;
-  if (!items.length) return null;
+  const groups = groupActivity(items);
+  if (!groups.length) return null;
   const seconds = Math.max(1, Math.round((elapsedMs ?? 0) / 1000));
   return (
     <div className={`conversation-activity ${running ? "running" : ""}`}>
@@ -274,23 +326,28 @@ export const ConversationActivity = memo(function ConversationActivity({
         onClick={() => setChoice(!open)}
       >
         <span>
-          {running
-            ? t("Working…")
-            : elapsedMs == null
-              ? t("Work activity")
-              : t("Worked for {duration}", {
-                  duration:
-                    seconds >= 60
-                      ? `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-                      : `${seconds}s`,
-                })}
+          {running ? (
+            <QuietDots label={t("Working…")} />
+          ) : elapsedMs == null ? (
+            t("Work activity")
+          ) : (
+            t("Worked for {duration}", {
+              duration:
+                seconds >= 60
+                  ? `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+                  : `${seconds}s`,
+            })
+          )}
         </span>
         <ChevronRight size={14} className={open ? "expanded" : ""} />
       </button>
       <ActivityBody open={open} className="activity-items">
-        {groupActivity(items).map((group) =>
-          group.kind === "item" ? (
+        {groups.map((group) =>
+          group.kind === "item" ||
+          (group.kind === "commands" && group.items.length === 1) ? (
             <ActivityItem item={group.items[0]} key={group.id} />
+          ) : group.kind === "commands" ? (
+            <CommandGroup group={group} key={group.id} />
           ) : (
             <GroupedActivity group={group} members={members} key={group.id} />
           ),

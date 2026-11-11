@@ -1,4 +1,7 @@
+import {previousClaudeUsage} from "./claude-turn-usage.js";
+import {windowBinding} from "./context-window.js";
 import { hostMode } from "./host-communication.js";
+import { executionConfiguration } from "./execution-status.js";
 import { conflict, notFound } from "../errors.js";
 import { RuntimeStore, activeStates, hash } from "./store.js";
 import { TeamCatalog } from "./catalog.js";
@@ -254,6 +257,16 @@ export class HostContext {
       .get(teamId, previous.id);
     return row ? JSON.parse(String(row.data)) : undefined;
   }
+  private observation(frame:any,attempt?:Attempt): ContextObservation|undefined {
+    const value = frame?.context as ContextObservation|undefined;
+    if (attempt?.config.harness==="claude-code" && frame && !frame.compacted &&
+        value?.inputTokens===0 && !value.outputTokens) {
+      const last=previousClaudeUsage(this.store.db,attempt.teamId,attempt.id,attempt.config.model);
+      if(last?.inputTokens) return {...value,...last};
+      return {contextWindowTokens:last?.contextWindowTokens??value.contextWindowTokens};
+    }
+    return value;
+  }
   canResume(
     teamId: string,
     branchId: string,
@@ -268,7 +281,8 @@ export class HostContext {
     )
       return false;
     const budget = planContext(previous.config, {
-      observation: frame.context,
+      windowPlan: previous.contextWindow,
+      observation: this.observation(frame,previous),
       estimatedSessionTokens: frame.sessionEstimatedTokens,
       nativeCompaction:
         this.catalog.harnesses.get(previous.config.harness)?.capabilities
@@ -310,12 +324,13 @@ export class HostContext {
       );
     const snapshot =
       prior ?? (snapshotRow ? JSON.parse(String(snapshotRow.data)) : undefined);
-    const configIdentity = hash(JSON.stringify(attempt.config));
-    const context = (prior?.context ??
+    const configIdentity = hash(JSON.stringify(attempt.contextWindow ? [attempt.config,windowBinding(attempt.contextWindow)] : attempt.config));
+    const context = (this.observation(prior,previous) ??
       (snapshot?.configIdentity === configIdentity
         ? { contextWindowTokens: snapshot.context?.contextWindowTokens }
         : undefined)) as ContextObservation | undefined;
     const budgetOptions = {
+      windowPlan: attempt.contextWindow,
       observation: context,
       estimatedSessionTokens: prior?.sessionEstimatedTokens,
       overheadTokens,
@@ -350,6 +365,7 @@ export class HostContext {
         !["accepted", "self_checked", "superseded"].includes(w.status),
     );
     const activeRuns = scope.runs.filter((r) => r.state !== "completed");
+    const nextExecution = this.catalog.memberExecution(work.teamId, project.branchId, member);
     const input: any = {
       ...incoming,
       turnPurpose: host
@@ -358,9 +374,14 @@ export class HostContext {
           ? "collaboration"
           : "task",
       member: { name: member.name, responsibility: member.responsibility, harness: attempt.config.harness,
+        model: attempt.config.model, effort: attempt.config.effort,
         harnessRef: `harness:${attempt.config.harness}`, permissions: attempt.config.permissions ?? null,
         workspace: this.store.workspace(work) },
-      work,
+      execution: {
+        currentExecution: { ...executionConfiguration(attempt.config), ...(attempt.contextWindow ? {contextWindow:attempt.contextWindow} : {}), attemptId: attempt.id, modelRequest: attempt.modelRequest ?? null },
+        nextExecution: { ...executionConfiguration(nextExecution.config), available: nextExecution.selectionCurrent || nextExecution.selectionRetained },
+      },
+      work: work.selection ? { ...work, selection: this.catalog.selections.active(work.teamId, "work", work.id, work) ?? undefined } : work,
       requirement: this.store.get(
         "requirements",
         work.teamId,
@@ -385,6 +406,8 @@ export class HostContext {
                 currentHostConnection: {
                   harness: attempt.config.harness,
                   model: attempt.config.model,
+                  effort: attempt.config.effort,
+                  source: "current_attempt",
                   enabledForNewSelections: this.catalog.capabilities.allowed(
                     work.teamId,
                     attempt.config,
@@ -421,61 +444,50 @@ export class HostContext {
           items: [],
         },
       },
-      history: host && !previous
-        ? this.materials.messages(run, { boundary, limit: 3 }).items
-            .filter(message => message.id !== run.sourceMessageId)
-            .map(message => message.content.length <= 1600 ? message : {
-              ...message, content: excerpt(message.content, work.instructions, 1600),
-              partial: true, characters: message.content.length,
-            })
-        : [],
+      history: [],
       historyAccess: {
         conversationId: run.conversationId,
         totalMessages: 0,
         omittedMessages: 0,
       },
-      ...(work.interaction ? { conversationHistory: !previous
-        ? ((conversationHistory ?? []) as any[]).slice(-2).map(message => message.content.length <= 1600 ? message : {
-            ...message, content: excerpt(message.content, work.instructions, 1600),
-            partial: true, characters: message.content.length,
-          })
-        : [] } : {}),
+      ...(work.interaction ? { conversationHistory: [] } : {}),
       retainedInsights: [],
       retainedInsightCount: collaborationInput.retainedInsightCount ?? 0,
       currentOutputs: [],
       currentOutputCount: collaborationInput.currentOutputCount ?? 0,
       detailAccess:
-        "Use team_context_index to expand a topic or find material for a task/member, and team_context_read to read refs or original messages. Follow partial-body cursors. Read related definitions before assigning or changing work. Shared interface changes belong in the project definition; send affected members the relevant refs. Keep an overview and unresolved decisions in sourced notes. Cite original definitions, work or discussion rather than another summary. Write facts directly and omit process narration. Use team_directory for execution resources and team_read_work for complete work/evidence.",
+        "Use team_context_index/team_context_read for task/member materials and original messages; follow partial-body cursors. Read definitions before changing work; publish shared interfaces as definitions and notify affected members with refs. Keep sourced overview/decision notes and cite originals. Use team_directory_detail for execution status and team_read_work for complete evidence.",
       collaboration: work.interaction
         ? "Answer the incoming messages and finish the turn. No artifact submission or yield checkpoint is needed. File changes require assigned production work."
         : "Handle useful messages at work boundaries. Preserve responsibility and shared interface agreements. End the turn after delegation or submission; use team_yield only to save unfinished work and wait for a specific event.",
     };
-    // Keep a bounded set of unresolved decisions alongside the latest exchange.
-    // Both must precede optional navigation when a fresh session is reconstructed.
-    if (host) {
-      let noteTokens = 0;
-      for (const { material: m } of this.materials.rank(all.filter(m => m.kind === "note" && !m.stale), work)) {
-        if (seen[m.ref] === m.revision) continue;
-        const tokens = estimateTokens(m.data) + 2;
-        if (noteTokens + tokens > budget.inputTokens * 0.15) continue;
-        input.current.notes.push(m.data);
-        seen[m.ref] = m.revision;
-        noteTokens += tokens;
-      }
-    }
-    // The 60% fresh-input target reserves space for optional context. Required
-    // work/inbox data may use the rest after system, output and tool reserves.
-    const requiredTokens = estimateTokens(input) + 100;
-    if (requiredTokens > budget.inputTokens)
-      budget = planContext(attempt.config, {...budgetOptions, requiredInputTokens: requiredTokens});
-    if (estimateTokens(input) > budget.inputTokens)
+    // A model switch starts a fresh native session. The assignment and inbox
+    // are required; the preceding exchange and sourced notes can be excerpted.
+    const recentHost = host && !previous
+      ? this.materials.messages(run, { boundary, limit: 3 }).items.filter(m => m.id !== run.sourceMessageId)
+      : [];
+    const recentMember = work.interaction && !previous
+      ? ((conversationHistory ?? []) as any[]).slice(-2).reverse()
+      : [];
+    const preview = (message: any) => message.content.length <= 1600 ? message : {
+      ...message, content: excerpt(message.content, work.instructions, 1600),
+      partial: true, characters: message.content.length,
+    };
+    const recentHostPreviews = recentHost.map(preview);
+    const recentMemberPreviews = recentMember.map(preview);
+    const priorityNotes = host
+      ? this.materials.rank(all.filter(m => m.kind === "note" && !m.stale && seen[m.ref] !== m.revision), work)
+      : [];
+    let used = estimateTokens(input) + 100; // Leave room for counts and JSON delimiters.
+    const desired = used + estimateTokens(recentHostPreviews) + estimateTokens(recentMemberPreviews)
+      + Math.min(budget.inputTokens * 0.15, priorityNotes.reduce((n, {material}) => n + estimateTokens(material.data) + 2, 0));
+    if (desired > budget.inputTokens)
+      budget = planContext(attempt.config, { ...budgetOptions, requiredInputTokens: desired });
+    if (used > budget.inputTokens)
       throw conflict(
         "context_capacity",
         "The current assignment and incoming messages exceed the available context. Use a model with a larger context window or split the assignment.",
       );
-    let used = estimateTokens(input) + 100;
-    const baseTokens = used;
-    const ceiling = (share: number) => baseTokens + Math.max(0, budget.inputTokens - baseTokens) * share;
     const add = (
       target: any[],
       value: unknown,
@@ -488,7 +500,7 @@ export class HostContext {
       return true;
     };
     const addExcerpt = (target: any[], message: any, limit = budget.inputTokens) => {
-      const preview = {...message, content: excerpt(message.content, work.instructions), partial: true, characters: message.content.length};
+      const preview = {...message, content: excerpt(message.content, work.instructions), partial: true, characters: message.characters ?? message.content.length};
       // Fit the actual serialized message, including its identifiers, to the
       // remaining budget. Originals remain available through historyAccess.
       let length = preview.content.length;
@@ -498,6 +510,18 @@ export class HostContext {
       }
       return false;
     };
+    const noteLimit = used + Math.min(budget.inputTokens * 0.15, (budget.inputTokens - used) * 0.3);
+    for (const {material} of priorityNotes)
+      if (add(input.current.notes, material.data, noteLimit)) seen[material.ref] = material.revision;
+    const addRecent = (target: any[], messages: typeof recentHostPreviews) => {
+      for (const message of messages) {
+        if (!add(target, message)) addExcerpt(target, message);
+      }
+    };
+    addRecent(input.history, recentHostPreviews);
+    if (work.interaction) addRecent(input.conversationHistory, recentMemberPreviews);
+    const baseTokens = used;
+    const ceiling = (share: number) => baseTokens + Math.max(0, budget.inputTokens - baseTokens) * share;
     // Put stale-note references ahead of optional navigation: the Host must see
     // that a previously retained decision needs rechecking before reusing it.
     const staleNotes = new Set<string>();
@@ -507,6 +531,18 @@ export class HostContext {
         capabilityVersion: m.data.capabilityVersion, requiresRecheck: true, ref: m.ref,
         sourceMessageIds: m.data.sourceMessageIds, sourceRefs: m.data.sourceRefs,
       }, ceiling(0.35))) staleNotes.add(m.ref);
+    }
+    // Changed goals and requirements precede optional navigation and member
+    // headers. Small additions to the required envelope must not evict them.
+    for (const { material: m } of this.materials.rank(all.filter(m =>
+      m.kind === "document" && ["goal", "requirement"].includes(m.data.kind)), work)) {
+      const overview = m.data.kind === "goal" ? materialHeader(m, work.instructions) : null;
+      const cost = estimateTokens(m.data) + 2 + (overview ? estimateTokens(overview) + 2 : 0);
+      if (seen[m.ref] !== m.revision && estimateTokens(m.data) < budget.inputTokens * 0.25 && used + cost <= ceiling(0.65)) {
+        add(input.project.documents, m.data, ceiling(0.65));
+        if (overview) add(input.navigation.overview, overview, ceiling(0.65));
+        seen[m.ref] = m.revision;
+      }
     }
     const changes = [
       ...all
@@ -542,6 +578,7 @@ export class HostContext {
     // even when native session overhead leaves a small context allowance.
     const fullCeiling = ceiling(0.65);
     for (const { material: m, score, related } of ranked) {
+      if (m.kind === "document" && input.project.documents.some((d: any) => d.id === m.data.id)) continue;
       const header = materialHeader(m, work.instructions);
       if (
         (m.kind === "document" && m.data.kind === "goal") ||
@@ -702,7 +739,7 @@ export class HostContext {
         (prior?.sessionInputBytes ?? 0) + Buffer.byteLength(text),
       sessionToolBytes: prior?.sessionToolBytes ?? 0,
       sessionEstimatedTokens:
-        (prior?.sessionEstimatedTokens ?? 0) + estimateTokens(text),
+        (prior?.sessionEstimatedTokens ?? (attempt.contextWindow ? overheadTokens : 0)) + estimateTokens(text),
       budgetSettingsVersion: (this.store.settings(work.teamId) ?? run.settings)
         .version,
       inputBytes: Buffer.byteLength(text),
@@ -799,6 +836,7 @@ export class HostContext {
     }
     if (observation.compacted) {
       frame.compacted = true;
+      frame.usageObserved = false;
       frame.deliveredMaterials = {};
       frame.materialReads = {};
       frame.context = {

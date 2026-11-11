@@ -1,4 +1,4 @@
-import { memberPermissions } from "./permission-options.js";
+import { memberPermissions, hostPermissions } from "./permission-options.js";
 import { readOnlyExecution } from "./harness/permissions.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -19,9 +19,10 @@ import {
 } from "./allocation-portable.js";
 import { executionConfig } from "./validation.js";
 import { readOnlyPermissions } from "./harness/permissions.js";
+import { allocationTaskIds, historicalAllocationWork } from "./allocation-tasks.js";
 import type { TeamCatalog } from "./catalog.js";
 import type { RuntimeStore } from "./store.js";
-import type { Attempt, ExecutionConfig, Member, Work, WorkStatus } from "./types.js";
+import type { Attempt, ExecutionConfig, Member, Requirement, Run, Work, WorkStatus } from "./types.js";
 import type {
   AllocationBoundary,
   AllocationRequest,
@@ -102,6 +103,7 @@ export function deleteResource(
   deps: AllocationDeps,
   teamId: string,
   resourceId: string,
+  expectedVersion?: number,
 ): { id: string; deleted: true } {
   if (resourceId === RESERVED_RESOURCE_ID || resourceId.startsWith("cap_"))
     throw conflict(
@@ -111,18 +113,23 @@ export function deleteResource(
   return deps.store.transaction(() => {
     const current = storedResources(deps, teamId).find((r) => r.id === resourceId);
     if (!current) throw notFound();
+    if (expectedVersion !== undefined && current.version !== expectedVersion)
+      throw conflict("version_conflict", "This resource changed. Reload it before deleting it.");
     // Only live references block deletion. Finished history (accepted,
     // self_checked, superseded) keeps its frozen Attempt snapshot and old
     // selection, but it must not lock the resource forever.
     const usedByMember = deps.store
       .list<Member>("members", teamId)
-      .some((m) => !m.removedAt && (m.selection?.resourceId === resourceId || Object.values(m.hostSelections ?? {}).some(s => s.selection?.resourceId === resourceId)));
-    const usedByOpenWork = deps.store
-      .list<Work>("works", teamId)
-      .some(
+      .some((m) => !m.removedAt && (deps.catalog.selections.active(teamId, "member", m.id, m)?.resourceId === resourceId ||
+        Object.entries(m.hostSelections ?? {}).some(([branch,s]) => deps.catalog.selections.active(teamId,"host",branch,s)?.resourceId === resourceId)));
+    const works = deps.store.list<Work>("works", teamId);
+    const historical = historicalAllocationWork({ works, runs: deps.store.list<Run>("runs", teamId),
+      requirements: deps.store.list<Requirement>("requirements", teamId) });
+    const usedByOpenWork = works.some(
         (w) =>
-          w.selection?.resourceId === resourceId &&
-          !TERMINAL_WORK_STATES.has(w.status),
+          deps.catalog.selections.active(teamId, "work", w.id, w)?.resourceId === resourceId &&
+          !TERMINAL_WORK_STATES.has(w.status) &&
+          (!historical.has(w.id) || ACTIVE_ATTEMPT_STATES.includes(w.status)),
       );
     const usedByActiveAttempt = deps.store
       .list<Attempt>("attempts", teamId)
@@ -182,7 +189,7 @@ function assertBoundary(input: AllocationBoundary): void {
 
 const ACTIVE_ATTEMPT_STATES: WorkStatus[] = ["running", "stopping", "recovery_required"];
 
-/** A member default may change while idle; an active attempt always blocks it. */
+/** Report live work independently of whether a future-default edit is allowed. */
 function memberBoundaryStatus(
   store: RuntimeStore,
   teamId: string,
@@ -194,7 +201,9 @@ function memberBoundaryStatus(
   return active ? active.status : "queued";
 }
 
-export function setHostAllocation(deps: AllocationDeps, teamId: string, branchId: string, expectedRevision: number, selection: ResourceSelection | null) {
+type SelectionSource = NonNullable<Member["selectionSource"]>;
+
+export function setHostAllocation(deps: AllocationDeps, teamId: string, branchId: string, expectedRevision: number, selection: ResourceSelection | null, selectionSource: SelectionSource = "runtime") {
   deps.catalog.history.branch(teamId, branchId);
   if (selection) requireResource(deps, teamId, selection);
   // Restoring the Team default follows later settings changes, just like the UI.
@@ -204,10 +213,30 @@ export function setHostAllocation(deps: AllocationDeps, teamId: string, branchId
     if (!host) throw notFound();
     if ((host.hostSelections?.[branchId]?.revision ?? 1) !== expectedRevision)
       throw conflict("version_conflict", "Host selection changed. Reload before saving.");
-    host.hostSelections = { ...host.hostSelections, [branchId]: { revision: expectedRevision + 1, selection,
-      ...(selection ? {config:{...deps.catalog.resource(teamId,selection.resourceId).config}} : {}) } };
+    host.hostSelections = { ...host.hostSelections, [branchId]: { permissionPreset:host.hostSelections?.[branchId]?.permissionPreset, revision: expectedRevision + 1, selection,
+      ...(selection ? {selectionSource, config:{...deps.catalog.resource(teamId,selection.resourceId).config}} : {}) } };
     deps.store.save("members", host);
     deps.store.event(teamId, "host.allocation", { branchId, selection, revision: expectedRevision + 1 });
+    return deps.catalog.memberExecution(teamId, branchId, host);
+  });
+}
+
+/** A composer edit replaces only this branch's future Host configuration. */
+export function setHostConfiguration(deps: AllocationDeps, teamId: string, branchId: string, expectedRevision: number, config: ExecutionConfig) {
+  deps.catalog.history.branch(teamId, branchId);
+  return deps.store.transaction(() => {
+    const host = deps.store.list<Member>("members", teamId).find(m => m.kind === "host");
+    if (!host) throw notFound();
+    const current = deps.catalog.memberExecution(teamId, branchId, host);
+    if (current.allocationRevision !== expectedRevision)
+      throw conflict("version_conflict", "Host configuration changed. Reload before saving.");
+    if (config.access !== current.config.access)
+      throw conflict("access_escalation", "Keep Host's existing file access when changing its model.");
+    host.hostSelections = { ...host.hostSelections, [branchId]: {
+      revision: expectedRevision + 1, selection: null, config: { ...config }, permissionPreset:host.hostSelections?.[branchId]?.permissionPreset,
+    } };
+    deps.store.save("members", host);
+    deps.store.event(teamId, "host.configuration", { branchId, revision: expectedRevision + 1 });
     return deps.catalog.memberExecution(teamId, branchId, host);
   });
 }
@@ -217,6 +246,7 @@ export function setMemberAllocation(
   teamId: string,
   memberId: string,
   input: AllocationRequest,
+  selectionSource: SelectionSource = "runtime",
 ): Member {
   const member = deps.store.activeMember(teamId, memberId);
   if (member.kind === "host")
@@ -224,25 +254,35 @@ export function setMemberAllocation(
       "invalid_state",
       "Host execution configuration is managed through Team runtime settings.",
     );
-  const resource = requireResource(deps, teamId, input.selection);
+  const resource = input.selection ? requireResource(deps, teamId, input.selection) : undefined;
+  const next = resource?.config ?? member.config;
   // allocationRequest revisions are positive; the initial member state is revision 1.
   const currentRevision = member.allocationVersion ?? 1;
+  const priorHarness = deps.catalog.memberExecution(teamId, member.branchId ?? deps.catalog.history.ensure(teamId).id, member).config.harness;
   assertBoundary({
+    scope: "member-default",
     status: memberBoundaryStatus(deps.store, teamId, member.id),
     currentRevision,
     expectedRevision: input.expectedRevision,
-    access: resource.config.access,
+    access: member.config.access === "read-only" ? "read-only" : next.access,
     maximumAccess: member.config.access,
   });
-  const selection = resourceSelection.parse(input.selection);
+  const selection = input.selection && resourceSelection.parse(input.selection);
   return deps.store.transaction(() => {
-    member.selection = { ...selection };
+    if (selection) {
+      member.selection = selection;
+      member.selectionSource = selectionSource;
+    } else {
+      delete member.selection;
+      delete member.selectionSource;
+    }
     member.allocationVersion = currentRevision + 1;
+    if (priorHarness !== next.harness) member.permissionVersion = (member.permissionVersion ?? 1) + 1;
     deps.store.save("members", member);
     deps.store.event(teamId, "member.allocation", {
       memberId: member.id,
-      resourceId: selection.resourceId,
-      resourceVersion: selection.resourceVersion,
+      resourceId: selection?.resourceId ?? null,
+      resourceVersion: selection?.resourceVersion ?? null,
     });
     return member;
   });
@@ -253,20 +293,32 @@ export function setWorkAllocation(
   teamId: string,
   workId: string,
   input: AllocationRequest,
+  selectionSource: SelectionSource = "runtime",
 ): Work {
   const work = deps.store.get<Work>("works", teamId, workId);
   const member = deps.store.get<Member>("members", teamId, work.memberId);
-  const resource = requireResource(deps, teamId, input.selection);
+  const resource = input.selection ? requireResource(deps, teamId, input.selection) : undefined;
+  const next = resource?.config ?? deps.catalog.memberExecution(teamId,
+    deps.catalog.history.forRun(deps.store.get<Run>("runs", teamId, work.runId)).id, member).config;
   assertBoundary({
     status: work.status,
     currentRevision: work.revision,
     expectedRevision: input.expectedRevision,
-    access: resource.config.access,
+    access: member.config.access === "read-only" ? "read-only" : next.access,
     maximumAccess: member.config.access,
   });
-  const selection = resourceSelection.parse(input.selection);
+  const selection = input.selection && resourceSelection.parse(input.selection);
   return deps.store.transaction(() => {
-    work.selection = { ...selection };
+    if (selection) {
+      work.selection = selection;
+      work.selectionSource = selectionSource;
+    } else {
+      delete work.selection;
+      delete work.selectionSource;
+    }
+    if (work.permissions && (work.permissions.harness !== next.harness ||
+        (work.permissionVersion ?? 1) !== (member.permissionVersion ?? 1))) delete work.permissions;
+    work.permissionVersion = member.permissionVersion ?? 1;
     work.updatedAt = timestamp();
     work.revision += 1;
     deps.store.save("works", work);
@@ -275,11 +327,40 @@ export function setWorkAllocation(
       "work.allocation",
       {
         workId: work.id,
-        resourceId: selection.resourceId,
-        resourceVersion: selection.resourceVersion,
+        resourceId: selection?.resourceId ?? null,
+        resourceVersion: selection?.resourceVersion ?? null,
       },
       work,
     );
+    return work;
+  });
+}
+
+export function requireAllocationTask(store: RuntimeStore, teamId: string, workId: string, allowHidden = false) {
+  const work = store.get<Work>("works", teamId, workId);
+  const eligible = allocationTaskIds({
+    works: store.list<Work>("works", teamId),
+    members: store.list<Member>("members", teamId),
+    runs: store.list<Run>("runs", teamId),
+    requirements: store.list<Requirement>("requirements", teamId),
+  });
+  if (!eligible.includes(workId) || (!allowHidden && work.allocationDismissedAt))
+    throw conflict("invalid_state", "This task is no longer pending allocation or retry.");
+  return work;
+}
+
+/** List membership is independent from execution state and resource selection. */
+export function setAllocationListVisibility(deps: AllocationDeps, teamId: string, workId: string, expectedRevision: number, hidden: boolean) {
+  const { store } = deps;
+  return store.transaction(() => {
+    const work = requireAllocationTask(store, teamId, workId, true);
+    if (work.revision !== expectedRevision) throw conflict("version_conflict", BOUNDARY_MESSAGES.version_conflict);
+    if (hidden === Boolean(work.allocationDismissedAt)) return work;
+    if (hidden) work.allocationDismissedAt = timestamp();
+    else delete work.allocationDismissedAt;
+    work.revision += 1;
+    store.save("works", work);
+    store.event(teamId, "work.allocation_visibility", { hidden }, work);
     return work;
   });
 }
@@ -301,21 +382,22 @@ export function resolveExecution(
 ): ResolvedExecution {
   const branchId = member.kind === "host" && deps.store.history
     ? deps.store.history.forRun(deps.store.get("runs", teamId, work.runId)).id : null;
-  const memberChoice = (branchId ? member.hostSelections?.[branchId]?.selection : member.selection) ?? null;
+  const hostChoice = branchId ? member.hostSelections?.[branchId] : undefined;
+  const memberChoice = member.kind === "host" ? deps.catalog.selections.active(teamId, "host", branchId ?? "", hostChoice)
+    : deps.catalog.selections.active(teamId, "member", member.id, member);
   const effective: EffectiveSelection = effectiveSelection(
     member.kind === "host" && memberChoice?.resourceId === RESERVED_RESOURCE_ID ? null : memberChoice,
-    work.selection ?? null,
+    deps.catalog.selections.active(teamId, "work", work.id, work),
   );
-  let config: ExecutionConfig = { ...member.config };
+  let config: ExecutionConfig = { ...(hostChoice?.selection === null && hostChoice.config ? hostChoice.config : member.config) };
   let selection: ResourceSelection | null = null;
   if (effective.selection) {
     const resource = listResources(deps, teamId).find(
       (r) => r.id === effective.selection!.resourceId,
     );
-    const hostChoice = member.kind === "host" && branchId ? member.hostSelections?.[branchId] : undefined;
-    const retained = effective.selection.resourceId.startsWith("cap_") && hostChoice?.selection?.resourceId === effective.selection.resourceId && hostChoice.selection.resourceVersion === effective.selection.resourceVersion ? hostChoice.config : undefined;
+    const retained = effective.selection.resourceId.startsWith("cap_") && memberChoice?.resourceId === effective.selection.resourceId && memberChoice.resourceVersion === effective.selection.resourceVersion ? hostChoice?.config : undefined;
     if ((!resource || resource.version !== effective.selection.resourceVersion) && retained)
-      return { config: readOnlyExecution(memberPermissions(retained, member)), selection: {...effective.selection}, conflict: null };
+      return { config: hostPermissions(retained, member, branchId!, deps.catalog.harnesses), selection: {...effective.selection}, conflict: null };
     if (!resource)
       return {
         config,
@@ -331,13 +413,17 @@ export function resolveExecution(
     config = { ...resource.config };
     selection = { ...effective.selection };
   }
-  const permissions = work.permissions ?? (member.permissionOverride?.harness === config.harness ? member.permissionOverride : undefined) ?? (member.config.harness === config.harness ? member.config.permissions : undefined) ?? config.permissions;
+  config = member.kind === "host" ? hostPermissions(config,member,branchId!,deps.catalog.harnesses) : memberPermissions(config, member);
+  const workPermissions = (work.permissionVersion ?? 1) === (member.permissionVersion ?? 1) ? work.permissions : undefined;
+  const permissions = workPermissions ?? config.permissions;
   if (permissions) {
     if (permissions.harness !== config.harness)
       return { config, selection, conflict: "Select a native permission policy for the chosen Harness." };
     config = { ...config, permissions };
   }
-  if (member.config.access === "read-only" || work.interaction || work.kind === "collaboration")
+  if (work.reviewOf || work.interaction || work.kind === "collaboration")
+    config = readOnlyPermissions({ ...config, permissions: workPermissions });
+  else if (member.kind !== "host" && member.config.access === "read-only")
     config = readOnlyPermissions(config);
   if (member.kind !== "host" && !deps.catalog.capabilities.allowed(teamId,config))
     return {config,selection,conflict:"This Harness or model connection is no longer enabled for the Team. Ask Host to choose an enabled combination."};
@@ -384,9 +470,7 @@ export function attemptAllocation(attempt: Attempt): AttemptExecutionSnapshot {
   return migrateLegacyAllocation({ config: attempt.config });
 }
 
-/** Read model for GET /teams/:teamId/members/:memberId/allocation (exchange
- * fc4eb8cc). Reports the stored default truthfully; never invents a selection
- * no one saved and never hides the synthetic Team default. */
+/** Report the member's effective future default, separately from frozen attempt history. */
 export function memberAllocation(
   deps: AllocationDeps,
   teamId: string,
@@ -398,7 +482,7 @@ export function memberAllocation(
   maximumAccess: ExecutionConfig["access"];
 } {
   const member = deps.store.get<Member>("members", teamId, memberId);
-  const selection = member.selection ? { ...member.selection } : null;
+  const selection = deps.catalog.selections.active(teamId, "member", memberId, member);
   const maximumAccess = member.config.access;
   const selected = selection
     ? listResources(deps, teamId).find((r) => r.id === selection.resourceId)

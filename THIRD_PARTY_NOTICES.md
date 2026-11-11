@@ -6,6 +6,7 @@ TeamSwarm's own code is licensed under Apache-2.0. The following software and as
 |---|---|---|
 | [open-claude-ui](https://github.com/Caho1/open-claude-ui/tree/c1f923ae0051a871941b98a0e2e3183a545e6a85) | Adapted design tokens, layout and interaction patterns in `teamswarm/src/design-system/` | [MIT notice](https://github.com/DrPei12/teamswarm/blob/main/teamswarm/licenses/open-claude-ui-MIT.txt) |
 | Inter Variable | Bundled application font | [SIL Open Font License 1.1](https://github.com/DrPei12/teamswarm/blob/main/teamswarm/public/fonts/LICENSE.txt) |
+| Noto Sans SC and Source Serif 4 (Fontsource variable packages) | Bundled Chinese interface and reply fonts, and Latin reply font | SIL Open Font License 1.1; license files included in the desktop frontend dependency inventory |
 | React, Radix UI, Lucide, React Flow, Motion and Markdown packages | Application interface | Their package license files are included in desktop package inventories |
 | CodeMirror 6 | Code and text editing | MIT; included in desktop dependency inventory |
 | office-kit DOCX, XLSX, PPTX and PPTX preview | Office parsing, editing and slide rendering | MIT; included in desktop dependency inventory |
@@ -22,7 +23,7 @@ Every desktop package includes `resources/product/package-inventory.json` (insid
 
 Claude Code, Grok, Pi, DeepSeek Harness and OpenCode are separately installed tools. Their own licenses, service terms and authentication requirements apply. They are not bundled into TeamSwarm.
 
-The approved TeamSwarm marks in `teamswarm/branding/` are project artwork. Public builds bundle Inter under the SIL Open Font License. Anthropic Sans and Serif are optional locally installed font preferences; their font files are not redistributed. Third-party product names identify compatible software and services.
+The approved TeamSwarm marks in `teamswarm/branding/` are project artwork. Builds bundle Inter, Noto Sans SC and Source Serif 4 under the SIL Open Font License. Fonts load from local application assets; no external font service or separately installed font is required. Third-party product names identify compatible software and services.
 
 ## Modified npm runtime
 

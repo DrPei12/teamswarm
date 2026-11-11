@@ -33,14 +33,6 @@
 .canvas-stage {
   animation: scene-enter 300ms var(--ease-out);
 }
-.has-chat .composer-position::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  pointer-events: none;
-  inset: -24px -20px -22px;
-  background: var(--surface-bottom);
-}
 .message-user .message-text {
   padding: 9px 12px;
   border: 0;

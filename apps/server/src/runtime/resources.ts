@@ -1,6 +1,6 @@
 import { freemem, totalmem } from "node:os";
 import { z } from "zod";
-import { badRequest, conflict } from "../errors.js";
+import { conflict } from "../errors.js";
 import type { RuntimeStore } from "./store.js";
 import type { Attempt, Harness, HarnessEvent, Work } from "./types.js";
 import type { ProcessSample } from "./harness/owned-process.js";
@@ -31,33 +31,23 @@ type Footprint = {
 export const devicePolicyInput = z
   .object({
     expectedVersion: z.number().int().nonnegative(),
-    reserveMemoryMiB: z.number().int().nonnegative().nullable(),
-    cpuTargetPercent: z.number().min(10).max(100).optional(),
+    cpuTargetPercent: z.number().min(10).max(100),
   })
   .strict();
 type Policy = {
   version: number;
-  reserveMemoryMiB: number | null;
   cpuTargetPercent: number;
   updatedAt?: string;
   source?: { teamId: string; messageId: string };
 };
 export type Admission = {
   allowed: boolean;
-  reason:
-    | "ready"
-    | "sampling"
-    | "calibrating"
-    | "physical_memory"
-    | "commit_memory"
-    | "cpu";
+  reason: "ready" | "cpu";
   cost: Cost;
-  available: Cost;
-  floor: Cost;
-  pending: Cost;
+  cpu: { available: number | null; pending: number; floor: number };
 };
 
-/** Device-wide admission. Member identities and saved sessions have no concurrency ceiling. */
+/** Shared process observation and CPU scheduling. Memory samples are observational. */
 export class RuntimeResources {
   private reservations = new Map<string, Reservation>();
   private observations = new Map<string, Cost[]>();
@@ -101,23 +91,26 @@ export class RuntimeResources {
     const row = this.store.db
       .prepare("SELECT data FROM runtime_device_policy WHERE id=1")
       .get();
-    return row
-      ? JSON.parse(String(row.data))
-      : { version: 0, reserveMemoryMiB: null, cpuTargetPercent: 85 };
+    if (!row) return { version: 0, cpuTargetPercent: 85 };
+    // Older profiles may also contain a memory reserve. Only the CPU policy is active.
+    const {
+      version,
+      cpuTargetPercent = 85,
+      updatedAt,
+      source,
+    } = JSON.parse(String(row.data));
+    return {
+      version,
+      cpuTargetPercent,
+      ...(updatedAt ? { updatedAt } : {}),
+      ...(source ? { source } : {}),
+    };
   }
   configure(
     input: z.infer<typeof devicePolicyInput>,
     source?: Policy["source"],
   ) {
     input = devicePolicyInput.parse(input);
-    if (
-      input.reserveMemoryMiB !== null &&
-      input.reserveMemoryMiB * MiB > this.sample.totalPhysical
-    )
-      throw badRequest(
-        "invalid_memory_reserve",
-        "The memory reserve exceeds this device's physical memory.",
-      );
     const policy = this.store.transaction(() => {
       const current = this.policy();
       if (current.version !== input.expectedVersion)
@@ -127,7 +120,6 @@ export class RuntimeResources {
         );
       const policy: Policy = {
         version: current.version + 1,
-        reserveMemoryMiB: input.reserveMemoryMiB,
         cpuTargetPercent: input.cpuTargetPercent ?? current.cpuTargetPercent,
         updatedAt: new Date(this.now()).toISOString(),
         ...(source ? { source } : {}),
@@ -252,121 +244,53 @@ export class RuntimeResources {
       cpu: percentile("cpu", 1, 0.05),
     };
   }
-  private floors(host: boolean): Cost {
-    const policy = this.policy(),
-      user = (policy.reserveMemoryMiB ?? 0) * MiB;
-    return {
-      physical: user,
-      commit: user,
-      cpu: host ? 0 : Math.min(0.25, (this.sample.cpuCores ?? 1) * 0.05),
-    };
-  }
-  private outstanding(): Cost {
-    const pending: Cost = { physical: 0, commit: 0, cpu: 0 },
-      groups = new Map<string, number>();
+  private pendingCpu(): number {
+    let pending = 0;
+    const groups = new Map<string, number>();
     for (const r of this.reservations.values())
       if (r.group) groups.set(r.group, (groups.get(r.group) ?? 0) + 1);
     for (const r of this.reservations.values()) {
       const measured = r.group ? this.footprints.get(r.group) : undefined,
         count = r.group ? groups.get(r.group)! : 1;
-      pending.physical += Math.max(
-        0,
-        r.cost.physical - (measured?.workingSet ?? 0) / count,
-      );
-      pending.commit += Math.max(
-        0,
-        r.cost.commit - (measured?.privateBytes ?? 0) / count,
-      );
-      pending.cpu += Math.max(
-        0,
-        r.cost.cpu - (measured?.cpuCores ?? 0) / count,
-      );
+      pending += Math.max(0, r.cost.cpu - (measured?.cpuCores ?? 0) / count);
     }
     return pending;
   }
   admission(harness: string, host: boolean): Admission {
     const cost = this.estimate(harness, host),
-      pending = this.outstanding(),
-      policy = this.policy();
-    let floor = this.floors(host);
-    const cores = this.sample.cpuCores;
-    const available: Cost = {
-      physical: Math.min(
-        this.physicalAvailable(),
-        this.sample.availablePhysical,
-      ),
-      commit: this.sample.availableCommit ?? Number.MAX_SAFE_INTEGER,
-      cpu: cores
+      pending = this.pendingCpu();
+    const policy = this.policy(),
+      cores = this.sample.cpuCores;
+    const fresh = this.sampledAt > 0 && this.now() - this.sampledAt <= 10000;
+    if (!fresh && this.harnesses.get(harness)?.resources) void this.refresh();
+    const available =
+      fresh && cores && this.sample.cpuBusyPercent != null
         ? (cores *
             Math.max(
               0,
               policy.cpuTargetPercent - (this.sample.cpuBusyPercent ?? 0),
             )) /
           100
-        : Number.MAX_SAFE_INTEGER,
-    };
-    let reason: Admission["reason"] = "ready";
-    // In-process or remote adapters without native processes do not consume native leases.
-    if (this.harnesses.get(harness)?.resources) {
-      if (!this.sampledAt || this.now() - this.sampledAt > 10000) {
-        void this.refresh();
-        reason = "sampling";
-      } else if (
-        available.physical - pending.physical - cost.physical <
-        floor.physical
-      )
-        reason = "physical_memory";
-      else if (available.commit - pending.commit - cost.commit < floor.commit)
-        reason = "commit_memory";
-      else if (
-        available.cpu - pending.cpu - cost.cpu < floor.cpu &&
-        (this.reservations.size > 0 ||
-          (this.sample.cpuBusyPercent ?? 0) >= policy.cpuTargetPercent)
-      )
-        reason = "cpu";
-      else if (
-        !host &&
-        this.sample.processCoverage !== "unavailable" &&
-        !this.observations.get(harness)?.length &&
-        [...this.reservations.values()].some(
-          (r) => r.harness === harness && !r.hostControl,
-        ) &&
-        ![...this.reservations.values()].some(
-          (r) => r.harness === harness && !r.hostControl && r.peak,
-        )
-      )
-        reason = "calibrating";
-      // Keep one user-facing control turn reachable when the user's own reserve/CPU target
-      // blocks work. Physical/commit safety and external CPU saturation still apply.
-      if (
-        host &&
-        reason !== "ready" &&
-        reason !== "sampling" &&
-        ![...this.reservations.values()].some((r) => r.hostControl)
-      ) {
-        const hard = {
-          physical: Math.max(512 * MiB, this.sample.totalPhysical * 0.02),
-          commit: 256 * MiB,
-          cpu: 0,
-        };
-        if (
-          available.physical - pending.physical - cost.physical >=
-            hard.physical &&
-          available.commit - pending.commit - cost.commit >= hard.commit &&
-          (this.sample.cpuBusyPercent ?? 0) < 95
-        ) {
-          reason = "ready";
-          floor = hard;
-        }
-      }
-    }
+        : null;
+    const floor = host ? 0 : Math.min(0.25, (cores ?? 1) * 0.05);
+    const occupied =
+      this.reservations.size > 0 ||
+      (this.sample.cpuBusyPercent ?? 0) >= policy.cpuTargetPercent;
+    const cpuLimited =
+      available !== null &&
+      Boolean(this.harnesses.get(harness)?.resources) &&
+      available - pending - cost.cpu < floor &&
+      occupied;
+    const controlAvailable =
+      host &&
+      ![...this.reservations.values()].some((item) => item.hostControl) &&
+      (this.sample.cpuBusyPercent ?? 0) < 95;
+    const allowed = !cpuLimited || controlAvailable;
     return {
-      allowed: reason === "ready",
-      reason,
+      allowed,
+      reason: allowed ? "ready" : "cpu",
       cost,
-      available,
-      floor,
-      pending,
+      cpu: { available, pending, floor },
     };
   }
   canStart(harness: string, host: boolean) {
@@ -479,14 +403,9 @@ export class RuntimeResources {
           error instanceof Error ? error.message : "Resource sampling failed.";
       }
       if (this.closed) return;
-      const floors = this.floors(false);
-      const pressure =
-        this.sample.availablePhysical < floors.physical + 192 * MiB ||
-        (this.sample.availableCommit !== undefined &&
-          this.sample.availableCommit < floors.commit + 192 * MiB);
       const results = await Promise.allSettled(
         [...this.harnesses.values()].map((h) =>
-          h.maintain?.({ now: this.now(), pressure }),
+          h.maintain?.({ now: this.now(), pressure: false }),
         ),
       );
       const failed = results.find((r) => r.status === "rejected");
@@ -499,30 +418,25 @@ export class RuntimeResources {
   }
   summary() {
     const policy = this.policy(),
-      pending = this.outstanding();
+      pendingCpu = this.pendingCpu();
     const forecasts = [...this.harnesses.values()].map((h) => {
-      const admission = this.admission(h.id, false),
-        remaining = (key: keyof Cost) =>
-          Math.floor(
-            Math.max(
-              0,
-              admission.available[key] - admission.floor[key] - pending[key],
-            ) / admission.cost[key],
-          );
+      const admission = this.admission(h.id, false);
+      const { available, floor, pending } = admission.cpu;
+      const availableStarts =
+        available === null
+          ? null
+          : Math.max(
+              1,
+              Math.floor(
+                Math.max(0, available - floor - pending) / admission.cost.cpu,
+              ),
+            );
       return {
         harness: h.id,
         cost: admission.cost,
         observationCount: this.observations.get(h.id)?.length ?? 0,
-        additionalStarts: admission.allowed
-          ? Math.max(
-              1,
-              Math.min(
-                remaining("physical"),
-                remaining("commit"),
-                remaining("cpu"),
-              ),
-            )
-          : 0,
+        additionalStarts: admission.allowed ? availableStarts : 0,
+        basis: "cpu",
         reason: admission.reason,
       };
     });
@@ -559,8 +473,7 @@ export class RuntimeResources {
             ? null
             : this.sample.processes.reduce((n, p) => n + p.privateBytes, 0),
       },
-      reserved: pending,
-      floors: this.floors(false),
+      pendingCpu,
       forecasts,
       ...(this.error ? { error: this.error } : {}),
     };

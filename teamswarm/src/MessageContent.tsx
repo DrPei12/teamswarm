@@ -9,7 +9,7 @@ import {
 } from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, WrapText } from "lucide-react";
 import { useI18n } from "./i18n";
 
 function CodeBlock({ children, ...props }: ComponentProps<"pre">) {
@@ -25,33 +25,55 @@ function CodeBlock({ children, ...props }: ComponentProps<"pre">) {
   const language = isValidElement<{ className?: string }>(code)
     ? /language-([^ ]+)/.exec(code.props.className ?? "")?.[1]
     : undefined;
+  const [wrapped, setWrapped] = useState(() =>
+    ["text", "plaintext", "txt"].includes(language ?? ""),
+  );
   return (
     <div className="code-block" ref={block}>
       <div className="code-header">
         <span>{language || t("Code")}</span>
-        <button
-          type="button"
-          aria-label={t("Copy code")}
-          onClick={async () => {
-            const text = block.current?.querySelector("pre")?.textContent ?? "";
-            try {
-              await navigator.clipboard.writeText(text);
-              setError(false);
-              setCopied(true);
-              clearTimeout(timer.current);
-              timer.current = setTimeout(() => setCopied(false), 2500);
-            } catch {
-              setError(true);
-            }
-          }}
-        >
-          {copied ? <Check size={13} /> : <Copy size={13} />}
-          <span aria-live="polite">
-            {t(error ? "Copy failed" : copied ? "Copied" : "Copy code")}
-          </span>
-        </button>
+        <div className="code-actions">
+          <button
+            type="button"
+            aria-pressed={wrapped}
+            aria-label={t("Wrap lines")}
+            onClick={() => setWrapped((value) => !value)}
+          >
+            <WrapText size={15} />
+            <span>{t("Wrap lines")}</span>
+          </button>
+          <button
+            type="button"
+            aria-label={t("Copy code")}
+            onClick={async () => {
+              const text =
+                block.current?.querySelector("pre")?.textContent ?? "";
+              try {
+                await navigator.clipboard.writeText(text);
+                setError(false);
+                setCopied(true);
+                clearTimeout(timer.current);
+                timer.current = setTimeout(() => setCopied(false), 2500);
+              } catch {
+                setError(true);
+              }
+            }}
+          >
+            {copied ? <Check size={15} /> : <Copy size={15} />}
+            <span aria-live="polite">
+              {t(error ? "Copy failed" : copied ? "Copied" : "Copy code")}
+            </span>
+          </button>
+        </div>
       </div>
-      <pre {...props}>{children}</pre>
+      <pre
+        {...props}
+        className={wrapped ? "code-wrapped" : undefined}
+        tabIndex={0}
+        aria-label={t("Code content")}
+      >
+        {children}
+      </pre>
     </div>
   );
 }

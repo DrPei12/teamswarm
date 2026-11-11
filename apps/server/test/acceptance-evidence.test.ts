@@ -1,3 +1,4 @@
+import { autonomousWorkers } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -43,6 +44,7 @@ async function fixture() {
   const fileOnly = new EvidenceHarness("pi", false);
   const harnesses = [capable, fileOnly];
   let service = createApp({ dataDir: path.join(root, "data"), harnesses });
+  autonomousWorkers(service.runtime);
   let server = service.app.listen(0, "127.0.0.1");
   await new Promise<void>(resolve => server.once("listening", resolve));
   const api = async (route: string, body?: unknown, method = body ? "POST" : "GET") => {
@@ -120,6 +122,7 @@ async function fixture() {
     async restart() {
       await stop(); capable.calls.clear(); fileOnly.calls.clear();
       service = createApp({ dataDir: path.join(root, "data"), harnesses });
+      autonomousWorkers(service.runtime);
       server = service.app.listen(0, "127.0.0.1");
       await new Promise<void>(resolve => server.once("listening", resolve));
       // Event-driven restart can dispatch a saved Host follow-up before the next

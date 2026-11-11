@@ -9,7 +9,9 @@ contextBridge.exposeInMainWorld(
   Object.freeze({
     platform: "windows",
     chooseDirectory: () => ipcRenderer.invoke("choose-directory"),
-    setTheme: (dark) => ipcRenderer.send("theme", dark === true),
+    setTheme: (dark, surface) => ipcRenderer.send("theme", dark === true, surface),
+    saveAppearanceFont: (bytes) => ipcRenderer.invoke("appearance-font-save", bytes),
+    readAppearanceFont: (id) => ipcRenderer.invoke("appearance-font-read", id),
     returnFromChatGPT: () => ipcRenderer.send("chatgpt-sign-in-return"),
     storage: Object.freeze({
       getItem: (key) => pending("get", key),

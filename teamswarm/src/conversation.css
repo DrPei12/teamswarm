@@ -28,8 +28,8 @@
   flex-basis: 16px;
 }
 .markdown {
-  font-size: 15px;
-  line-height: 24px;
+  font-size: calc(15px * var(--content-scale));
+  line-height: calc(24px * var(--content-scale));
   letter-spacing: -0.1px;
 }
 .markdown > p + p {
@@ -67,8 +67,8 @@
 }
 .member-header-model {
   color: var(--subtle);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: calc(12px * var(--font-scale));
+  line-height: calc(18px * var(--font-scale));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -85,8 +85,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 14px;
-  line-height: 20px;
+  font-size: calc(14px * var(--font-scale));
+  line-height: calc(20px * var(--font-scale));
   font-weight: 550;
 }
 .detail-scroll.member-thread-wrapper {
@@ -142,8 +142,8 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
-  line-height: 18px;
+  font-size: calc(11px * var(--font-scale));
+  line-height: calc(18px * var(--font-scale));
   margin-bottom: 10px;
 }
 .member-entry-meta time {
@@ -166,9 +166,6 @@
   font-size: inherit;
   line-height: inherit;
 }
-.member-entry .markdown pre {
-  font-size: 12px;
-}
 .message-focus {
   /* Keep the entrance animation's identity when the focus animation ends. */
   animation:
@@ -187,16 +184,16 @@
 }
 .member-error {
   padding: 8px 20px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   overflow-wrap: anywhere;
 }
 .session-status {
   padding-top: 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 .session-progress {
   color: var(--subtle);
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
 }
 .thread-empty {
   min-height: 150px;
@@ -206,15 +203,15 @@
   justify-content: center;
   gap: 12px;
   color: var(--subtle);
-  font-size: 13px;
-  line-height: 21px;
+  font-size: calc(13px * var(--font-scale));
+  line-height: calc(21px * var(--font-scale));
   text-align: center;
 }
 .load-earlier {
   display: block;
   margin: 0 auto 24px;
   color: var(--secondary);
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
   padding: 6px 12px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -233,8 +230,17 @@
   border-radius: 18px;
   padding: 7px 11px;
   color: var(--secondary);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
   z-index: 2;
+}
+.member-action-area {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: calc(100% - 80px);
+  min-width: 0;
 }
 .member-composer {
   margin: 0 16px 16px;
@@ -253,8 +259,9 @@
   resize: none;
   min-height: 56px;
   max-height: 160px;
-  font-size: 15px;
-  line-height: 24px;
+  font-family: var(--preferred-conversation, var(--font-ui));
+  font-size: var(--composer-font-size);
+  line-height: var(--composer-line-height);
   font-weight: 450;
 }
 .member-composer textarea::placeholder {
@@ -308,8 +315,8 @@
   display: block;
   margin-top: 8px;
   color: var(--subtle);
-  font-size: 10px;
-  line-height: 16px;
+  font-size: calc(10px * var(--font-scale));
+  line-height: calc(16px * var(--font-scale));
 }
 .conversation-activity {
   color: var(--subtle);
@@ -324,7 +331,7 @@
   flex-wrap: wrap;
   gap: 8px;
   min-height: 28px;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 .activity-context small {
   color: var(--subtle);
@@ -335,8 +342,8 @@
 }
 .activity-readable {
   color: var(--secondary);
-  font-size: 13px;
-  line-height: 21px;
+  font-size: calc(13px * var(--font-scale));
+  line-height: calc(21px * var(--font-scale));
   overflow-wrap: anywhere;
 }
 .activity-readable p {
@@ -355,7 +362,7 @@
   align-items: center;
   gap: 6px;
   color: var(--subtle);
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
   padding: 4px 0 10px;
 }
 .activity-summary svg,
@@ -381,7 +388,7 @@
   min-height: 28px;
   color: var(--subtle);
   text-align: left;
-  font-size: 13px;
+  font-size: calc(13px * var(--font-scale));
 }
 .activity-toggle > span {
   overflow: hidden;
@@ -397,7 +404,7 @@
 }
 .activity-toggle small {
   white-space: nowrap;
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale));
   color: var(--danger);
 }
 .activity-item.running .activity-toggle {
@@ -406,16 +413,24 @@
 .activity-item.failed .activity-toggle {
   color: var(--danger);
 }
+.activity-command-list {
+  margin-left: 7px;
+  padding-left: 15px;
+  border-left: 1px solid var(--line);
+}
+.activity-command-list > .activity-item {
+  margin: 2px 0;
+}
 .activity-body {
   overflow: hidden;
   margin-left: 23px;
-  font-size: 12px;
-  line-height: 20px;
+  font-size: calc(12px * var(--font-scale));
+  line-height: calc(20px * var(--font-scale));
 }
 .activity-body > .message-text {
   color: var(--secondary);
-  font-size: 14px;
-  line-height: 22px;
+  font-size: calc(14px * var(--content-scale));
+  line-height: calc(22px * var(--content-scale));
   margin-block: 6px 12px;
 }
 .activity-body pre {
@@ -428,7 +443,8 @@
   border-radius: 6px;
   color: var(--secondary);
   background: var(--surface-top);
-  font: 11px/18px var(--font-mono);
+  font: calc(11px * var(--code-scale))/calc(18px * var(--code-scale))
+    var(--font-mono);
   margin: 5px 0 9px;
 }
 .activity-change > span {
@@ -446,8 +462,8 @@
   margin-block: 12px;
 }
 .exchange-intro {
-  font-size: 12px;
-  line-height: 20px;
+  font-size: calc(12px * var(--font-scale));
+  line-height: calc(20px * var(--font-scale));
   color: var(--subtle);
   margin-bottom: 20px;
 }
@@ -468,14 +484,14 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--font-scale));
 }
 .exchange-route strong {
   font-weight: 500;
 }
 .exchange-route time {
   margin-left: auto;
-  font-size: 10px;
+  font-size: calc(10px * var(--font-scale));
   color: var(--subtle);
 }
 .exchange-copy {
@@ -484,14 +500,14 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
   color: var(--secondary);
-  font-size: 13px;
-  line-height: 21px;
+  font-size: calc(13px * var(--font-scale));
+  line-height: calc(21px * var(--font-scale));
 }
 .exchange-meta {
   display: flex;
   justify-content: space-between;
   color: var(--subtle);
-  font-size: 11px;
+  font-size: calc(11px * var(--font-scale));
 }
 .exchange-row.processing .exchange-meta,
 .exchange-row.queued .exchange-meta {
@@ -519,16 +535,16 @@
   height: 19px;
 }
 .collaboration-view .graph-copy strong {
-  font-size: 14px;
+  font-size: calc(14px * var(--font-scale));
   font-weight: 550;
-  line-height: 20px;
+  line-height: calc(20px * var(--font-scale));
   display: block;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 .collaboration-view .graph-copy > span {
-  font-size: 12px;
-  line-height: 18px;
+  font-size: calc(12px * var(--font-scale));
+  line-height: calc(18px * var(--font-scale));
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -540,8 +556,8 @@
   padding: 9px 16px;
   min-height: 34px;
   border-radius: 0 0 9px 9px;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: calc(12px * var(--font-scale));
+  line-height: calc(18px * var(--font-scale));
   background: transparent;
 }
 .node-harness {

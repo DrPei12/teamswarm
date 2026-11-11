@@ -9,6 +9,7 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rea
 import path from "node:path";
 import { createConnection } from "node:net";
 import { fileURLToPath } from "node:url";
+import { verifyCompiledOutputs } from "./release-identity.mjs";
 
 const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const runId = randomUUID(), tokens = new Set();
@@ -79,6 +80,8 @@ function filesIn(root, relative) {
   });
 }
 async function codeManifest(root) {
+  const build = JSON.parse(readFileSync(path.join(root, "build-identity.json"), "utf8"));
+  const compiledFiles = verifyCompiledOutputs(root, build.outputs);
   const runtime = JSON.parse(readFileSync(path.join(root, "runtime-manifest.json"), "utf8"));
   const required = ["package.json", runtime.nodeFile, runtime.codexFile, "scripts/start-product.mjs", "apps/server/dist/app.js", "apps/server/dist/runtime/catalog.js", "apps/server/dist/runtime/host-context.js", "apps/server/dist/runtime/collaboration-records.js", "apps/server/dist/runtime/allocation.js", "apps/server/dist/runtime/allocation-portable.js", "apps/server/dist/runtime/harness/session-scope.js", "teamswarm/dist/index.html", "node_modules/express/package.json"];
   for (const file of required) assert(existsSync(path.join(root, file)), "Missing packaged file: " + file);
@@ -92,7 +95,7 @@ async function codeManifest(root) {
   for (const relative of ["TeamSwarm.exe", "resources/app.asar"])
     if (existsSync(path.join(desktopRoot, relative)))
       desktop.push({ path: relative, ...await hashFile(path.join(desktopRoot, relative)) });
-  return { sha256: digest(JSON.stringify({ files, desktop })), files, desktop };
+  return { sha256: digest(JSON.stringify({ files, desktop })), compiledFiles, files, desktop };
 }
 async function check(name, action) {
   const result = { name, startedAt: new Date().toISOString(), passed: false };

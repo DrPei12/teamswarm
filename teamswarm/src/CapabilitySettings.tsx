@@ -251,7 +251,7 @@ export function CapabilitySettings({
                             aria-label={t("Allow {name}", { name: h.name })}
                           >
                             <span className="cap-harness-check" aria-hidden>
-                              {selected && <Check size={13} />}
+                              {selected && <Check size={16} />}
                             </span>
                             <span className="cap-harness-copy">
                               <strong>{h.name}</strong>
@@ -282,7 +282,7 @@ export function CapabilitySettings({
                                 ? "Manage installation"
                                 : "Install on device",
                             )}
-                            <ChevronDown size={12} />
+                            <ChevronDown size={16} />
                           </button>
                         </div>
                         <Disclosure open={manage === h.id}>
@@ -400,6 +400,56 @@ export function CapabilitySettings({
             )}
             {tab === "preferences" && (
               <>
+                <fieldset className="cap-priority cap-worker-policy">
+                  <legend>{t("Worker permission policy")}</legend>
+                  <div>
+                    {(
+                      [
+                        [
+                          "request",
+                          "Approval on demand",
+                          "New members start read-only. Host asks in the conversation before expanding permissions.",
+                        ],
+                        [
+                          "autonomous",
+                          "Autonomous execution",
+                          "Host manages worker permissions and prefers the highest supported access for new members.",
+                        ],
+                      ] as const
+                    ).map(([value, label, help]) => (
+                      <label
+                        key={value}
+                        className={
+                          (draft.preferences.workerPolicy ?? "request") ===
+                          value
+                            ? "selected"
+                            : ""
+                        }
+                      >
+                        <input
+                          type="radio"
+                          name="worker-policy"
+                          value={value}
+                          checked={
+                            (draft.preferences.workerPolicy ?? "request") ===
+                            value
+                          }
+                          onChange={() =>
+                            setDraft({
+                              ...draft,
+                              preferences: {
+                                ...draft.preferences,
+                                workerPolicy: value,
+                              },
+                            })
+                          }
+                        />
+                        <strong>{t(label)}</strong>
+                        <span>{t(help)}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
                 <fieldset className="cap-priority">
                   <legend>{t("When choosing models")}</legend>
                   <div>
@@ -601,7 +651,7 @@ function ConnectionEditor({
     if (!secret.trim()) return draft.credentialEnv;
     const r = await api<{ reference: string }>(
       `/product/teams/${teamId}/credential`,
-      { secret: secret.trim() },
+      { secret: secret.trim(), purpose: "connection" },
       "PUT",
     );
     setSecret("");
@@ -846,6 +896,7 @@ function ConnectionEditor({
                 { id: "codex", name: "Codex local sign-in" },
                 { id: "claude-code", name: "Claude" },
                 { id: "grok", name: "Grok" },
+                { id: "antigravity", name: "Antigravity" },
               ].map((a) => (
                 <button
                   type="button"

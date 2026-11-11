@@ -2,9 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { applicationDataBase, dataDirectory } from '../scripts/platform.cjs';
 import { desktopTarget } from '../scripts/desktop-platform.mjs';
+import { builderCache, canRenameInside } from '../scripts/builder-cache.mjs';
+import { keepCallerIntegrity, lowIntegrityLabel } from '../scripts/release-integrity.mjs';
 import { installCredentialBridge } from '../apps/desktop/credential-bridge.cjs';
 
 test('the lockfile contains Rollup binaries for all three desktop targets', () => {
@@ -79,4 +83,36 @@ test('credential bridge routes encryption/decryption and preserves the request i
   assert.equal(encrypted.id, id);
   const decrypted = await request({ operation: 'decrypt', value: encrypted.value });
   assert.equal(decrypted.value, 'public-test-fixture');
+});
+
+test('packaging tools move to a temporary cache when the standard cache cannot rename folders', () => {
+  const standard = '/profile/electron-builder', fallback = '/tmp/electron-builder-cache';
+  assert.equal(builderCache({ standard, fallback, usable: () => true }), undefined);
+  assert.equal(builderCache({ standard, fallback, usable: directory => directory === fallback }), fallback);
+  assert.equal(builderCache({ configured: ' /chosen ', standard, fallback, usable: () => false }), '/chosen');
+  assert.throws(() => builderCache({ standard, fallback, usable: () => false }), /ELECTRON_BUILDER_CACHE/);
+});
+
+test('the rename check leaves nothing behind', () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'teamswarm-cache-'));
+  try {
+    assert.equal(canRenameInside(path.join(directory, 'cache')), true);
+    assert.deepEqual(readdirSync(path.join(directory, 'cache')), []);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('a release folder that would lower the rights of packaging helpers is relabelled', () => {
+  const low = 'release\r\nD:AI(A;OICIID;FA;;;BA)S:AI(ML;OICIID;NW;;;LW)\r\n', normal = 'release\r\nD:AI(A;OICIID;FA;;;BA)\r\n';
+  assert.equal(lowIntegrityLabel(low), true);
+  assert.equal(lowIntegrityLabel(normal), false);
+  assert.equal(lowIntegrityLabel('S:(ML;OICI;NW;;;ME)'), false);
+  const relabelled = [];
+  const apply = directory => { relabelled.push(directory); return true; };
+  assert.equal(keepCallerIntegrity('out', { platform: 'win32', inspect: () => low, apply }), true);
+  assert.equal(keepCallerIntegrity('out', { platform: 'win32', inspect: () => normal, apply }), false);
+  assert.equal(keepCallerIntegrity('out', { platform: 'linux', inspect: () => low, apply }), false);
+  assert.deepEqual(relabelled, ['out']);
+  assert.throws(() => keepCallerIntegrity('out', { platform: 'win32', inspect: () => low, apply: () => false }), /Low integrity label/);
 });

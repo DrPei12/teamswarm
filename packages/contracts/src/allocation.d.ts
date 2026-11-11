@@ -1,6 +1,7 @@
 import type { Access, ExecutionConfig, WorkStatus } from "./runtime.js";
 
 export type ConnectionProtocol = "responses" | "chat-completions" | "anthropic-messages";
+export type MemberPermissionPreset = "read-only" | "workspace-write" | "manual" | "auto" | "full-access";
 export interface ModelAccess {
   id: string;
   name: string;
@@ -20,6 +21,7 @@ export interface TeamCapabilities {
     priority: "balanced" | "economy" | "quality";
     preferSubscription: boolean;
     instructions: string;
+    workerPolicy?: "request" | "autonomous";
   };
 }
 
@@ -44,7 +46,7 @@ export interface AttemptExecutionSnapshot {
 }
 export interface AllocationRequest {
   expectedRevision: number;
-  selection: ResourceSelection;
+  selection: ResourceSelection | null;
 }
 export type CompatibilityIssue = "unknown_harness" | "incompatible_protocol" |
   "missing_configuration" | "unsupported_effort" | "unsupported_thinking_format" | "unsupported_output_budget" | "unsupported_context_window";
@@ -71,6 +73,8 @@ export interface EffectiveSelection {
   selection: ResourceSelection | null;
 }
 export interface AllocationBoundary {
+  /** Defaults affect future Attempts; task edits require a nonexecuting Work. */
+  scope?: AllocationScope;
   status: WorkStatus;
   currentRevision: number;
   expectedRevision: number;

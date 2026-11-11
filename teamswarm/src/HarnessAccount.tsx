@@ -10,9 +10,10 @@ import {
 import { api } from "./service";
 import { useI18n } from "./i18n";
 import { Disclosure } from "./Disclosure";
+import { AntigravityAccount } from "./AntigravityAccount";
 
 export const hasSubscription = (harness: string) =>
-  harness === "claude-code" || harness === "grok";
+  harness === "claude-code" || harness === "grok" || harness === "antigravity";
 type Login = {
   id: string;
   state:
@@ -35,7 +36,20 @@ type Account = {
 };
 
 /** Account checks and model execution are deliberately separate observations. */
-export function HarnessAccount({
+type HarnessAccountProps = {
+  harness: string;
+  model: string | null;
+  revision?: number;
+  onChanged: () => void;
+};
+export function HarnessAccount(props: HarnessAccountProps) {
+  return props.harness === "antigravity" ? (
+    <AntigravityAccount onChanged={props.onChanged} />
+  ) : (
+    <SubscriptionAccount {...props} />
+  );
+}
+function SubscriptionAccount({
   harness,
   model,
   revision = 0,

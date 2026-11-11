@@ -1,3 +1,4 @@
+import {rememberAccountWindows} from "./context-window.js";
 import { createServer, type Server } from "node:http";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
@@ -503,6 +504,7 @@ export class ChatGPTAccounts {
       throw new Error(
         "ChatGPT returned an invalid model catalog. Try loading it again.",
       );
+    rememberAccountWindows(id, data.models);
     const seen = new Set<string>();
     return data.models
       .filter(

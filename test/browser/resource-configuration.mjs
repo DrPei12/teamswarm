@@ -15,7 +15,9 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const data = mkdtempSync(path.join(tmpdir(), "teamswarm-resource-editor-"));
 const server = createServer().listen(0, "127.0.0.1");
 await new Promise(resolve => server.once("listening", resolve));
-const service = createApp({ dataDir: data, apiPort: server.address().port,
+// Exercise the retained editor only in this isolated fixture. The shipped client
+// keeps manualResourceConfiguration false; paused-resource-settings checks that boundary.
+const service = createApp({ dataDir: data, apiPort: server.address().port, manualResourceConfiguration: true,
   harnesses: [new NativeHarness("pi"), new NativeHarness("opencode"), new CodexHarness()], webDistDir: path.join(root, "teamswarm/dist") });
 server.on("request", service.app);
 let browser;

@@ -23,6 +23,7 @@ import {
 import { codexCommand } from "./codex.js";
 import { nativeEntry, terminateNative } from "./native-support.js";
 import { badRequest, conflict } from "../../errors.js";
+import { antigravityInspection } from "./antigravity.js";
 
 const repository = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -171,6 +172,14 @@ export class HarnessManagement {
     }
   }
   async status(id: string, checkUpdates = true, forceUpdate = false) {
+    if (id === "antigravity") {
+      const inspected = await antigravityInspection(forceUpdate);
+      const url = "https://antigravity.google/docs/cli/acp/";
+      return { id, installed: inspected.installed, version: inspected.version,
+        latestVersion: null, updateAvailable: null, updateError: null,
+        releaseUrl: url, installUrl: url, canInstall: false, installVersion: "",
+        scope: inspected.installed ? "device" : null, job: null };
+    }
     const definition = this.definition(id),
       entry = this.entry(id),
       device = deviceEntry(id);

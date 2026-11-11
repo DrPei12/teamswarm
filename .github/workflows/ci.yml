@@ -31,6 +31,10 @@ jobs:
       - run: node teamswarm/node_modules/playwright/cli.js install chromium
       - run: node test/browser/offline-drafts.mjs
       - run: node test/browser/project-history.mjs
+      - run: node test/browser/host-execution-feedback.mjs
+      - run: node test/browser/native-questions.mjs
+      - run: node test/browser/pending-requests.mjs
+      - run: node test/browser/responsive-questions.mjs
       - run: node teamswarm/scripts/verify-composer.mjs
       - run: node teamswarm/scripts/verify-subscription-models.mjs
       - run: node teamswarm/scripts/verify-frontend-stability.mjs
@@ -38,5 +42,11 @@ jobs:
       - run: npm run harness:install -- pi opencode
       - run: node test/browser/resource-configuration.mjs
       - run: node test/browser/execution-permissions.mjs
+      - run: node test/browser/paused-resource-settings.mjs
+      - run: node test/browser/appearance.mjs
+      - run: node test/browser/context-window.mjs
+      - run: node test/browser/composer-scroll.mjs
+      - run: node test/browser/sent-images.mjs
+      - run: node test/browser/deepseek-effort.mjs
       - run: node test/native/opencode-output-budget.mjs
       - run: node test/native/pi-model-configuration.mjs

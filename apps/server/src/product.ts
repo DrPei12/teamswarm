@@ -1,9 +1,17 @@
+import {contextWindowPresetIds,type ContextWindowPreset} from "@team/contracts/context-window";
+import {memberContextWindow} from "./runtime/context-window.js";
+import { hostExecution, projectHostExecutions } from "./host-execution.js";
+import { contextWindowUsage } from "./product-context.js";
 import { permissionCatalog, mergePermissionChoice } from "./runtime/permission-options.js";
-import { nativePermissions } from "./runtime/harness/permissions.js";
+import { nativePermissions, validateNativePermissions } from "./runtime/harness/permissions.js";
+import { setHostConfiguration } from "./runtime/allocation.js";
+import { allocationTaskIds } from "./runtime/allocation-tasks.js";
+import { memberPermissionPreset } from "./runtime/member-permissions.js";
 import { harnessManifest } from "@team/contracts/harness-catalog";
 import express, { Router } from "express";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
 import type {
@@ -47,6 +55,7 @@ import {
 } from "./member-conversation.js";
 
 type Preferences = {
+  contextWindowPreset?: ContextWindowPreset;
   name: string;
   theme: Workspace["theme"];
   language: Workspace["language"];
@@ -61,6 +70,7 @@ type Preferences = {
 };
 const freshPreferences = (): Preferences => ({
   name: "TeamSwarm",
+  contextWindowPreset: "auto",
   theme: "light",
   language: "en",
   teams: {},
@@ -234,7 +244,6 @@ export class ProductStore {
           effort: null,
           access: "workspace-write",
         },
-        maxWorksPerRun: 20,
         timeoutSeconds: 600,
       },
       0,
@@ -288,6 +297,7 @@ export class ProductStore {
       name: p.name,
       theme: p.theme,
       language: p.language,
+      contextWindowPreset: p.contextWindowPreset ?? "auto",
       teams: [],
       chats: [],
       skills: p.skills,
@@ -298,7 +308,7 @@ export class ProductStore {
       connections: [],
       deliveries: [],
       updates: [],
-      service: { revision, migrated: true },
+      service: { revision, migrated: true, manualResourceConfiguration: this.runtime.catalog.manualResourceConfiguration },
       executions: {},
       projectNodes: [],
       projectBranches: [],
@@ -341,6 +351,7 @@ export class ProductStore {
       workspace.executions![team.id] = {
         settings,
         works: state.works,
+        ...(this.runtime.catalog.manualResourceConfiguration ? { allocationTaskIds: allocationTaskIds(state) } : {}),
         runs: state.runs,
         attempts,
         latestEvent: events.at(-1)?.sequence ?? 0,
@@ -352,32 +363,25 @@ export class ProductStore {
         : this.runtime.history.ensure(team.id).id;
       const hostAllocation = hostMember ? this.runtime.catalog.memberExecution(team.id, activeBranch, hostMember) : null;
       const hostConfig = hostAllocation?.config ?? settings?.config;
+      const runningHostAttempt = attempts.find(a => a.memberId === hostMember?.id &&
+        ["running", "stopping"].includes(a.status) &&
+        state.runs.some(r => r.id === state.works.find(w => w.id === a.workId)?.runId && this.runtime.history.forRun(r).id === activeBranch));
+      const nextContextWindow=hostMember && hostConfig ? memberContextWindow(this.db,team.id,hostMember.id,hostConfig,p.contextWindowPreset??"auto") : undefined;
       if (hostMember && hostConfig) workspace.executions![team.id].host = {
-        config: hostConfig, permissionVersion: hostMember.permissionVersion ?? 1,
+        nextContextWindow, config: hostConfig, permissionVersion: hostMember.permissionVersion ?? 1,
+        configurationVersion: hostAllocation?.allocationRevision ?? 1,
+        runningConfig: runningHostAttempt?.config,
         memberId: hostMember.id, branchId: activeBranch,
+        selection: hostAllocation?.selection ?? null,
+        selectionCurrent: hostAllocation?.selectionCurrent,
       };
-      const latestUsage = attempts
-        .filter(
-          (a) =>
-            a.usage &&
-            a.memberId === hostId &&
-            (!prefs.lastChatId ||
-              state.runs.find(
-                (r) =>
-                  r.id === state.works.find((w) => w.id === a.workId)?.runId,
-              )?.conversationId === prefs.lastChatId),
-        )
-        .at(-1)?.usage;
-      const last = latestUsage?.last as Record<string, unknown> | undefined;
-      const used = Number(
-        last?.totalTokens ??
-          last?.inputTokens ??
-          latestUsage?.inputTokens ??
-          latestUsage?.input_tokens,
-      );
-      const limit = Number(
-        latestUsage?.contextWindow ?? latestUsage?.modelContextWindow,
-      );
+      const currentChat = prefs.lastChatId ?? mainChatId;
+      const dialogueRunIds = new Set(state.runs.filter(r => r.conversationId === currentChat).map(r => r.id));
+      const dialogueWorks = new Set(state.works.filter(w => dialogueRunIds.has(w.runId) && w.memberId === hostId &&
+        w.kind !== "host-followup" && w.kind !== "collaboration").map(w => w.id));
+      const contextAttempt = attempts.filter(a => a.memberId === hostId && dialogueWorks.has(a.workId)).at(-1);
+      const contextConfig = contextAttempt && ["running", "stopping"].includes(contextAttempt.status) ? contextAttempt.config : hostConfig;
+      const context = contextWindowUsage(this.db, contextConfig, contextAttempt, nextContextWindow);
       workspace.teams.push({
         ...prefs,
         mainChatId,
@@ -385,6 +389,7 @@ export class ProductStore {
         name: team.name,
         color: prefs.color ?? "#7774cf",
         configured: !!settings,
+        ...(team.archivedAt ? { archived: true } : {}),
         runtime: {
           harness:
             harnessManifest(hostConfig?.harness ?? "")?.name ??
@@ -393,9 +398,7 @@ export class ProductStore {
           model: hostAllocation?.selectionCurrent === false && !hostAllocation.selectionRetained ? "Reselect resource" : hostConfig?.model ?? "",
           effort: hostConfig?.effort ?? "Default",
         },
-        ...(Number.isFinite(used) && limit > 0
-          ? { context: { used, limit } }
-          : {}),
+        context,
       });
       const conversations = this.runtime.store.teams.getTeamDetail(
         team.id,
@@ -441,8 +444,13 @@ export class ProductStore {
             ).values(),
           ];
 
+          const executionWork = state.works.find(w => w.id === attempt?.workId);
+          const executionRun = state.runs.find(r => r.id === executionWork?.runId);
           return {
             id: meta.legacyId ?? m.id,
+            ...(attempt && executionWork && executionRun
+              ? { execution: hostExecution(this.runtime, executionWork, executionRun, attempt) }
+              : {}),
             recordId: m.id,
             text: m.content,
             role: m.role === "assistant" ? "host" : "user",
@@ -459,45 +467,17 @@ export class ProductStore {
               : undefined,
           };
         });
-        for (const work of (page ? [] : state.works).filter(
-          (w) =>
-            active.has(w.status) &&
-            w.kind !== "host-followup" &&
-            w.kind !== "collaboration" &&
-            state.members.find((m) => m.id === w.memberId)?.kind === "host" &&
-            state.runs.find((r) => r.id === w.runId)?.conversationId ===
-              conversation.id,
-        )) {
-          const attempt = attempts.find((a) => a.id === work.attemptId);
-          if (!attempt) continue;
-          const deltas = this.db
-            .prepare(
-              "SELECT data FROM runtime_events WHERE attempt_id=? AND type='message.delta' ORDER BY sequence",
-            )
-            .all(attempt.id);
-          const items = transcriptItems(this.runtime, attempt);
-          const text = items.length
-            ? items
-                .filter((i) => i.kind === "message" && i.phase !== "commentary")
-                .map((i) => i.text)
-                .join("\n\n")
-            : deltas
-                .map((e) => String(JSON.parse(String(e.data)).delta ?? ""))
-                .join("");
-          const activity = items.filter(
-            (i) => i.kind !== "message" || i.phase === "commentary",
-          );
-          if (text || activity.length)
-            messages.push({
-              id: `stream:${attempt.id}`,
-              text,
-              files: [],
-              role: "host",
-              createdAt: Date.parse(attempt.startedAt),
-              pending: true,
-              activity,
-            });
-        }
+        projectHostExecutions({
+          runtime: this.runtime,
+          teamId: team.id,
+          conversationId: conversation.id,
+          sourceMessageIds: new Set(detail.messages.map(m => m.id)),
+          messages,
+          works: state.works,
+          runs: state.runs,
+          members: state.members,
+          attempts,
+        });
         workspace.chats.push({
           ...chatPrefs,
           id: conversation.id,
@@ -757,6 +737,7 @@ export class ProductStore {
           ...p.positions[id],
           id,
           removedAt: member.removedAt,
+          purgedAt: member.purgedAt,
           teamId: team.id,
           name: member.kind === "host" ? "Host" : member.name,
           responsibility: member.responsibility,
@@ -787,7 +768,9 @@ export class ProductStore {
               "Default",
           ),
           executionConfig: nextExecution?.config,
+          runningExecutionConfig: attempts.find(a => a.memberId === member.id && ["running", "stopping"].includes(a.status))?.config,
           configurationVersion: nextExecution?.allocationRevision,
+          resourceSelection: nextExecution?.selection ?? null,
           sessionId: latestAttempt?.sessionId ?? undefined,
           workId: work?.id,
           error: work?.error,
@@ -1007,6 +990,25 @@ export function productRoutes(runtime: TeamRuntime): Router {
     },
   );
   router.get("/product/permission-options", (_req, res) => res.json(permissionCatalog(runtime.harnesses)));
+  router.get("/product/teams/:teamId/member-permission-options", (req, res) => {
+    const teamId = parse(key, req.params.teamId);
+    if (!runtime.store.settings(teamId)) throw notFound();
+    const harness = parse(z.string().min(1).max(64), req.query.harness);
+    res.json(runtime.memberPermissions.options(teamId, harness));
+  });
+  router.post("/product/teams/:teamId/permission-config",(req,res)=>{
+    const teamId=parse(key,req.params.teamId);
+    const input=parse(z.object({config:executionConfig,preset:z.enum(["read-only","full-access"])}).strict(),req.body);
+    const config=runtime.memberPermissions.configuration(teamId,input.config,input.preset);validateNativePermissions(config);res.json(config);
+  });
+  router.put("/product/teams/:teamId/branches/:branchId/host/permission-preset",(req,res)=>{
+    const input=parse(z.object({expectedVersion:z.number().int().positive(),preset:z.enum(["read-only","full-access"])}).strict(),req.body);
+    res.json(runtime.memberPermissions.setHostFromUser(parse(key,req.params.teamId),parse(key,req.params.branchId),input.expectedVersion,input.preset));
+  });
+  router.put("/product/teams/:teamId/members/:memberId/permission-preset", (req, res) => {
+    const input = parse(z.object({ expectedVersion: z.number().int().positive(), preset: memberPermissionPreset }).strict(), req.body);
+    res.json(runtime.memberPermissions.setFromUser(parse(key, req.params.teamId), parse(key, req.params.memberId), input.expectedVersion, input.preset));
+  });
   router.put("/product/teams/:teamId/members/:memberId/permissions", (req, res) => {
     const teamId = parse(key, req.params.teamId), memberId = parse(key, req.params.memberId);
     const input = parse(z.object({ expectedVersion: z.number().int().positive(), branchId: key,
@@ -1031,13 +1033,24 @@ export function productRoutes(runtime: TeamRuntime): Router {
       } else {
         member.config = next;
         delete member.selection;
+        delete member.selectionSource;
         delete member.permissionOverride;
         member.allocationVersion = version + 1;
+        member.permissionVersion = (member.permissionVersion ?? 1) + 1;
       }
       runtime.store.save("members", member);
       runtime.store.event(teamId, "member.configuration", { memberId, permissions: true });
     });
     res.json({ config: next, version: version + 1 });
+  });
+  router.put("/product/teams/:teamId/branches/:branchId/host/runtime", (req, res) => {
+    const teamId = parse(key, req.params.teamId);
+    const branchId = parse(key, req.params.branchId);
+    const input = parse(z.object({
+      expectedVersion: z.number().int().positive(), config: executionConfig,
+    }).strict(), req.body);
+    runtime.validateConfig(input.config);
+    res.json(setHostConfiguration(runtime, teamId, branchId, input.expectedVersion, input.config));
   });
   router.put("/product/teams/:teamId/members/:memberId/runtime", (req, res) => {
     const teamId = parse(key, req.params.teamId);
@@ -1049,7 +1062,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
     runtime.validateConfig(input.config);
     const member = runtime.store.activeMember(teamId, memberId);
     if (member.kind === "host")
-      throw badRequest("host_configuration", "Change Host configuration through Team runtime settings.");
+      throw badRequest("host_configuration", "Change Host configuration in its conversation.");
     const current = runtime.catalog.memberExecution(teamId, member.branchId ?? runtime.history.ensure(teamId).id, member);
     if (current.allocationRevision !== input.expectedVersion)
       throw conflict("version_conflict", "Member configuration changed. Try again.");
@@ -1058,8 +1071,11 @@ export function productRoutes(runtime: TeamRuntime): Router {
     // Attempts already running keep their frozen configuration and session.
     // A composer choice replaces only this member's default, never a shared resource.
     runtime.store.transaction(() => {
+      if (member.config.harness !== input.config.harness || !isDeepStrictEqual(member.config.permissions, input.config.permissions))
+        member.permissionVersion = (member.permissionVersion ?? 1) + 1;
       member.config = input.config;
       delete member.selection;
+      delete member.selectionSource;
       member.allocationVersion = current.allocationRevision + 1;
       runtime.store.save("members", member);
       runtime.store.event(teamId, "member.configuration", { memberId });
@@ -1163,9 +1179,13 @@ export function productRoutes(runtime: TeamRuntime): Router {
     const teamId = parse(key, req.params.teamId);
     if (!runtime.store.teams.getTeam(teamId)) throw notFound();
     const input = parse(
-      z.object({ secret: z.string().trim().min(8).max(16000) }).strict(),
+      z.object({ secret: z.string().trim().min(8).max(16000), purpose: z.enum(["connection", "runtime", "resource-panel"]).optional() }).strict(),
       req.body,
     );
+    // Older resource editors saved a key before submitting their resource. A paused save must not leave one behind.
+    if (!runtime.catalog.manualResourceConfiguration &&
+        (input.purpose === "resource-panel" || (res.locals.productSession && !input.purpose)))
+      throw conflict("resource_configuration_paused", "请在模型连接或运行时设置中保存密钥。");
     const reference =
       "TEAMSWARM_KEY_" +
       createHash("sha256")
@@ -1205,6 +1225,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
               name: z.string().min(1).max(80),
               theme: z.enum(["light", "dark", "system"]),
               language: z.enum(["en", "zh-CN"]).default("en"),
+              contextWindowPreset: z.enum(contextWindowPresetIds).optional(),
               teams: z
                 .array(
                   z
@@ -1314,6 +1335,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
           p.name = raw.name;
           p.theme = raw.theme;
           p.language = raw.language;
+          if(raw.contextWindowPreset) p.contextWindowPreset=raw.contextWindowPreset;
           p.drafts = raw.drafts;
           p.skills = raw.skills;
           p.plugins = raw.plugins;
@@ -1358,10 +1380,65 @@ export function productRoutes(runtime: TeamRuntime): Router {
       () => {
         const team = runtime.store.teams.createTeam(input.name, "");
         product.configureDefault(team.id);
-        return team;
+        // Bind the team's first Host conversation before the client navigates,
+        // so its first message cannot create an unrelated "Recent" chat.
+        return { ...team, mainChatId: runtime.history.mainConversation(team.id) };
       },
     );
     res.status(201).json(result);
+  });
+  // Work that is still dispatched or queued belongs to a live team. Archiving
+  // waits for it; removal stops what has not started and refuses live turns.
+  const teamWorks = (teamId: string, statuses: string[]) =>
+    runtime.store.list<Work>("works", teamId).filter(w => statuses.includes(w.status));
+  const requireAnotherTeam = (teamId: string) => {
+    if (!runtime.store.teams.listTeams().some(t => t.id !== teamId && !t.archivedAt))
+      throw conflict("last_team", "Keep at least one active team. Create another team first.");
+  };
+  router.patch("/product/teams/:teamId", (req, res) => {
+    const teamId = parse(key, req.params.teamId);
+    const input = parse(
+      z.object({ name: z.string().trim().min(1).max(80).optional(), archived: z.boolean().optional() }).strict(),
+      req.body,
+    );
+    const team = runtime.store.teams.getTeam(teamId);
+    if (!team) throw notFound();
+    if (input.archived === true && !team.archivedAt) {
+      requireAnotherTeam(teamId);
+      if (teamWorks(teamId, ["queued", "waiting", "running", "stopping"]).length)
+        throw conflict("team_busy", "Finish or stop this team's current work before archiving it.");
+    }
+    runtime.store.transaction(() => {
+      if (input.name !== undefined && input.name !== team.name) runtime.store.teams.renameTeam(teamId, input.name);
+      if (input.archived !== undefined && input.archived !== !!team.archivedAt)
+        runtime.store.teams.setTeamArchived(teamId, input.archived);
+    });
+    const saved = runtime.store.teams.getTeam(teamId)!;
+    res.json({ id: saved.id, name: saved.name, archived: !!saved.archivedAt });
+  });
+  router.delete("/product/teams/:teamId", async (req, res) => {
+    const teamId = parse(key, req.params.teamId);
+    if (!runtime.store.teams.getTeam(teamId)) throw notFound();
+    requireAnotherTeam(teamId);
+    if (teamWorks(teamId, ["running", "stopping"]).length)
+      throw conflict("team_busy", "Stop this team's running work before deleting it.");
+    for (const work of teamWorks(teamId, ["queued", "waiting"]))
+      await runtime.stop(teamId, work.id, "Team was deleted.");
+    if (teamWorks(teamId, ["queued", "waiting", "running", "stopping"]).length)
+      throw conflict("team_busy", "Stop this team's running work before deleting it.");
+    // Work left waiting for recovery would otherwise keep occupying its member and workspace.
+    runtime.store.transaction(() => {
+      for (const work of teamWorks(teamId, ["recovery_required"]))
+        runtime.store.setStatus(work, "interrupted", "Team was deleted.");
+    });
+    runtime.memberPermissions.list(teamId).forEach(request => runtime.memberPermissions.cancel(teamId, request.memberId));
+    runtime.store.teams.removeTeam(teamId);
+    product.update((p) => {
+      delete p.teams[teamId];
+      for (const id of Object.keys(p.drafts)) if (id === `new:${teamId}`) delete p.drafts[id];
+      p.skills = p.skills.filter(skill => skill.teamId !== teamId);
+    });
+    res.json({ id: teamId, deleted: true });
   });
   router.post("/product/conversations", (req, res) => {
     const input = parse(
@@ -1398,6 +1475,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
           name: z.string().trim().min(1).max(80).optional(),
           theme: z.enum(["light", "dark", "system"]).optional(),
           language: z.enum(["en", "zh-CN"]).optional(),
+          contextWindowPreset: z.enum(contextWindowPresetIds).optional(),
           drafts: z
             .record(z.string().max(200), draftInput.nullable())
             .optional(),
@@ -1459,6 +1537,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
         "name",
         "theme",
         "language",
+        "contextWindowPreset",
         "skills",
         "plugins",
         "readDeliveries",
@@ -1470,6 +1549,8 @@ export function productRoutes(runtime: TeamRuntime): Router {
         else p.drafts[id] = d;
       }
       for (const [id, values] of Object.entries(input.teams ?? {})) {
+        // Another window may still hold preferences for a team removed meanwhile.
+        if (runtime.store.teams.wasRemoved(id)) continue;
         if (!runtime.store.teams.getTeam(id)) throw notFound();
         p.teams[id] = {
           ...p.teams[id],
@@ -1731,6 +1812,8 @@ export function productRoutes(runtime: TeamRuntime): Router {
           workspace: z.string().trim().min(1).max(4096).optional(),
           config: executionConfig,
           maxConcurrent: z.number().int().positive().optional(),
+          // Same bounds as the runtime schema; omitted keeps the saved limit.
+          timeoutSeconds: z.number().int().min(10).max(3600).optional(),
         })
         .strict(),
       req.body,
@@ -1750,6 +1833,9 @@ export function productRoutes(runtime: TeamRuntime): Router {
           ...settings,
           workspace,
           config: input.config,
+          ...(input.timeoutSeconds !== undefined
+            ? { timeoutSeconds: input.timeoutSeconds }
+            : {}),
         },
         input.expectedVersion,
       ),

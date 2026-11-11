@@ -99,15 +99,15 @@ Open **Results and reasoning**, open **Current results**, expand a file and use 
 
 **Removed members** in **Collaboration** retains their conversations and work as read-only history. Removed members cannot receive new messages. If a message fails because its execution configuration changed, correct the configuration and retry the original message; the retry preserves its message and work identity.
 
+## Conversation context
+
+Settings → General → Context window offers Automatic, 128K, 256K, 512K and 1M. The selection applies to new Host and member turns in this workspace. The runtime limits the requested window by available model metadata and reserves space for compaction. The context ring shows the usable budget and the latest request's token count. When a previous turn used a different window, its figures and the next turn's budget are shown separately.
+
 ## Device resources and queued tasks
 
-The Host receives device memory, CPU, process usage, active work and resource settings when planning work. The runtime recalculates admission before each start. Team and service concurrency follow available resources and measured execution costs.
+The runtime measures available memory, Windows commit, CPU load and process usage. Memory figures help the Host inspect device usage. The scheduler uses CPU measurements and pending starts to decide when to dispatch more native work. A queued task can start when CPU capacity becomes available. Queue transitions are recorded as runtime events. Actual execution failures appear in the task status.
 
-Ask in the conversation to “reserve 8 GiB for other apps” or “restore automatic reservation.” Settings persist on this device and apply across all Teams in the service. Windows checks physical memory and commit headroom separately, alongside a CPU budget. Per-harness estimates adapt to measured execution, and starting tasks reserve their expected cost before the next sample.
-
-When resources delay tasks, the conversation shows the reason, affected tasks and default action. Running work continues. Users can change the reserve or task plan; without new instructions, tasks stay queued and resume when resources recover. A follow-up notice confirms actual execution. Notices are grouped during one continuous wait, with queue and notification state preserved across service restarts. One Host control turn remains available within actual device headroom so users can reduce an oversized reserve.
-
-Windows uses process-level sampling and process-group totals. Other systems use device memory and CPU samples with startup cost estimates.
+Windows provides process-level sampling and owned process-group totals. Other platforms use the measurements supported by their sampler.
 
 <a id="harnesses-and-models"></a>
 ## Harnesses and models
@@ -122,8 +122,11 @@ A harness runs an agent's tools and execution loop. A model connection supplies 
 | Pi | Separate device installation | Supported |
 | DeepSeek Harness | Separate device installation | A new native session reads saved TeamSwarm work |
 | OpenCode | Separate device installation | Supported |
+| Antigravity | Google's official Antigravity CLI (agy) | ACP session loading |
 
-Integration versions are pinned in [config/harnesses.json](config/harnesses.json). Harnesses own their tools, permissions and sessions; independent connections supply models. A connection can be assigned to any of the six harnesses. The local service translates Responses, Chat Completions and Anthropic Messages when their protocols differ.
+Versions of npm-managed integrations are pinned in [config/harnesses.json](config/harnesses.json). Harnesses own their tools, permissions and sessions. Codex, Claude Code, Grok, Pi, DeepSeek Harness and OpenCode can use shared model connections. The local service translates Responses, Chat Completions and Anthropic Messages when their protocols differ.
+
+Antigravity uses the Google account signed in through the official CLI. Install the CLI, enable Antigravity in Team capabilities and add an Antigravity subscription connection. Its native catalog supplies models and reasoning levels. The account panel can start Google sign-in. Model execution requires an eligible account and region. The integration uses official ACP sessions, tools and permission handling. [Antigravity CLI installation and ACP](https://antigravity.google/docs/cli/acp/)
 
 In Team capabilities, enable harnesses and add model connections separately. Select **ChatGPT → Continue with ChatGPT**, authorize on the official page, load the account's model catalog and choose models for the Host to allocate. Claude Code can use that ChatGPT connection while running its own commands, handling tool results and continuing its native session. **ChatGPT (Codex)** uses native Codex account authorization.
 

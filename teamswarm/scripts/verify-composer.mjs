@@ -68,6 +68,14 @@ const harnesses = [
     requests.push(request.config);
     request.onSession(request.sessionId ?? randomUUID());
     request.onTurn(randomUUID());
+    request.onEvent({
+      type: "context.usage",
+      data: {
+        inputTokens: 260900,
+        outputTokens: 100,
+        contextWindowTokens: 828000,
+      },
+    });
     return { status: "completed", text: "Local regression fixture." };
   },
   async interrupt() {},
@@ -189,16 +197,18 @@ try {
       catalogRequests++;
   });
   await page.goto(base + `/#/team/${team.id}/agent`);
-  await page
-    .locator(
-      '.permission-select[title="Permission switching is unavailable for this Harness."]',
-    )
-    .waitFor();
-  assert(
-    await page
-      .getByRole("button", { name: /^Execution permissions:/ })
-      .isDisabled(),
-  );
+  const hostPermissions = page.getByRole("button", {
+    name: "Execution permissions",
+    exact: true,
+  });
+  const permissionLabels = () =>
+    page
+      .getByRole("menuitemradio")
+      .locator(".item-label > span")
+      .allTextContents();
+  await hostPermissions.click();
+  assert.deepEqual(await permissionLabels(), ["Read-only"]);
+  await page.keyboard.press("Escape");
   const modelMenu = () =>
     page.getByRole("button", { name: "Choose model", exact: true }).click();
   await modelMenu();
@@ -209,21 +219,22 @@ try {
   const save = () =>
     page.waitForResponse(
       (r) =>
-        r.url().endsWith(`/product/teams/${team.id}/runtime`) &&
-        r.request().method() === "PUT",
+        r.url().endsWith(`/host/runtime`) && r.request().method() === "PUT",
     );
   const saved = await Promise.all([
     save(),
     page
-      .getByRole("button", { name: /qwen-plus secondary connection/ })
+      .getByRole("button", { name: /qwen-plus · secondary connection/ })
       .click(),
   ]);
   assert.equal(saved[0].status(), 200, await saved[0].text());
-  settings = service.runtime.store.settings(team.id);
-  assert.equal(settings.config.harness, "grok");
-  assert.equal(settings.config.provider, "secondary connection");
-  assert.equal(settings.config.credentialEnv, "TEST_SECONDARY");
-  assert.equal(settings.config.protocol, "chat-completions");
+  const hostConfig = async () =>
+    (await request("/product")).executions[team.id].host.config;
+  let selectedConfig = await hostConfig();
+  assert.equal(selectedConfig.harness, "grok");
+  assert.equal(selectedConfig.provider, "secondary connection");
+  assert.equal(selectedConfig.credentialEnv, "TEST_SECONDARY");
+  assert.equal(selectedConfig.protocol, "chat-completions");
   await page
     .getByRole("button", { name: "Choose harness", exact: true })
     .click();
@@ -232,16 +243,12 @@ try {
     page.getByRole("button", { name: "Claude Code", exact: true }).click(),
   ]);
   assert.equal(switched[0].status(), 200, await switched[0].text());
-  settings = service.runtime.store.settings(team.id);
-  assert.equal(settings.config.model, "qwen-plus");
-  assert.equal(settings.config.protocol, "anthropic-messages");
-  assert.equal(settings.config.baseUrl, "https://secondary.example/anthropic");
-  await page.getByRole("button", { name: /^Execution permissions:/ }).click();
-  for (const name of ["Request approval", "Automatic review", "Full access"])
-    assert.equal(
-      await page.getByRole("menuitemradio", { name, exact: true }).count(),
-      1,
-    );
+  selectedConfig = await hostConfig();
+  assert.equal(selectedConfig.model, "qwen-plus");
+  assert.equal(selectedConfig.protocol, "anthropic-messages");
+  assert.equal(selectedConfig.baseUrl, "https://secondary.example/anthropic");
+  await hostPermissions.click();
+  assert.deepEqual(await permissionLabels(), ["Read-only", "Full access"]);
   assert.equal(
     await page
       .getByText("Uses this Harness's native settings", { exact: true })
@@ -254,13 +261,13 @@ try {
   await page.getByRole("button", { name: /^Qwen 2$/ }).click();
   assert.equal(
     await page
-      .getByRole("button", { name: /qwen-plus secondary connection/ })
+      .getByRole("button", { name: /qwen-plus · secondary connection/ })
       .getAttribute("aria-pressed"),
     "true",
   );
   assert.equal(
     await page
-      .getByRole("button", { name: /qwen-plus primary connection/ })
+      .getByRole("button", { name: /qwen-plus · primary connection/ })
       .getAttribute("aria-pressed"),
     "false",
   );
@@ -430,10 +437,30 @@ try {
         radius: getComputedStyle(element).borderRadius,
       };
     });
-  assert.equal(metrics.size, "15px");
-  assert.equal(metrics.line, "20px");
-  assert.equal(metrics.radius, "20px");
-  assert(Math.abs(metrics.height - 140) <= 2, JSON.stringify(metrics));
+  assert.equal(metrics.size, "16px");
+  assert.equal(metrics.line, "24px");
+  assert.equal(metrics.radius, "18px");
+  assert(Math.abs(metrics.height - 158) <= 2, JSON.stringify(metrics));
+  const bundledFonts = await page.evaluate(async () => {
+    const loaded = await Promise.all([
+      document.fonts.load('400 16px "Noto Sans SC Variable"', "中文字体检查"),
+      document.fonts.load('600 16px "Noto Sans SC Variable"', "中文字体检查"),
+      document.fonts.load('400 16px "Source Serif 4 Variable"', "Reading"),
+      document.fonts.load(
+        'italic 400 16px "Source Serif 4 Variable"',
+        "Reading",
+      ),
+    ]);
+    return loaded.map(
+      (faces) =>
+        faces.length > 0 && faces.every((face) => face.status === "loaded"),
+    );
+  });
+  assert.deepEqual(
+    bundledFonts,
+    [true, true, true, true],
+    "Bundled Chinese weights and reading fonts must load",
+  );
   await page.screenshot({ path: path.join(root, "composer-1230.png") });
   for (const width of [1024, 760, 390]) {
     await page.setViewportSize({ width, height: 858 });
@@ -524,6 +551,7 @@ try {
   await page
     .locator(".composer-surface .image-attachment")
     .waitFor({ state: "detached" });
+  const sentText = await editor.inputValue();
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   const deadline = Date.now() + 12000;
   while (!requests.length && Date.now() < deadline)
@@ -533,6 +561,74 @@ try {
   assert.equal(requests[0].harness, "claude-code");
   assert.equal(requests[0].credentialEnv, "TEST_SECONDARY");
   assert.equal(requests[0].baseUrl, "https://secondary.example/anthropic");
+  const contextRing = page.getByRole("button", {
+    name: "Context window",
+    exact: true,
+  });
+  await contextRing.hover();
+  const contextDetail = page.getByRole("tooltip");
+  await contextDetail
+    .getByText("31% used (69% left)", { exact: true })
+    .waitFor();
+  assert.match(await contextDetail.innerText(), /261k of 828k tokens used/);
+  await page
+    .locator(".context-details")
+    .screenshot({ path: path.join(root, "context-window.png") });
+  await contextRing.click();
+  await page.mouse.move(0, 0);
+  assert(
+    await contextDetail.isVisible(),
+    "Click keeps the context details available without hovering",
+  );
+  await page.keyboard.press("Escape");
+  await contextDetail.waitFor({ state: "hidden" });
+  const sentMessage = page
+    .getByRole("log", { name: "Conversation" })
+    .locator(".message-user")
+    .last();
+  const actions = sentMessage.getByRole("button", { name: "Message actions" });
+  // Exercise clipboard feedback without altering the user's Windows clipboard.
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (text) => {
+          window.copiedMessage = text;
+        },
+      },
+    });
+  });
+  try {
+    await sentMessage.hover();
+    await actions.click();
+    await page.getByRole("menuitem", { name: "Copy message" }).click();
+    await page.getByText("Message copied", { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => window.copiedMessage), sentText);
+    await page.evaluate(() => {
+      navigator.clipboard.writeText = async () => {
+        throw new DOMException("Denied", "NotAllowedError");
+      };
+    });
+    await actions.focus();
+    await actions.press("Enter");
+    await page.getByRole("menuitem", { name: "Copy message" }).click();
+    await page.getByText("Copy failed", { exact: true }).waitFor();
+  } finally {
+    await page.evaluate(() => {
+      delete navigator.clipboard;
+    });
+  }
+  await request("/product/preferences", { language: "zh-CN" }, "PATCH");
+  await page.reload();
+  await page.getByRole("button", { name: "上下文窗口", exact: true }).hover();
+  await page
+    .getByRole("tooltip")
+    .getByText("31% 已用（剩余 69%）", { exact: true })
+    .waitFor();
+  await page
+    .locator(".context-details")
+    .screenshot({ path: path.join(root, "context-window-zh.png") });
+  await request("/product/preferences", { language: "en" }, "PATCH");
   const legacyTeam = await request("/product/teams", {
     name: "Legacy catalog regression",
     clientRequestId: randomUUID(),
@@ -787,7 +883,7 @@ try {
     assert.equal(controls.length, 4);
     assert.equal(
       await memberComposer
-        .getByRole("button", { name: /^Execution permissions:/ })
+        .getByRole("button", { name: "Execution permissions", exact: true })
         .count(),
       1,
     );
@@ -823,6 +919,7 @@ try {
           "Reload selected connection",
           "1230/1024/760/390 layout",
           "Resolved configuration reaches local execution fixture",
+          "Message actions copy the exact multiline text and report clipboard denial",
           "Legacy directory independent of current Harness",
           "Team connection isolation",
           "Warm menus: zero repeated requests and stable frame geometry",

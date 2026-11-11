@@ -286,6 +286,45 @@ test("a fresh Host includes the latest exchange before optional project context"
   } finally { await app.close(); }
 });
 
+test("a fresh Host excerpts earlier CJK text to fit the new model while keeping the current request in full", async () => {
+  const app = await setup();
+  try {
+    app.harness.capabilities.resume = false;
+    const oldText = "旧模型中的阅读材料".repeat(900);
+    app.harness.action = async () => ({ status: "completed", text: oldText });
+    await app.send("读取文章");
+    const nextConfig = { ...app.config, model: "deepseek-flash" };
+    const settings = app.service.runtime.store.settings(app.team.id);
+    const changed = await app.request(`/teams/${app.team.id}/runtime`, {
+      expectedVersion: settings.version, workspace: app.workspace, config: nextConfig,
+    }, "PUT");
+    assert.equal(changed.status, 200);
+    const original = app.service.runtime.hostContext.assemble.bind(app.service.runtime.hostContext);
+    app.service.runtime.hostContext.assemble = (...args) => {
+      args[7] = 17500;
+      return original(...args);
+    };
+    app.harness.action = async (request) => {
+      const input = JSON.parse(request.input);
+      assert.equal(request.config.model, "deepseek-flash");
+      assert.equal(input.execution.currentExecution.model, request.config.model);
+      assert.equal(input.work.instructions, "汇报你现在的配置");
+      const excerpt = input.history.find((m: any) => m.role === "assistant" && m.partial);
+      assert(excerpt && excerpt.content.length < oldText.length);
+      assert.equal(excerpt.characters, oldText.length);
+      return { status: "completed", text: "已读取本轮配置" };
+    };
+    const work = await app.send("汇报你现在的配置");
+    assert.equal(work.status, "submitted", work.error ?? undefined);
+    const frame = app.service.runtime.hostContext.frame(app.team.id, work.attemptId!);
+    assert(frame.inputTokensEstimate <= frame.budget.inputTokens);
+    assert(app.service.store.getConversationDetail(app.team.id, app.chat.id).messages.some(m => m.content === oldText));
+    const tooLong = await app.send("本轮必须完整处理".repeat(1200));
+    assert.equal(tooLong.status, "failed");
+    assert.match(tooLong.error ?? "", /exceed the available context/);
+  } finally { await app.close(); }
+});
+
 test("bounded long history, exact frame identity, searchable originals and recovery notes survive a fresh Host", async () => {
   const app = await setup();
   try {

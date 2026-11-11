@@ -12,6 +12,16 @@ export function clipboardFiles(data: DataTransfer): File[] {
     .filter((file): file is File => !!file);
 }
 
+export function isImageAttachment(file: Attachment) {
+  if (/^image\//i.test(file.type)) return true;
+  return (
+    (!file.type || file.type === "application/octet-stream") &&
+    /\.(?:png|jpe?g|gif|webp|avif|bmp|ico|svg|heic|heif|tiff?)$/i.test(
+      file.name,
+    )
+  );
+}
+
 export function AttachmentChip({
   file,
   onRemove,

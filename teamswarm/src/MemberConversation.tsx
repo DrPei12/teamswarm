@@ -378,6 +378,8 @@ function ConversationThread({
         located.current = requestAnchor ?? "";
         return;
       }
+      if (!requestAnchor && follow.current)
+        container.scrollTop = container.scrollHeight;
     }
     if (
       requestAnchor &&
@@ -404,7 +406,7 @@ function ConversationThread({
         });
         return () => cancelAnimationFrame(frame);
       }
-    } else if (follow.current) container.scrollTop = container.scrollHeight;
+    }
   }, [entries, requestAnchor, reduced, loading, positionKey, anchor]);
   useEffect(() => {
     if (!highlight) return;
@@ -412,10 +414,14 @@ function ConversationThread({
     return () => clearTimeout(timer);
   }, [highlight]);
   useEffect(() => {
-    if (!list.current) return;
+    const content = list.current;
+    if (!content) return;
+    let height = content.getBoundingClientRect().height;
     const observer = new ResizeObserver(() => {
-      if (follow.current && scroller.current)
+      const next = content.getBoundingClientRect().height;
+      if (next !== height && follow.current && scroller.current)
         scroller.current.scrollTop = scroller.current.scrollHeight;
+      height = next;
       if (
         !loading &&
         (!requestAnchor ||
@@ -424,7 +430,7 @@ function ConversationThread({
       )
         syncScrollPosition();
     });
-    observer.observe(list.current);
+    observer.observe(content);
     if (scroller.current) observer.observe(scroller.current);
     return () => observer.disconnect();
   }, [hasNewer, requestAnchor, loading]);
@@ -476,6 +482,9 @@ function ConversationThread({
       <div
         className="member-thread"
         ref={scroller}
+        role="log"
+        tabIndex={0}
+        aria-label={t("Member conversation")}
         onWheel={(event) => {
           inspectingActivity.current = false;
           stopAutoScroll();
@@ -490,7 +499,7 @@ function ConversationThread({
         onClickCapture={(event) => {
           if (
             (event.target as Element).closest(
-              ".activity-summary, .activity-toggle",
+              ".activity-summary, .activity-toggle, .delivery-history > summary",
             )
           ) {
             inspectingActivity.current = true;
@@ -516,18 +525,13 @@ function ConversationThread({
         onPointerDownCapture={(event) => {
           if (
             !(event.target as Element).closest(
-              ".activity-summary, .activity-toggle",
+              ".activity-summary, .activity-toggle, .delivery-history > summary",
             )
           )
             inspectingActivity.current = false;
         }}
       >
         <div ref={list} className="member-thread-content">
-          <ApprovalRequests
-            teamId={member.teamId}
-            memberId={member.id}
-            workspace={workspace}
-          />
           {hasMore && (
             <button
               className="load-earlier"
@@ -648,6 +652,38 @@ function ConversationThread({
                   pending={entry.status === "running"}
                 />
               )}
+              {entry.deliveryHistory && (
+                <details
+                  className="delivery-history"
+                  onToggle={(event) => {
+                    if (event.currentTarget.open) {
+                      inspectingActivity.current = true;
+                      stopAutoScroll();
+                    }
+                  }}
+                >
+                  <summary>
+                    {t("Delivery history ({count})", {
+                      count: entry.deliveryHistory.length,
+                    })}
+                  </summary>
+                  <ol>
+                    {entry.deliveryHistory.map((outcome) => (
+                      <li key={outcome.id}>
+                        <time
+                          dateTime={new Date(outcome.createdAt).toISOString()}
+                        >
+                          {new Date(outcome.createdAt).toLocaleString(locale)}
+                        </time>
+                        <span>{t(statusLabels[outcome.status])}</span>
+                        {outcome.error && (
+                          <p>{t(executionFeedback(outcome.error))}</p>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              )}
               {entry.messageKind === "accept" && entry.commitment && (
                 <div className="session-status">
                   <strong>{t("Commitment")}: </strong>
@@ -712,153 +748,164 @@ function ConversationThread({
           ))}
         </div>
       </div>
-      {(error || loadError) && (
-        <div className="member-error" role="alert">
-          {t(error || loadError)}
-        </div>
-      )}
-      {!member.removedAt && (
-        <ComposerSurface
-          className="member-composer"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send();
-          }}
-        >
-          {(!following || hasNewer) && (
-            <button
-              type="button"
-              className="thread-bottom"
-              aria-label={t("Scroll to latest")}
-              onClick={() => {
-                setRequestAnchor(undefined);
-                locatingUntil.current = 0;
-                inspectingActivity.current = false;
-                follow.current = true;
-                setFollowing(true);
-                scroller.current?.scrollTo({
-                  top: scroller.current.scrollHeight,
-                  behavior: reduced ? "instant" : "smooth",
-                });
-              }}
-            >
-              <ArrowDown size={15} />
-              {t("Latest")}
-            </button>
-          )}
-          <textarea
-            ref={input}
-            aria-label={t("Message {name}", { name: member.name })}
-            placeholder={
-              canSend
-                ? t("Message {name}…", { name: member.name })
-                : t("Waiting for an assignment")
-            }
-            value={draft}
-            disabled={!canSend}
-            onChange={(e) => {
-              const text = e.target.value;
-              onUpdate((old) => ({
-                ...old,
-                drafts: { ...old.drafts, [draftKey]: { text, files: [] } },
-              }));
+      <div className="member-action-area">
+        {(!following || hasNewer) && (
+          <button
+            type="button"
+            className="thread-bottom"
+            aria-label={t("Scroll to latest")}
+            onClick={() => {
+              setRequestAnchor(undefined);
+              locatingUntil.current = 0;
+              inspectingActivity.current = false;
+              follow.current = true;
+              setFollowing(true);
+              scroller.current?.scrollTo({
+                top: scroller.current.scrollHeight,
+                behavior: reduced ? "instant" : "smooth",
+              });
             }}
-            onKeyDown={(e) => {
-              if (
-                e.key === "Enter" &&
-                !e.shiftKey &&
-                !isComposing(e.nativeEvent)
-              ) {
-                e.preventDefault();
-                void send();
+          >
+            <ArrowDown size={15} />
+            {t("Latest")}
+          </button>
+        )}
+        <ApprovalRequests
+          teamId={member.teamId}
+          memberId={member.id}
+          workspace={workspace}
+        />
+        {(error || loadError) && (
+          <div className="member-error" role="alert">
+            {t(error || loadError)}
+          </div>
+        )}
+        {!member.removedAt && (
+          <ComposerSurface
+            className="member-composer"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void send();
+            }}
+          >
+            <textarea
+              ref={input}
+              aria-label={t("Message {name}", { name: member.name })}
+              placeholder={
+                canSend
+                  ? t("Message {name}…", { name: member.name })
+                  : t("Waiting for an assignment")
               }
-            }}
-          />
-          <ComposerChin className="member-composer-toolbar">
-            <div className="member-composer-config">
-              <RuntimeControls
-                team={team}
-                config={runtimeConfig}
-                executionConfig={executionConfig}
-                showContext={false}
-                running={!!activeWork || member.status === "working"}
-                onPermissionChange={(permissions) =>
-                  product.configurePermissions(
-                    member.teamId,
-                    member.id,
-                    permissions,
-                  )
+              value={draft}
+              disabled={!canSend}
+              onChange={(e) => {
+                const text = e.target.value;
+                onUpdate((old) => ({
+                  ...old,
+                  drafts: { ...old.drafts, [draftKey]: { text, files: [] } },
+                }));
+              }}
+              onKeyDown={(e) => {
+                if (
+                  e.key === "Enter" &&
+                  !e.shiftKey &&
+                  !isComposing(e.nativeEvent)
+                ) {
+                  e.preventDefault();
+                  void send();
                 }
-                disabled={configuring || sending || !executionConfig}
-                onSettings={onSettings}
-                onChange={async (config, choice) => {
-                  if (configurationLock.current) return;
-                  configurationLock.current = true;
-                  setConfiguring(true);
-                  setError("");
-                  try {
-                    await product.configureMember(
-                      member.teamId,
-                      member.id,
-                      config,
-                      choice,
-                    );
-                  } catch (error) {
-                    if (mounted.current) setError((error as Error).message);
-                    throw error;
-                  } finally {
-                    configurationLock.current = false;
-                    if (mounted.current) setConfiguring(false);
+              }}
+            />
+            <ComposerChin className="member-composer-toolbar">
+              <div className="member-composer-config">
+                <RuntimeControls
+                  team={team}
+                  config={runtimeConfig}
+                  executionConfig={executionConfig}
+                  runningConfig={member.runningExecutionConfig}
+                  showContext={false}
+                  running={!!activeWork || member.status === "working"}
+                  onMemberPermissionPreset={
+                    member.id.startsWith("host:")
+                      ? undefined
+                      : (preset) =>
+                          product.configureMemberPermissionPreset(
+                            member.teamId,
+                            member.id,
+                            preset,
+                          )
                   }
-                }}
-              />
-              {canSend && !work && (
-                <IconButton
-                  className="member-composer-help"
-                  label={t(
-                    "Follow up here. Assign project changes through Host.",
-                  )}
-                  aria-label={t("About member conversations")}
+                  disabled={configuring || sending || !executionConfig}
+                  onSettings={onSettings}
+                  onChange={async (config, choice) => {
+                    if (configurationLock.current) return;
+                    configurationLock.current = true;
+                    setConfiguring(true);
+                    setError("");
+                    try {
+                      await product.configureMember(
+                        member.teamId,
+                        member.id,
+                        config,
+                        choice,
+                      );
+                    } catch (error) {
+                      if (mounted.current) setError((error as Error).message);
+                      throw error;
+                    } finally {
+                      configurationLock.current = false;
+                      if (mounted.current) setConfiguring(false);
+                    }
+                  }}
+                />
+                {canSend && !work && (
+                  <IconButton
+                    className="member-composer-help"
+                    label={t(
+                      "Follow up here. Assign project changes through Host.",
+                    )}
+                    aria-label={t("About member conversations")}
+                  >
+                    <CircleHelp size={14} />
+                  </IconButton>
+                )}
+              </div>
+              {(work
+                ? activeWork
+                : member.status === "working" && member.workId) && (
+                <button
+                  type="button"
+                  aria-label={t("Stop member")}
+                  onClick={async () => {
+                    try {
+                      await product.command(
+                        `/teams/${member.teamId}/works/${activeWork?.id ?? member.workId}/stop`,
+                        {},
+                      );
+                    } catch (e) {
+                      setError((e as Error).message);
+                    }
+                  }}
                 >
-                  <CircleHelp size={14} />
-                </IconButton>
+                  <Square size={13} />
+                </button>
               )}
-            </div>
-            {(work
-              ? activeWork
-              : member.status === "working" && member.workId) && (
               <button
-                type="button"
-                aria-label={t("Stop member")}
-                onClick={async () => {
-                  try {
-                    await product.command(
-                      `/teams/${member.teamId}/works/${activeWork?.id ?? member.workId}/stop`,
-                      {},
-                    );
-                  } catch (e) {
-                    setError((e as Error).message);
-                  }
-                }}
+                type="submit"
+                className="member-send"
+                disabled={!canSend || !draft.trim() || sending || configuring}
+                aria-label={t("Send message")}
               >
-                <Square size={13} />
+                {sending ? (
+                  <LoaderCircle size={15} className="spin" />
+                ) : (
+                  <ArrowUp size={17} />
+                )}
               </button>
-            )}
-            <button
-              type="submit"
-              className="member-send"
-              disabled={!canSend || !draft.trim() || sending || configuring}
-              aria-label={t("Send message")}
-            >
-              {sending ? (
-                <LoaderCircle size={15} className="spin" />
-              ) : (
-                <ArrowUp size={17} />
-              )}
-            </button>
-          </ComposerChin>
-        </ComposerSurface>
-      )}
+            </ComposerChin>
+          </ComposerSurface>
+        )}
+      </div>
     </div>
   );
 }

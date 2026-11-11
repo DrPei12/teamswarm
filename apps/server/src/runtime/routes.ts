@@ -1,13 +1,16 @@
 import { harnessManifest } from "@team/contracts/harness-catalog";
 import { applicationDataBase } from "../../../../scripts/platform.cjs";
 import { projectFileRoutes } from "../project-files.js";
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import path from "node:path";
 import { z } from "zod";
+import { isDeepStrictEqual } from "node:util";
+import { memberPermissionPreset } from "./member-permissions.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { TeamRuntime } from "./engine.js";
 import { HarnessManagement } from "./harness/management.js";
 import { supportsSubscription, subscriptionAccounts } from "./harness/subscriptions.js";
+import { antigravityAccounts } from "./harness/antigravity-account.js";
 import { homedir } from "node:os";
 import { resourceInput, directoryQuery, directoryDetail } from "./catalog.js";
 import { capabilitiesInput } from "./capabilities.js";
@@ -26,6 +29,8 @@ import {
   setMemberAllocation,
   setHostAllocation,
   setWorkAllocation,
+  setAllocationListVisibility,
+  requireAllocationTask,
 } from "./allocation.js";
 import { definitionInput, selectionInput } from "./project-history.js";
 import { key, memberInput, parse, runtimeSettings, executionRequirements } from "./validation.js";
@@ -47,14 +52,30 @@ import {
 
 export function runtimeRoutes(runtime: TeamRuntime): Router {
   const router = Router();
+  const requireResourcePanel = () => {
+    if (!runtime.catalog.manualResourceConfiguration)
+      throw conflict("resource_configuration_paused", "手动资源配置已暂停。");
+  };
+  // Older installed renderers still know these URLs. Reject their writes before validation or side effects.
+  const resourcePanelWrite: RequestHandler = (req, res, next) => {
+    if (res.locals.productSession || req.body?.fromAllocationList === true) requireResourcePanel();
+    next();
+  };
   router.get("/teams/:teamId/approvals", (req, res) => {
     const teamId = param(req.params.teamId);
-    res.json([...runtime.approvals.list(teamId, true), ...runtime.nativePermissions.approvals(teamId)]);
+    res.json([...runtime.approvals.list(teamId, true), ...runtime.nativePermissions.approvals(teamId), ...runtime.nativeQuestions.approvals(teamId), ...runtime.memberPermissions.list(teamId)]);
   });
   router.post("/teams/:teamId/approvals/:approvalId", (req, res) => {
-    const input = parse(z.object({ accepted: z.boolean() }).strict(), req.body);
+    const input = parse(z.object({ accepted: z.boolean(), language: z.enum(["en", "zh-CN"]).optional(),
+      answers: z.array(z.array(z.string().trim().min(1).max(2000)).min(1).max(13)).min(1).max(8).optional() }).strict(), req.body);
     const teamId = param(req.params.teamId), id = param(req.params.approvalId);
-    res.json(runtime.nativePermissions.has(teamId, id)
+    if (runtime.nativeQuestions.has(teamId, id)) {
+      if (input.accepted && !input.answers) throw badRequest("invalid_answers", "Answer every question before sending.");
+      return res.json(runtime.nativeQuestions.answerFromUI(teamId, id, input.accepted ? input.answers! : null));
+    }
+    res.json(runtime.memberPermissions.has(teamId,id)
+      ? runtime.memberPermissions.answer(teamId,id,input.accepted,input.language)
+      : runtime.nativePermissions.has(teamId, id)
       ? runtime.nativePermissions.answerFromUI(teamId, id, input.accepted)
       : runtime.approvals.answer(teamId, id, input.accepted));
   });
@@ -119,7 +140,7 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
     } catch {throw badRequest("model_catalog_unavailable","Could not load the model list. Check the address and API key, or enter a model ID.");}
   });
   const harnessManagement = new HarnessManagement(path.join(applicationDataBase(), "TeamSwarm", "installer"), () => store.teams.listTeams().flatMap(team => { const settings = store.settings(team.id); return settings ? [settings.workspace] : []; }));
-  router.put("/teams/:teamId/resources/:resourceId", (req, res) => {
+  router.put("/teams/:teamId/resources/:resourceId", resourcePanelWrite, (req, res) => {
     const input = parse(resourceInput, req.body);
     if (!runtime.harnesses.has(input.config.harness))
       throw badRequest(
@@ -154,13 +175,14 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
     if (!host) throw notFound();
     res.json(runtime.catalog.memberExecution(teamId, branchId, host));
   });
-  router.put("/teams/:teamId/branches/:branchId/host-allocation", (req, res) => {
+  router.put("/teams/:teamId/branches/:branchId/host-allocation", resourcePanelWrite, (req, res) => {
     const teamId = param(req.params.teamId), branchId = param(req.params.branchId);
     const input = parse(z.object({expectedRevision: z.number().int().positive(), selection: resourceSelection.nullable()}).strict(), req.body);
     if (input.selection) runtime.validateConfig(runtime.catalog.resource(teamId, input.selection.resourceId).config);
-    res.json(setHostAllocation(allocationDeps(), teamId, branchId, input.expectedRevision, input.selection));
+    res.json(setHostAllocation(allocationDeps(), teamId, branchId, input.expectedRevision, input.selection,
+      res.locals.productSession ? "resource-panel" : "runtime"));
   });
-  router.post("/teams/:teamId/resources", (req, res) => {
+  router.post("/teams/:teamId/resources", resourcePanelWrite, (req, res) => {
     const input = parse(resourceCreateInput, req.body);
     if (!runtime.harnesses.has(input.config.harness))
       throw badRequest(
@@ -172,12 +194,14 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       .status(201)
       .json(createResource(allocationDeps(), param(req.params.teamId), input));
   });
-  router.delete("/teams/:teamId/resources/:resourceId", (req, res) => {
+  router.delete("/teams/:teamId/resources/:resourceId", resourcePanelWrite, (req, res) => {
+    const input = parse(z.object({ expectedVersion: z.number().int().positive().optional() }).strict(), req.body ?? {});
     res.json(
       deleteResource(
         allocationDeps(),
         param(req.params.teamId),
         param(req.params.resourceId),
+        input.expectedVersion,
       ),
     );
   });
@@ -190,7 +214,7 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       ),
     );
   });
-  router.put("/teams/:teamId/members/:memberId/allocation", (req, res) => {
+  router.put("/teams/:teamId/members/:memberId/allocation", resourcePanelWrite, (req, res) => {
     const input = parse(allocationRequest, req.body);
     res.json(
       setMemberAllocation(
@@ -198,19 +222,27 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
         param(req.params.teamId),
         param(req.params.memberId),
         input,
+        res.locals.productSession ? "resource-panel" : "runtime",
       ),
     );
   });
-  router.put("/teams/:teamId/works/:workId/allocation", (req, res) => {
-    const input = parse(allocationRequest, req.body);
+  router.put("/teams/:teamId/works/:workId/allocation", resourcePanelWrite, (req, res) => {
+    const input = parse(allocationRequest.extend({ fromAllocationList: z.literal(true).optional() }), req.body);
+    if (input.fromAllocationList) requireAllocationTask(store, param(req.params.teamId), param(req.params.workId));
     res.json(
       setWorkAllocation(
         allocationDeps(),
         param(req.params.teamId),
         param(req.params.workId),
         input,
+        res.locals.productSession || input.fromAllocationList ? "resource-panel" : "runtime",
       ),
     );
+  });
+  router.put("/teams/:teamId/works/:workId/allocation-list", (req, res) => {
+    requireResourcePanel();
+    const input = parse(z.object({ expectedRevision: z.number().int().positive(), hidden: z.boolean() }).strict(), req.body);
+    res.json(setAllocationListVisibility(allocationDeps(), param(req.params.teamId), param(req.params.workId), input.expectedRevision, input.hidden));
   });
   const packageInput = z.object({ package: z.unknown() });
   router.get("/teams/:teamId/allocation-package", (req, res) => {
@@ -228,7 +260,7 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       ),
     );
   });
-  router.post("/teams/:teamId/allocation-package/import", (req, res) => {
+  router.post("/teams/:teamId/allocation-package/import", resourcePanelWrite, (req, res) => {
     const input = parse(packageInput, req.body);
     res.json(
       importAllocationPackage(
@@ -651,6 +683,19 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
   // URLs/codes. These must never be cached or put in the public runtime catalog.
   router.post("/harnesses/:harnessId/subscription/:action", async (req, res) => {
     const id = param(req.params.harnessId);
+    if (id === "antigravity") {
+      res.setHeader("Cache-Control", "no-store");
+      const action = param(req.params.action);
+      if (action === "cancel") {
+        const input = parse(z.object({ loginId: z.string().uuid() }).strict(), req.body);
+        return res.json(await antigravityAccounts.cancel(input.loginId));
+      }
+      parse(z.object({}).strict(), req.body);
+      if (action === "status") return res.json(await antigravityAccounts.status());
+      if (action === "start") return res.json(await antigravityAccounts.start());
+      if (action === "poll") return res.json(antigravityAccounts.poll());
+      throw notFound();
+    }
     if (!supportsSubscription(id)) throw notFound();
     res.setHeader("Cache-Control", "no-store");
     const action = param(req.params.action);
@@ -689,25 +734,38 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
     );
   });
   router.post("/teams/:teamId/members", (req, res) => {
-    const input = parse(memberInput.extend({ clientRequestId: key }), req.body);
+    const input = parse(memberInput.extend({ clientRequestId: key,
+      permissionPreset: memberPermissionPreset.or(z.literal("team-default")).optional(),
+      expectedPolicyVersion: z.number().int().min(0).optional() }), req.body);
     const teamId = param(req.params.teamId);
-    runtime.validateConfig(input.config);
     res
       .status(201)
       .json(
-        store.once(`member:${teamId}`, input.clientRequestId, input, () =>
-          store.createMember(
+        store.once(`member:${teamId}`, input.clientRequestId, input, () => {
+          if (input.permissionPreset === "team-default" && input.expectedPolicyVersion !== undefined &&
+              runtime.catalog.capabilities.read(teamId).version !== input.expectedPolicyVersion)
+            throw conflict("version_conflict", "Team permission policy changed. Review the current default before creating a member.");
+          const config = input.permissionPreset ? runtime.memberPermissions.configuration(teamId,input.config,input.permissionPreset) : input.config;
+          runtime.validateConfig(config);
+          return store.createMember(
             teamId,
             input.name,
             input.responsibility,
-            input.config,
-          ),
-        ),
+            config,
+          );
+        }),
       );
   });
   router.delete("/teams/:teamId/members/:memberId", (req, res) => {
     const member = store.removeMember(param(req.params.teamId), param(req.params.memberId));
+    runtime.memberPermissions.cancel(member.teamId, member.id);
     res.json({ id: member.id, removedAt: member.removedAt });
+  });
+  router.delete("/teams/:teamId/members/:memberId/entry", (req,res) => {
+    const input = parse(z.object({ expectedRemovedAt: z.string().min(1).max(100) }).strict(), req.body);
+    const member = store.purgeMemberEntry(param(req.params.teamId), param(req.params.memberId), input.expectedRemovedAt);
+    runtime.memberPermissions.cancel(member.teamId, member.id);
+    res.json({ id: member.id, purgedAt: member.purgedAt });
   });
   router.patch("/teams/:teamId/members/:memberId", (req, res) => {
     const teamId = param(req.params.teamId);
@@ -739,7 +797,12 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
         "Finish or stop this member’s current work before changing its configuration.",
       );
     store.transaction(() => {
+      if (member.config.harness !== input.config.harness || member.config.access !== input.config.access || !isDeepStrictEqual(member.config.permissions,input.config.permissions))
+        member.permissionVersion = (member.permissionVersion ?? 1) + 1;
       Object.assign(member, input);
+      delete member.selection;
+      delete member.selectionSource;
+      member.allocationVersion = (member.allocationVersion ?? 1) + 1;
       store.save("members", member);
       store.event(teamId, "member.updated", { memberId: member.id });
     });
@@ -774,9 +837,13 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
   );
   router.post("/teams/:teamId/works/:workId/retry", (req, res) => {
     const input = parse(
-      z.object({ expectedRevision: z.number().int().positive() }).strict(),
+      z.object({ expectedRevision: z.number().int().positive(), fromAllocationList: z.literal(true).optional() }).strict(),
       req.body,
     );
+    if (input.fromAllocationList) {
+      requireResourcePanel();
+      requireAllocationTask(store, param(req.params.teamId), param(req.params.workId));
+    }
     res.json(
       runtime.retry(
         param(req.params.teamId),
