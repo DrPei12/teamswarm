@@ -4,7 +4,7 @@ import { productVersion } from "../../version.js";
 import { createHash, randomUUID } from "node:crypto";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnOwned, confirmOwnedExit } from "./owned-process.js";
-import { existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -107,19 +107,26 @@ export function isBoundedReviewSandbox(sandbox: Obj | undefined, directory: stri
 }
 
 /** Locate an executable, never interpret configuration as a shell command. */
+function commandFile(file: string, javascript = false): boolean {
+  try {
+    if (!statSync(file).isFile()) return false;
+    accessSync(file, javascript || process.platform === "win32" ? constants.F_OK : constants.X_OK);
+    return true;
+  } catch { return false; }
+}
 export function codexCommand(): { command: string; args: string[] } {
   const configured = process.env.TEAM_CODEX_BIN;
   if (configured) {
     if (
       !path.isAbsolute(configured) ||
-      !existsSync(configured) ||
+      !commandFile(configured, /\.[cm]?js$/i.test(configured)) ||
       /\.(cmd|bat|ps1)$/i.test(configured)
     ) {
       throw new Error(
         "TEAM_CODEX_BIN must name an existing absolute executable or .js entrypoint.",
       );
     }
-    return configured.endsWith(".js")
+    return /\.[cm]?js$/i.test(configured)
       ? { command: process.execPath, args: [configured] }
       : { command: configured, args: [] };
   }
@@ -140,7 +147,7 @@ export function codexCommand(): { command: string; args: string[] } {
       directory,
       process.platform === "win32" ? "codex.exe" : "codex",
     );
-    if (existsSync(binary)) return { command: binary, args: [] };
+    if (commandFile(binary)) return { command: binary, args: [] };
     const npmRoot = path.join(directory, "node_modules", "@openai", "codex");
     if (process.platform === "win32") {
       const arch = process.arch === "arm64" ? "arm64" : "x64";
@@ -156,15 +163,15 @@ export function codexCommand(): { command: string; args: string[] } {
         "bin",
         "codex.exe",
       );
-      if (existsSync(native)) return { command: native, args: [] };
+      if (commandFile(native)) return { command: native, args: [] };
     }
     const entry = path.join(npmRoot, "bin", "codex.js");
-    if (existsSync(entry)) return { command: process.execPath, args: [entry] };
+    if (commandFile(entry, true)) return { command: process.execPath, args: [entry] };
   }
   const localEntry = path.join(repository, "node_modules", "@openai", "codex", "bin", "codex.js");
-  if (existsSync(localEntry)) return { command: process.execPath, args: [localEntry] };
+  if (commandFile(localEntry, true)) return { command: process.execPath, args: [localEntry] };
   const bundled = process.env.TEAM_CODEX_FALLBACK_BIN;
-  if (bundled && path.isAbsolute(bundled) && existsSync(bundled)) return { command: bundled, args: [] };
+  if (bundled && path.isAbsolute(bundled) && commandFile(bundled)) return { command: bundled, args: [] };
   throw new Error(
     "Codex is not installed. Install the Codex CLI or configure TEAM_CODEX_BIN.",
   );

@@ -4,7 +4,7 @@
 
 TeamSwarm 面向需要跨成员、会话和多轮修改推进代码与文本项目的 AI builders。通过 Host 讨论目标，让成员在各自独立的 Harness 中执行，并把当前决定、任务与成果保存在同一个工作空间。
 
-[English](README.md) · [安装](#install) · [第一个项目](#first-project) · [Harness 与模型](#harnesses-and-models) · [数据与恢复](#data-and-recovery)
+[English](README.md) · [安装](#install) · [第一个项目](#first-project) · [Harness 与模型](#harnesses-and-models) · [数据与恢复](#data-and-recovery) · [隐私](#privacy) · [代码签名策略](#code-signing-policy)
 
 [![观看 TeamSwarm 宣传片 — 36 秒，4K / 120 fps](.github/media/teamswarm-film-cover-zh.jpg)](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-ZH.mp4)
 
@@ -21,21 +21,29 @@ TeamSwarm 面向本地单用户场景。Harness 使用你配置的账号或 API 
 <a id="install"></a>
 ## 安装
 
-从同一个 [GitHub Release](https://github.com/DrPei12/teamswarm/releases) 下载 Windows x64 安装器和 `SHA256SUMS.txt`。桌面包内置 Electron、Node.js、npm 和 Codex，其他 Harness 单独安装到本机。
+从下方对应平台的同一版本 Release 下载软件包和 `SHA256SUMS.txt`。桌面包内置 Electron、Node.js、npm 和 Codex，其他 Harness 单独安装到本机。
 
 | 平台 | 格式 | 可用范围 |
 |---|---|---|
-| Windows x64 | NSIS `.exe` | Release 下载包，已验证安装与升级 |
-| Linux x64 | AppImage、DEB | 源码构建，原生安装与运行待验证 |
-| macOS Apple Silicon | DMG、ZIP | 源码构建，原生安装与运行待验证 |
+| Windows x64 | NSIS `.exe` | [Windows 发布版](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.0) |
+| Linux x64 | AppImage、DEB | 从源码构建 |
+| macOS Apple Silicon | DMG、ZIP | [macOS 预发布版](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.0-macos.1) |
 
-Windows 安装器未签名，系统会显示未知发布者。将文件哈希与同版校验文件比较：
+Windows 安装器未签名，系统会显示未知发布者。签名安排见[代码签名策略](#code-signing-policy)。将文件哈希与同版校验文件比较：
 
 ```powershell
 Get-FileHash .\TeamSwarm-0.6.0-Windows-x64.exe -Algorithm SHA256
 ```
 
 运行安装器，从开始菜单打开 **TeamSwarm**。默认按用户安装。升级时先关闭应用、[备份服务数据](#data-and-recovery)，然后在同一系统账号和安装目录运行新版安装器。更新通过手动安装完成，卸载保留服务数据和项目文件。
+
+**macOS Apple Silicon：** 下载 [DMG](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0-macos.1/TeamSwarm-0.6.0-macOS-arm64.dmg) 或 [ZIP](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0-macos.1/TeamSwarm-0.6.0-macOS-arm64.zip)。打开 DMG，将 **TeamSwarm.app** 复制到“应用程序”；使用 ZIP 时，解压后将 App 复制到同一目录。使用 macOS Release 中的校验文件核对下载内容：
+
+```sh
+shasum -a 256 TeamSwarm-0.6.0-macOS-arm64.dmg
+```
+
+本次 macOS 预发布版未使用 Developer ID 签名，也未经过 Apple 公证。如果 macOS 阻止首次打开，可参阅 [Apple 针对单个 App 的批准操作说明](https://support.apple.com/zh-cn/102445)。
 
 <a id="first-project"></a>
 ## 第一个项目
@@ -117,7 +125,7 @@ Harness 执行代理工具与运行循环，模型连接提供模型 API。执�
 
 Antigravity 使用 Google 官方 CLI 的本机登录。安装 CLI 后，在团队能力中启用 Antigravity，并添加 Antigravity 订阅连接。模型与推理强度由原生目录提供，首次使用可在账号区域发起 Google 登录。实际调用需要账号及所在地区满足 Google 的服务条件。接入使用官方 ACP 的会话、工具和权限流程。[Antigravity CLI 安装与 ACP](https://antigravity.google/docs/cli/acp/)
 
-在团队能力中分别启用 Harness 和添加模型连接。选择 **ChatGPT → Continue with ChatGPT**，在官方页面授权后加载账号模型目录，再选择提供给 Host 分配的模型。ChatGPT 连接也可用于 Claude Code；Claude Code 自己执行命令、处理工具结果和继续会话。原有 **ChatGPT (Codex)** 入口保留 Codex 原生账号方式。
+在团队能力中分别启用 Harness 和添加模型连接。选择 **ChatGPT → Continue with ChatGPT**，在官方页面授权后加载账号模型目录，再选择提供给 Host 分配的模型。ChatGPT 连接也可用于 Claude Code；Claude Code 自己执行命令、处理工具结果和继续会话。**ChatGPT (Codex)** 使用 Codex 原生账号授权。
 
 ChatGPT 连接采用 [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) 的独立账号授权，使用账号目录中的模型和已授权的套餐额度。Windows 使用系统加密存储可续期凭据；刷新、退出和重新登录按账号串行处理。取消未完成的登录后可重新发起。退出会停止本机使用并请求远端撤销；远端未完成时界面提供处理入口。
 
@@ -131,17 +139,17 @@ ChatGPT 连接采用 [Sign in with ChatGPT](https://developers.openai.com/siwc/t
 
 例如，DeepSeek 连接使用 `https://api.deepseek.com` 和 Chat Completions 协议，可由 Pi 原生使用，也可通过协议转换交给 Claude Code。模型以提供方当前账号目录为准。
 
-协议转换支持文本、嵌入式图片、函数工具、工具结果、流式输出与 JSON Schema 输出。每次执行使用独立路由和临时凭据，结束即撤销；一个服务共用一个回环监听器。当前最多同时处理 32 个模型请求，每条执行路由最多 8 个，超限返回繁忙状态。输入上限 8 MiB、响应上限 16 MiB；原生会话的模型元数据达到 16 MiB 时要求新建会话，保留已有记录。供应商托管工具和跨协议精确 token 计数另行支持；不支持的请求会返回具体错误。
+协议转换支持文本、嵌入式图片、函数工具、工具结果、流式输出与 JSON Schema 输出。每次执行使用独立路由和临时凭据，结束即撤销；一个服务共用一个回环监听器。当前最多同时处理 32 个模型请求，每条执行路由最多 8 个，超限返回繁忙状态。输入上限 8 MiB、响应上限 16 MiB；原生会话的模型元数据达到 16 MiB 时要求新建会话，保留已有记录。不支持的请求会返回具体错误。
 
 使用环境变量时，在启动服务前设置 `DEEPSEEK_API_KEY` 等变量，资源中只填写变量名。`TEAM_CREDENTIAL_FILES` 接受一个 JSON 映射，将环境变量名关联到包含单行密钥的绝对文件路径。
 
 “执行资源与分配”中的任务资源优先于成员默认。每次执行保存实际配置，编辑影响后续工作。资源导入导出携带配置与密钥引用，目标设备需要单独配置对应凭据。
 
-“文件访问”管理只读或项目读写范围；“执行权限”管理原生工具的批准方式。Codex 与 Claude Code 提供“请求批准”“自动判断”“完全访问”，Claude Code 另有“接受编辑”。配置按 Harness 的原生权限结构保存；待批准操作显示在 Host 和对应成员会话中，可允许一次或拒绝。只读任务继续使用其原有边界，已有资源保留原权限，其他 Harness 沿用各自现有的权限策略。
+“文件访问”管理只读或项目读写范围；“执行权限”管理原生工具的批准方式。Codex 与 Claude Code 提供“请求批准”“自动判断”“完全访问”。配置按 Harness 的原生权限结构保存；待批准操作显示在 Host 和对应成员会话中，可允许一次或拒绝。只读任务继续使用其原有边界，已有资源保留原权限，其他 Harness 沿用各自现有的权限策略。
 
 Pi 和 OpenCode 支持“最大输出 token 数”（`maxOutputTokens`，默认 8192）和“上下文 token 数”（`contextWindowTokens`，默认 131072）。采用协议转换的 API 连接也支持输出限制。ChatGPT 套餐连接采用服务自身的输出限制，自定义输出上限会被拒绝；上下文容量覆盖仍限 Pi 和 OpenCode。输入、推理和输出共享上下文容量，输出限制包含推理 tokens。达到长度限制的失败保留供恢复处理。
 
-Pi 的 Chat Completions 支持提供方允许的 `minimal`、`low`、`medium`、`high`、`xhigh` 或 `max` 推理强度。经转换的 Responses 或 Chat Completions 连接按模型支持的取值设置推理强度，独立于 Harness；留空使用提供方默认。Pi 通过原生上下文加载器读取适用的项目指令，该入口不启用扩展代码。
+Pi 的 Chat Completions 支持提供方允许的 `minimal`、`low`、`medium`、`high`、`xhigh` 或 `max` 推理强度。经转换的 Responses 或 Chat Completions 连接按模型支持的取值设置推理强度，独立于 Harness；留空使用提供方默认。Pi 从任务工作区读取适用的项目指令。
 
 <a id="work-and-results"></a>
 ## 工作与成果
@@ -150,7 +158,7 @@ Pi 的 Chat Completions 支持提供方允许的 `minimal`、`low`、`medium`、
 
 Host 和成员先获得项目概况、当前分工与可检索的资料索引，再按任务读取定义、决定和原始消息。派工携带相关资料及其依赖，长文档和来源列表按版本分页读取。项目笔记保留原始来源，相关定义、任务或文件变化后提示重新核对。
 
-上下文取材结合模型配置或实际回报的容量、最近一次原生调用用量和任务关联程度，为回复与工具结果留出空间，保留 Harness 的原生压缩能力，并在需要时从保存的项目资料重建会话。未知容量与用量采用明确标记的估算；原有固定消息条数、字节数和轮数限制不再控制 Host 取材与会话续接。
+上下文取材结合模型配置或实际回报的容量、最近一次原生调用用量和任务关联程度，为回复与工具结果留出空间，保留 Harness 的原生压缩能力，并在需要时从保存的项目资料重建会话。未知容量与用量采用明确标记的估算。
 
 向成员提问前选择具体工作线程。只读追问查看已有工作，“继续修改”创建保留原验证要求的后续执行。修改相同文件前，先暂停或停止冲突工作，等待实际状态收束。
 
@@ -160,13 +168,13 @@ Host 和成员先获得项目概况、当前分工与可检索的资料索引，
 
 采用讨论分支时，在该分支向 Host 明确决定和范围。Host 比较来源分支、分支起点与当前主线，更新选定的项目文档。在历史采纳节点中查看决定、来源、想法和文档差异；需要落实到代码时，另行提出实施要求。
 
-进展消息与完成交付分别显示。即使没有完整工作区快照，保存的成果版本仍可下载。恢复文件版本会形成新的当前版本，操作前先解决活动写入、未提交本地修改或当前版本已变化等冲突。从历史创建工作区分支需要已保存的文件快照，外部动作保留各自状态。
+进展消息与完成交付分别显示。保存的成果版本可以下载。恢复文件版本会形成新的当前版本，操作前先解决活动写入、未提交本地修改或当前版本已变化等冲突。从历史创建工作区分支需要已保存的文件快照。
 
 右侧文件栏可以浏览项目文件、打开多个标签，预览 Markdown、图片、PDF、Word、Excel 和 PowerPoint，并编辑代码、文本及现代 Office 文件中的文本或单元格。预览支持适应宽度和缩放；未保存内容保留为本机草稿，保存前核对原文件版本。成员正在写入同一工作区时，先完成或停止该工作再保存。
 
 历史中的手动记录点支持右键删除；原始历史和已有分支仍可追溯。成员会话与 Host 使用相同的 Harness、模型和 effort 选择方式，新选择用于后续执行。
 
-可在成员卡片的右键菜单或对话窗口顶部删除空闲成员，也可让 Host 使用 `team_remove_member` 工具删除。已有对话、工作和成果保留在历史中；删除前须完成待处理的任务、验收、协作和消息。已删除成员不再接收新任务或消息。独立 Web 服务与桌面客户端使用同一份当前前端构建。
+可在成员卡片的右键菜单或对话窗口顶部删除空闲成员，也可让 Host 使用 `team_remove_member` 工具删除。已有对话、工作和成果保留在历史中；删除前须完成待处理的任务、验收、协作和消息。已删除成员不再接收新任务或消息。
 
 <a id="data-and-recovery"></a>
 ## 数据与恢复
@@ -188,6 +196,17 @@ Host 和成员先获得项目概况、当前分工与可检索的资料索引，
 所选 Harness 会将提示和相关项目内容发送给配置的提供方，也可能保留自身原生会话记录。本地 API 监听 `127.0.0.1`，使用本机控制凭据；`control.json`、数据库和账号会话记录应保密。
 
 Windows 保存的 Key 使用当前账号的 DPAPI。macOS 桌面版使用 Keychain 加密，Linux 桌面版要求受支持且已解锁的系统密钥环，并拒绝明文回退。macOS/Linux 的源码 Web 服务使用环境变量或启动密钥文件引用。更换设备或系统账号后重新连接凭据。
+
+<a id="privacy"></a>
+### 隐私与网络连接
+
+TeamSwarm 按上述方式将工作区数据保存在你的设备上，没有项目自建的遥测或广告服务。
+
+登录、刷新账号、检查模型可用性和执行任务时，会连接你选择的账号服务或模型提供方。模型请求可能包含你的提示、相关项目文件和工具结果。原生 Harness 保存各自的账号与会话记录，并按自身设置及你授予的权限发起其他网络请求。相应工具的隐私政策和你与提供方的协议适用，包括使用相关服务时的 [OpenAI](https://openai.com/policies/privacy-policy/)、[Anthropic](https://www.anthropic.com/legal/privacy)、[xAI](https://x.ai/legal/privacy-policy) 和 [DeepSeek Harness](https://www.deepseek.com/harness/privacy/) 政策。
+
+打开 Harness 安装页时，可能向 npm registry 查询版本信息。“提醒 Harness 更新”控制自动版本检查；“检查更新”也会发起 registry 请求。安装所选 Harness 时会下载相应软件包。这些请求适用 [npm 隐私政策](https://docs.npmjs.com/policies/privacy/)。
+
+项目文件保存在你选择的目录。卸载 TeamSwarm 会保留本地服务数据和项目文件。仅向你选择的接收方分享诊断文件和备份；原生 Harness 记录由相应工具管理。
 
 备份或恢复前关闭应用及服务。从源码目录执行：
 
@@ -265,6 +284,15 @@ node tools/offline-audit/audit.mjs events.json --format markdown --team team-id
 通过 [Issues](https://github.com/DrPei12/teamswarm/issues) 反馈可复现问题，附上版本、系统、Harness/模型、启动方式和脱敏诊断。漏洞使用可用的 **Security → Report a vulnerability** 入口；若未开放，在 issue 中请求私下联系渠道，不公开漏洞细节。反馈中排除凭据、私有对话与个人项目文件。
 
 欢迎提交聚焦的 PR。针对行为变化运行相关检查，保留数据与执行恢复路径，维护两份 README 的一致性；界面变化检查中英文和相关窗口尺寸。提交供项目收录的贡献按 Apache-2.0 提供，并保留第三方署名。
+
+<a id="code-signing-policy"></a>
+## 代码签名策略（Code signing policy）
+
+Windows 安装器目前未签名。macOS 预发布版未使用 Developer ID 签名，也未经过 Apple 公证。TeamSwarm 正在向 [SignPath Foundation](https://signpath.org/) 申请通过 [SignPath.io](https://about.signpath.io/) 提供的免费 Windows 代码签名，证书签发给 SignPath Foundation。
+
+项目维护者、贡献审查者及发布批准人为 [DrPei12](https://github.com/DrPei12)。签名访问要求多因素认证，每个签名请求均须由发布批准人手动批准。
+
+签名请求仅覆盖由 [Desktop packages 工作流](https://github.com/DrPei12/teamswarm/actions/workflows/desktop.yml) 从已审查的公开源码构建的 TeamSwarm 应用可执行文件及 Windows 安装器。发布清单和校验文件记录源码提交、构建身份及文件哈希。上游可执行文件和库保留各自的签名与许可证，不纳入 TeamSwarm 的签名请求。详情见[第三方声明](THIRD_PARTY_NOTICES.md)及[隐私政策](#privacy)。
 
 <a id="license"></a>
 ## 许可

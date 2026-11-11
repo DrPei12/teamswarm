@@ -27,6 +27,10 @@ test('installed npm and its actual SOCKS dependency match the audited runtime', 
   const socksRequire = createRequire(npmRequire.resolve('socks'));
   assert.equal(socksRequire('ip-address/package.json').version, pinned.ipAddress.version);
   assert.equal(lock.packages['node_modules/npm/node_modules/ip-address'].version, pinned.ipAddress.version);
+  for (const [name, key] of [['glob', 'glob'], ['minimatch', 'minimatch'], ['path-scurry', 'pathScurry'], ['@isaacs/nonrecursive-glob-match', 'nonrecursiveGlobMatch']]) {
+    assert.equal(npmRequire(`${name}/package.json`).version, pinned[key].version);
+    assert.equal(lock.packages[`node_modules/npm/node_modules/${name}`].version, pinned[key].version);
+  }
   const archive = readFileSync(new URL(`../vendor/npm-${pinned.version}.tgz`, import.meta.url));
   assert.equal(lock.packages['node_modules/npm'].integrity,
     'sha512-' + createHash('sha512').update(archive).digest('base64'));
@@ -48,7 +52,7 @@ test('bundled IPv6 validation rejects long zone strings within a bounded subproc
   `, entry], { timeout: 5000, windowsHide: true });
 });
 
-test('isolated npm and npx install and run a local package offline', { timeout: 60000 }, async () => {
+test('isolated npm and npx install, run and pack workspace files offline', { timeout: 60000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'teamswarm-npm-runtime-'));
   const fixture = join(root, 'fixture');
   const project = join(root, 'project');
@@ -65,7 +69,13 @@ test('isolated npm and npx install and run a local package offline', { timeout: 
     await writeFile(join(fixture, 'bin.cjs'), '#!/usr/bin/env node\nconsole.log(42);\n');
     await writeFile(join(fixture, 'index.cjs'), 'module.exports = 42;\n');
     await writeFile(join(project, 'package.json'), JSON.stringify({ name: 'fixture-project', version: '1.0.0', private: true,
-      scripts: { verify: 'node verify.cjs' } }));
+      workspaces: ['packages/*'], scripts: { verify: 'node verify.cjs' } }));
+    const workspace = join(project, 'packages', 'example');
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, 'package.json'), JSON.stringify({ name: 'teamswarm-workspace-fixture', version: '1.0.0' }));
+    await writeFile(join(workspace, 'keep.js'), 'module.exports = 42;\n');
+    await writeFile(join(workspace, 'discard.log'), 'excluded fixture\n');
+    await writeFile(join(workspace, '.npmignore'), '*.log\n');
     await writeFile(join(project, 'verify.cjs'), "require('node:assert/strict').equal(require('teamswarm-npm-fixture'), 42);\n");
     const options = { cwd: project, timeout: 15000, windowsHide: true,
       env: { ...process.env, npm_config_cache: join(root, 'cache'), npm_config_update_notifier: 'false' } };
@@ -78,6 +88,10 @@ test('isolated npm and npx install and run a local package offline', { timeout: 
     assert.equal((await run(process.execPath, [npxCli, '--offline', '--no-install', 'teamswarm-npm-fixture'], options)).stdout.trim(), '42');
     const installed = JSON.parse(await readFile(join(project, 'node_modules/teamswarm-npm-fixture/package.json'), 'utf8'));
     assert.equal(installed.version, '1.0.0');
+    const packed = JSON.parse((await run(process.execPath, [npmCli, 'pack', '--workspace', 'teamswarm-workspace-fixture', '--dry-run', '--json', '--offline', '--ignore-scripts'], options)).stdout);
+    const names = packed[0].files.map(file => file.path);
+    assert(names.includes('keep.js'));
+    assert(!names.includes('discard.log'));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

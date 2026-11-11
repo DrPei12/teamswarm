@@ -4,7 +4,7 @@
 
 TeamSwarm is for AI builders working on code and text projects across multiple agents, sessions and revisions. Discuss a goal with the Host, let members work in independent harnesses, and keep the current decisions, work and deliverables together.
 
-[简体中文](README.zh-CN.md) · [Install](#install) · [First project](#first-project) · [Harnesses and models](#harnesses-and-models) · [Data and recovery](#data-and-recovery)
+[简体中文](README.zh-CN.md) · [Install](#install) · [First project](#first-project) · [Harnesses and models](#harnesses-and-models) · [Data and recovery](#data-and-recovery) · [Privacy](#privacy) · [Code signing policy](#code-signing-policy)
 
 [![Watch the TeamSwarm product film — 36 seconds, 4K at 120 fps](.github/media/teamswarm-film-cover-en.jpg)](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-EN.mp4)
 
@@ -21,21 +21,29 @@ TeamSwarm runs locally for a single user. Harnesses use the accounts or API conn
 <a id="install"></a>
 ## Install
 
-Download the Windows x64 installer and `SHA256SUMS.txt` from the same [GitHub Release](https://github.com/DrPei12/teamswarm/releases). The desktop package includes Electron, Node.js, npm and Codex. Additional harnesses are installed separately on your device.
+Download the package for your platform and `SHA256SUMS.txt` from the same release below. Desktop packages include Electron, Node.js, npm and Codex. Additional harnesses are installed separately on your device.
 
 | Platform | Format | Availability |
 |---|---|---|
-| Windows x64 | NSIS `.exe` | Release download; installation and upgrade verified |
-| Linux x64 | AppImage, DEB | Source build; native installation and runtime verification pending |
-| macOS Apple Silicon | DMG, ZIP | Source build; native installation and runtime verification pending |
+| Windows x64 | NSIS `.exe` | [Windows release](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.0) |
+| Linux x64 | AppImage, DEB | Build from source |
+| macOS Apple Silicon | DMG, ZIP | [macOS pre-release](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.0-macos.1) |
 
-The Windows installer is unsigned and Windows displays an unknown publisher. Compare its hash with the release checksum file:
+The Windows installer is unsigned and Windows displays an unknown publisher. See the [Code signing policy](#code-signing-policy). Compare its hash with the release checksum file:
 
 ```powershell
 Get-FileHash .\TeamSwarm-0.6.0-Windows-x64.exe -Algorithm SHA256
 ```
 
 Run the installer, then open **TeamSwarm** from the Start menu. Installation is per user. For upgrades, close the application, [back up service data](#data-and-recovery), and run the new installer using the same OS account and installation directory. Updates are installed manually. Uninstalling preserves service data and your project files.
+
+**macOS Apple Silicon:** Download the [DMG](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0-macos.1/TeamSwarm-0.6.0-macOS-arm64.dmg) or [ZIP](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0-macos.1/TeamSwarm-0.6.0-macOS-arm64.zip). Open the DMG and copy **TeamSwarm.app** to Applications, or extract the ZIP and copy the app there. Compare the downloaded file with the checksum from the macOS release:
+
+```sh
+shasum -a 256 TeamSwarm-0.6.0-macOS-arm64.dmg
+```
+
+This macOS pre-release has no Developer ID signature or Apple notarization. If macOS blocks its first launch, see [Apple's instructions for approving an individual app](https://support.apple.com/en-gb/102445).
 
 <a id="first-project"></a>
 ## Your first project
@@ -120,7 +128,7 @@ Versions of npm-managed integrations are pinned in [config/harnesses.json](confi
 
 Antigravity uses the Google account signed in through the official CLI. Install the CLI, enable Antigravity in Team capabilities and add an Antigravity subscription connection. Its native catalog supplies models and reasoning levels. The account panel can start Google sign-in. Model execution requires an eligible account and region. The integration uses official ACP sessions, tools and permission handling. [Antigravity CLI installation and ACP](https://antigravity.google/docs/cli/acp/)
 
-In Team capabilities, enable harnesses and add model connections separately. Select **ChatGPT → Continue with ChatGPT**, authorize on the official page, load the account's model catalog and choose models for the Host to allocate. Claude Code can use that ChatGPT connection while running its own commands, handling tool results and continuing its native session. **ChatGPT (Codex)** retains the original Codex account path.
+In Team capabilities, enable harnesses and add model connections separately. Select **ChatGPT → Continue with ChatGPT**, authorize on the official page, load the account's model catalog and choose models for the Host to allocate. Claude Code can use that ChatGPT connection while running its own commands, handling tool results and continuing its native session. **ChatGPT (Codex)** uses native Codex account authorization.
 
 ChatGPT connections use independent [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) authorization, account-specific models and authorized plan usage. Windows encrypts renewable credentials with the operating system. Refresh, sign-out and reauthorization are serialized per account. Pending sign-ins can be cancelled and restarted. Sign-out stops local use and requests remote revocation; the interface provides recovery instructions if remote revocation fails.
 
@@ -134,17 +142,17 @@ For an API connection:
 
 For example, a DeepSeek connection uses `https://api.deepseek.com` and Chat Completions. Pi can consume it natively, while Claude Code can use protocol translation. Use a model from the provider's current account model list.
 
-Translation supports text, embedded images, function tools, tool results, streaming and JSON Schema output. Each execution receives a separate route and temporary credential, revoked when execution ends. One service shares one loopback listener, admitting up to 32 simultaneous model requests and 8 per execution route; excess requests receive a busy response. Input is limited to 8 MiB and output to 16 MiB. Native-session model metadata is retained up to 16 MiB; reaching that limit requires a new session and preserves existing records. Provider-hosted tools and exact cross-protocol token counting require separate support; unsupported requests return specific errors.
+Translation supports text, embedded images, function tools, tool results, streaming and JSON Schema output. Each execution receives a separate route and temporary credential, revoked when execution ends. One service shares one loopback listener, admitting up to 32 simultaneous model requests and 8 per execution route; excess requests receive a busy response. Input is limited to 8 MiB and output to 16 MiB. Native-session model metadata is retained up to 16 MiB; reaching that limit requires a new session and preserves existing records. Unsupported requests return specific errors.
 
 For environment credentials, set a variable such as `DEEPSEEK_API_KEY` before starting the service and enter only its name in the resource. `TEAM_CREDENTIAL_FILES` accepts a JSON map of environment-variable names to absolute, one-line secret files.
 
 In **Resources and allocation**, work-specific resources take precedence over member defaults. Each attempt captures its actual configuration; edits affect subsequent work. Resource export/import carries configuration and secret references. Configure the referenced credentials on the destination device.
 
-**File access** controls read-only or project-write access; **Execution permissions** controls native tool approvals. Codex and Claude Code offer **Request approval**, **Automatic review** and **Full access**; Claude Code also offers **Accept edits**. Settings retain each Harness's native permission structure. Pending requests appear in the Host and relevant member conversation, where users can allow once or decline. Read-only work retains its boundaries, existing resources retain their permissions, and other Harnesses keep their existing native policies.
+**File access** controls read-only or project-write access; **Execution permissions** controls native tool approvals. Codex and Claude Code offer **Request approval**, **Automatic review** and **Full access**. Settings retain each Harness's native permission structure. Pending requests appear in the Host and relevant member conversation, where users can allow once or decline. Read-only work retains its boundaries, existing resources retain their permissions, and other Harnesses keep their existing native policies.
 
 Pi and OpenCode accept **Maximum output tokens** (`maxOutputTokens`, default 8192) and **Context window tokens** (`contextWindowTokens`, default 131072). API connections using protocol translation also accept an output limit. ChatGPT plan connections use the service's output limits and reject a custom output-limit override. Context-window overrides remain specific to Pi and OpenCode. Input, reasoning and output share the model's context capacity; the output limit includes reasoning tokens. Length-limited failures remain visible for recovery.
 
-For Pi Chat Completions, **Effort** accepts `minimal`, `low`, `medium`, `high`, `xhigh` or `max` when supported by the provider. Translated Responses or Chat Completions connections accept their model's supported effort values independently of the Harness. Leave effort blank for provider defaults. Pi loads applicable project instructions through its native context loader, without enabling extension code through that loader.
+For Pi Chat Completions, **Effort** accepts `minimal`, `low`, `medium`, `high`, `xhigh` or `max` when supported by the provider. Translated Responses or Chat Completions connections accept their model's supported effort values independently of the Harness. Leave effort blank for provider defaults. Pi loads applicable project instructions from the task workspace.
 
 <a id="work-and-results"></a>
 ## Work and results
@@ -153,7 +161,7 @@ Give the Host a goal, relevant files and completion conditions. Members own expl
 
 The Host and members start with a project overview, current responsibilities and a searchable material index. They retrieve task-related definitions, decisions and original messages as needed; handoffs carry references to the relevant material and its dependencies. Long documents and source lists support version-bound pagination. Project notes retain their original sources and flag changed definitions, work or files for rechecking.
 
-Context selection uses the model's configured or observed capacity, recent native token usage and task relevance. It reserves space for replies and tools, preserves native compaction, and rebuilds a session from saved project material when necessary. Unknown capacity and usage use explicit estimates. Legacy message-count, byte and turn-count limits no longer control Host context selection or session reuse.
+Context selection uses the model's configured or observed capacity, recent native token usage and task relevance. It reserves space for replies and tools, preserves native compaction, and rebuilds a session from saved project material when necessary. Unknown capacity and usage use explicit estimates.
 
 Select a work thread before asking a member a question. Read-only questions inspect existing work; **Continue modifying** creates a subsequent execution with the original verification requirements. Pause or stop conflicting work and wait for its actual state to settle before editing the same files.
 
@@ -163,13 +171,13 @@ Each acceptance criterion records whether it needs semantic inspection or observ
 
 To adopt a discussion branch, state the decision and scope to the Host in that branch. The Host compares the source, branch base and current mainline, then updates the selected project documents. Open the adoption node in history to inspect the decision, sources, ideas and document differences. Request code implementation separately when needed.
 
-Progress updates and completed deliverables have separate entries. Saved artifact versions remain downloadable even when a full workspace snapshot is unavailable. Restoring a file version creates a new current version; active writers, unsaved local edits or a changed current version must be resolved first. Creating a workspace branch from history requires a saved file snapshot. External actions retain their own state.
+Progress updates and completed deliverables have separate entries. Saved artifact versions can be downloaded. Restoring a file version creates a new current version; active writers, unsaved local edits or a changed current version must be resolved first. Creating a workspace branch from history requires a saved file snapshot.
 
 The right file panel browses project files and opens multiple tabs for Markdown, images, PDF, Word, Excel and PowerPoint. Edit code, text, and text or cells in modern Office files; fit previews to the panel or adjust zoom. Unsaved edits remain in local drafts, and saving checks the original file version. Finish or stop active member writes in that workspace before saving.
 
 Manually created history checkpoints have a context menu for deletion while the original history and existing branches remain traceable. Member conversations share the Host composer's Harness, model and effort controls; changes apply to subsequent executions.
 
-Delete an idle member from its card's context menu or conversation header, or ask Host to use `team_remove_member`. Conversations, work and results remain in history. Finish pending work, review, exchanges and messages first. Removed members no longer receive work or messages. The standalone Web service and desktop client serve the same current frontend build.
+Delete an idle member from its card's context menu or conversation header, or ask Host to use `team_remove_member`. Conversations, work and results remain in history. Finish pending work, review, exchanges and messages first. Removed members no longer receive work or messages.
 
 <a id="data-and-recovery"></a>
 ## Data and recovery
@@ -191,6 +199,17 @@ Concurrency follows both Team settings and available memory. New tasks queue und
 The selected harness sends prompts and relevant project content to its configured provider and may keep its own native session records. The local API listens on `127.0.0.1` and uses a local control credential. Keep `control.json`, databases and account/session records private.
 
 Saved Windows keys use current-account DPAPI. macOS desktop builds use Keychain-backed encryption; Linux desktop builds require a supported unlocked system keyring and reject plaintext fallback. The source Web service on macOS/Linux uses environment credentials or startup secret-file references. Reconnect credentials after moving to another device or OS account.
+
+<a id="privacy"></a>
+### Privacy and network connections
+
+TeamSwarm stores workspace data on your device as described above. It does not operate a project-hosted telemetry or advertising service.
+
+Signing in, refreshing accounts, checking model availability and running tasks contact the account services or model providers you select. Model requests can include your prompts, relevant project files and tool results. Native harnesses keep their own account/session records and can make additional network requests according to their settings and the permissions you grant. Their privacy policies and your provider agreements apply, including those of [OpenAI](https://openai.com/policies/privacy-policy/), [Anthropic](https://www.anthropic.com/legal/privacy), [xAI](https://x.ai/legal/privacy-policy) and [DeepSeek Harness](https://www.deepseek.com/harness/privacy/) when those services are used.
+
+Opening a harness installation page can query the npm registry for version information. **Notify me about harness updates** controls automatic version checks; **Check for updates** also makes a registry request. Installing a selected harness downloads its packages. These requests are covered by [npm's privacy policy](https://docs.npmjs.com/policies/privacy/).
+
+Project files remain in the folders you select. Uninstalling TeamSwarm retains its local service data and project files. Share diagnostic files and backups only with recipients you choose; native harness records are managed by the respective tools.
 
 Close the application and service before backup or restore. From a source checkout:
 
@@ -268,6 +287,15 @@ The report includes event count, peak occupied work, latest terminal states, exc
 Use [Issues](https://github.com/DrPei12/teamswarm/issues) for reproducible problems, with version, OS, harness/model, launch method and redacted diagnostics. For vulnerabilities, use **Security → Report a vulnerability** when available; otherwise, ask in an issue for a private contact channel without disclosing the details. Exclude credentials, private transcripts and personal project files from reports.
 
 Focused pull requests are welcome. Run checks appropriate to the changed behavior, preserve data and execution recovery, and keep both READMEs consistent. UI changes should be exercised in both languages and relevant window sizes. Contributions are provided under Apache-2.0; retain third-party attribution.
+
+<a id="code-signing-policy"></a>
+## Code signing policy
+
+Windows installers are currently unsigned. The macOS pre-release has no Developer ID signature or Apple notarization. TeamSwarm is applying to [SignPath Foundation](https://signpath.org/) for free Windows code signing through [SignPath.io](https://about.signpath.io/), using a certificate issued to SignPath Foundation.
+
+The project maintainer, contribution reviewer and release approver is [DrPei12](https://github.com/DrPei12). Signing access requires multi-factor authentication, and every signing request requires manual approval by the release approver.
+
+Signing requests cover TeamSwarm's own application executable and Windows installer built from reviewed public source by the [Desktop packages workflow](https://github.com/DrPei12/teamswarm/actions/workflows/desktop.yml). The source commit, build identity and file hashes are recorded in the release manifest and checksum file. Upstream executables and libraries retain their own signatures and licenses; they are not signed under TeamSwarm's signing request. See [third-party notices](THIRD_PARTY_NOTICES.md) and the [privacy policy](#privacy).
 
 <a id="license"></a>
 ## License

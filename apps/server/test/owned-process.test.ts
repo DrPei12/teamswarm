@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { spawn } from "node:child_process";
-import { spawnOwned, sampleWindowsProcesses } from "../src/runtime/harness/owned-process.js";
+import { spawn, spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { spawnOwned, confirmOwnedExit, sampleWindowsProcesses, stopProcessGroup } from "../src/runtime/harness/owned-process.js";
 import { terminateNative } from "../src/runtime/harness/native-support.js";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const gone = (pid: number) => { try { process.kill(pid, 0); return false; } catch (e) { return (e as NodeJS.ErrnoException).code === "ESRCH"; } };
 async function expectGone(pid: number) { for(let i=0;i<100 && !gone(pid);i++) await sleep(20); assert.ok(gone(pid), `Owned PID ${pid} remains`); }
+
+test("POSIX spawn failures reject instead of emitting an unhandled service error", {skip:process.platform==="win32"}, async () => {
+  await assert.rejects(spawnOwned(path.join(tmpdir(),randomUUID()),[],{}),{code:'ENOENT'});
+  await assert.rejects(spawnOwned(tmpdir(),[],{}),{code:'EACCES'});
+});
 
 test("owned process preserves arguments, streams and exit status for 32 concurrent commands", {timeout:30000}, async () => {
   await Promise.all(Array.from({length:32},async (_,i) => {
@@ -27,6 +35,47 @@ for(const mode of ["exit","cancel"] as const) test(`Windows Job reclaims detache
   const pid=Number(output.trim());assert.ok(pid>0);
   if(mode==="cancel")assert.equal(await terminateNative(child),true);
   await close;await expectGone(pid);
+});
+
+for(const mode of ["exit","cancel"] as const) test(`POSIX group reclaims descendants on root ${mode}`, {skip:process.platform==="win32",timeout:15000}, async () => {
+  const script=`const c=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});c.unref();console.log(c.pid);${mode==="exit"?"setTimeout(()=>process.exit(0),100)":"setInterval(()=>{},1000)"}`;
+  const child=await spawnOwned(process.execPath,["-e",script],{});
+  let output=""; child.stdout.on("data",b=>output+=b); child.stderr.resume();
+  const closed=new Promise(resolve=>child.once("close",resolve));
+  try {
+    for(let i=0;i<100 && !output.includes("\n");i++)await sleep(20);
+    const pid=Number(output.trim());assert.ok(pid>0);
+    const stopped=mode==="cancel" ? await terminateNative(child) : (await closed,await confirmOwnedExit(child));
+    const processes=spawnSync('ps',['-axo','pid,ppid,pgid,state'],{encoding:'utf8'}).stdout.split('\n').filter(line=>Number(line.trim().split(/\s+/)[2])===child.pid);
+    assert.equal(stopped,true,JSON.stringify({root:child.pid,exitCode:child.exitCode,signalCode:child.signalCode,processes}));
+    await closed; await expectGone(pid);
+  } finally {
+    if(child.pid)try{process.kill(-child.pid,'SIGKILL');}catch{}
+    child.stdin.destroy();
+  }
+});
+
+test("POSIX exit confirmation waits through a transient permission response", {skip:process.platform==="win32",timeout:15000}, async () => {
+  const child=await spawnOwned(process.execPath,["-e","console.log('ready');setInterval(()=>{},1000)"],{});
+  let ready=false; child.stdout.on('data',()=>{ready=true;}); child.stderr.resume();
+  const closed=new Promise(resolve=>child.once('close',resolve));
+  const send=process.kill;
+  let transient=false;
+  try {
+    for(let i=0;i<100&&!ready;i++)await sleep(20);
+    assert(ready); assert(child.pid);
+    process.kill=((pid,signal)=>{
+      if(pid===-child.pid!&&signal===0&&!transient){transient=true;throw Object.assign(new Error('Transient group state'),{code:'EPERM'});}
+      return send(pid,signal);
+    }) as typeof process.kill;
+    assert.equal(await stopProcessGroup(child.pid),true);
+    assert.equal(transient,true);
+    await closed;
+  } finally {
+    process.kill=send;
+    if(child.pid)try{send(-child.pid,'SIGKILL');}catch{}
+    child.stdin.destroy();
+  }
 });
 
 test("Windows Job reclaims the execution when its owning service dies", {skip:process.platform!=="win32",timeout:15000}, async () => {

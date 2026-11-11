@@ -1,0 +1,19 @@
+{
+  "name": "minimatch",
+  "version": "11.0.1+teamswarm.1",
+  "private": true,
+  "main": "index.cjs",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs",
+      "require": "./index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "minimatch-upstream": "npm:minimatch@11.0.1"
+  }
+}

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import type { HarnessRequest } from "../types.js";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { deviceEntry } from "./device-tools.js";
+import { stopProcessGroup } from "./owned-process.js";
 
 /** Terminate only a process tree launched by this adapter, and wait for OS confirmation. */
 export async function terminateNative(
@@ -49,21 +50,7 @@ export async function terminateNative(
       killer.once("exit", (code) => finish(code === 0));
     });
   }
-  try {
-    process.kill(-child.pid, "SIGKILL");
-    // Signal delivery is not proof that the process group is gone.
-    for (let attempt = 0; attempt < 40; attempt++) {
-      try {
-        process.kill(-child.pid, 0);
-      } catch (error) {
-        return (error as NodeJS.ErrnoException).code === "ESRCH";
-      }
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    return false;
-  } catch {
-    return false;
-  }
+  return stopProcessGroup(child.pid);
 }
 
 const repository = path.resolve(
