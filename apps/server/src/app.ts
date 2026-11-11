@@ -1,4 +1,5 @@
 import { harnessManifest } from "@team/contracts/harness-catalog";
+import { productBuild } from "./version.js";
 import express, { type ErrorRequestHandler, type Express, type RequestHandler } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -243,7 +244,7 @@ export function createApp(options: CreateAppOptions = {}): TeamService {
   });
 
   app.get('/api/health', (_request, response) => {
-    response.json({ ok: true, service: 'teamswarm', apiVersion: 1 });
+    response.json({ ok: true, service: 'teamswarm', apiVersion: 1, build: productBuild });
   });
 
   app.get('/api/teams', safe((_request, response) => {

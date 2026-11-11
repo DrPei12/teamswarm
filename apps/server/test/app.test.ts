@@ -126,7 +126,7 @@ test('serves durable Team records over HTTP with isolation and idempotency', asy
   try {
     const health = await request(running, '/api/health');
     assert.equal(health.status, 200);
-    assert.deepEqual(health.body, { ok: true, service: 'teamswarm', apiVersion: 1 });
+    assert.deepEqual(health.body, { ok: true, service: 'teamswarm', apiVersion: 1, build: null });
 
     const empty = await request(running, '/api/teams');
     assert.equal(empty.status, 200);
