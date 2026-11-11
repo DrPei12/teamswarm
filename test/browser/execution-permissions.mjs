@@ -38,8 +38,15 @@ const call = async (route, body, method = body ? 'POST' : 'GET') => {
 };
 let browser, page;
 async function assertAligned(left, right, name) {
-  const [a, b] = await Promise.all([left.boundingBox(), right.boundingBox()]);
-  assert(a && b, `${name} fields must be visible`);
+  await left.waitFor({state:'visible'});
+  await right.waitFor({state:'visible'});
+  // Read both boxes in one browser task: resize/scroll may happen between
+  // separate CDP requests even when Promise.all starts them together.
+  const [a, b] = await left.evaluate((element, other) => [element, other].map(node => {
+    const {x,y,width,height} = node.getBoundingClientRect();
+    return {x,y,width,height};
+  }), await right.elementHandle());
+  assert(a.width > 0 && a.height > 0 && b.width > 0 && b.height > 0, `${name} fields must be visible`);
   assert(Math.abs(a.y - b.y) <= 1 && Math.abs(a.y + a.height - b.y - b.height) <= 1,
     `${name} fields do not share top and bottom edges: ${JSON.stringify([a, b])}`);
 }
