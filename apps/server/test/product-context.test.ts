@@ -93,6 +93,18 @@ test("context indicator reads the latest request counters and distinguishes unkn
       contextWindowUsage(db, codex, { ...a, config: codex, usage: null }),
       { used: 3000, limit: 32768, estimated: true, limitSource: "estimate" },
     );
+    const nativeOnly = executionConfig.parse({
+      harness: "antigravity",
+      model: "native-model",
+    });
+    assert.deepEqual(
+      contextWindowUsage(db, nativeOnly, {
+        ...a,
+        config: nativeOnly,
+        usage: null,
+      }),
+      { used: 3000, limit: null, estimated: true, limitSource: "estimate" },
+    );
   } finally {
     db.close();
   }

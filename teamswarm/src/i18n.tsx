@@ -735,6 +735,8 @@ export const zhCN: Record<string, string> = {
   "Project folder": "项目文件夹",
   "Time limit per turn (minutes)": "单轮执行时限（分钟）",
   "Pending requests": "待处理请求",
+  "Estimated usage; the native window has not been reported.":
+    "用量为估算，原生窗口尚未上报。",
   "Use this Harness's native account": "请使用此 Harness 的原生账号",
   "Antigravity local sign-in": "Antigravity 本机登录",
   "Antigravity uses the Google account signed in on this device.":
