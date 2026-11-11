@@ -149,6 +149,9 @@ try {
   // The menu geometry stays fixed, and reopening uses the prefetched catalogue.
   let catalogueRequests = 0;
   page.on('request', r=>{if(r.url().includes('member-permission-options')) catalogueRequests++;});
+  // Focus restoration is deferred until Radix has unmounted the previous menu.
+  // A following synthetic click must wait for that user-visible completion.
+  await page.waitForFunction(trigger => trigger === document.activeElement, await memberPermissions.elementHandle(), {timeout:5000});
   for(let i=0;i<3;i++) {
     await memberPermissions.click();
     const menu = page.locator('.member-permission-menu');
@@ -157,6 +160,8 @@ try {
     const after = await menu.boundingBox();
     for(const key of ['x','y','width','height']) assert(Math.abs(before[key]-after[key])<=1,`${key} moved`);
     await page.keyboard.press('Escape');
+    await menu.waitFor({state:'hidden'});
+    await page.waitForFunction(trigger => trigger === document.activeElement, await memberPermissions.elementHandle(), {timeout:5000});
   }
   assert.equal(catalogueRequests,0);
   await page.screenshot({path:path.join(root,'member-permissions.png')});
