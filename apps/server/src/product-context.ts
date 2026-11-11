@@ -1,4 +1,5 @@
 import type { ContextWindowPlan } from "@team/contracts/context-window";
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import { effectiveWindow } from "./runtime/context-window.js";
 import { previousClaudeUsage } from "./runtime/claude-turn-usage.js";
 import type { DatabaseSync } from "node:sqlite";
@@ -169,6 +170,8 @@ export function contextWindowUsage(
       limitSource: "configured",
     });
   if (used === null && next) return upcoming;
+  if (harnessManifest(config.harness)?.models.nativeOnly)
+    return addNext({ used, limit: null, estimated, limitSource: "estimate" });
   const planned = capacity(frame?.plannedWindow);
   return addNext({
     used,

@@ -72,16 +72,18 @@ export function ContextIndicator({ usage }: { usage?: ContextWindowUsage }) {
           ? t("{used} tokens used", { used: tokens(used, locale) })
           : t("Usage appears when the Harness reports it.");
   const source =
-    usage?.rawLimit && hasLimit && usage.rawLimit > limit
-      ? t("Nominal {raw} · reserved {reserve}", {
-          raw: tokens(usage.rawLimit, locale),
-          reserve: tokens(usage.rawLimit - limit, locale),
-        })
-      : usage?.limitSource === "estimate"
-        ? t("Estimated window")
-        : usage?.limitSource === "configured"
-          ? t("Configured window")
-          : null;
+    usage?.estimated && !hasLimit
+      ? t("Estimated usage; the native window has not been reported.")
+      : usage?.rawLimit && hasLimit && usage.rawLimit > limit
+        ? t("Nominal {raw} · reserved {reserve}", {
+            raw: tokens(usage.rawLimit, locale),
+            reserve: tokens(usage.rawLimit - limit, locale),
+          })
+        : usage?.limitSource === "estimate"
+          ? t("Estimated window")
+          : usage?.limitSource === "configured"
+            ? t("Configured window")
+            : null;
   return (
     <Tooltip.Root
       delayDuration={160}
