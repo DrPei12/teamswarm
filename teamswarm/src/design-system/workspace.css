@@ -231,8 +231,20 @@
 .has-chat .composer-position {
   margin-top: 20px;
   margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: calc(100% - 96px);
+}
+.has-chat .composer-position > :not(.approval-requests):not(.composer-surface) {
+  flex-shrink: 0;
 }
 .composer-surface {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
   container-type: inline-size;
   border: 0;
   outline: none;
@@ -255,12 +267,14 @@
 }
 .composer-surface textarea {
   display: block;
+  flex: 1 1 auto;
+  overflow-y: auto;
   font-family: var(--preferred-conversation, var(--font-ui));
   font-size: var(--composer-font-size);
   line-height: var(--composer-line-height);
   font-weight: 400;
   padding: 2px 4px;
-  min-height: 24px;
+  min-height: calc(var(--composer-line-height) + 4px);
   max-height: min(260px, 40vh);
   field-sizing: content;
 }
@@ -268,9 +282,19 @@
   color: var(--subtle);
 }
 .composer-position .composer-surface textarea {
-  min-height: 48px;
+  min-height: calc(var(--composer-line-height) * 2 + 4px);
+}
+.composer-position:has(> .approval-requests) > .composer-surface,
+.member-action-area:has(> .approval-requests) > .composer-surface {
+  flex-shrink: 0;
+}
+.composer-position:has(> .approval-requests) > .composer-surface textarea,
+.member-action-area:has(> .approval-requests) > .composer-surface textarea {
+  min-height: calc(var(--composer-line-height) + 4px);
+  max-height: calc(var(--composer-line-height) + 4px);
 }
 .composer-chin {
+  flex: none;
   --cds-h-control: 36px;
   --cmp-chin-row-h: 36px;
   --cmp-chin-touch-grow: calc(

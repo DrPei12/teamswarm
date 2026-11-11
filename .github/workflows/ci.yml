@@ -34,6 +34,7 @@ jobs:
       - run: node test/browser/host-execution-feedback.mjs
       - run: node test/browser/native-questions.mjs
       - run: node test/browser/pending-requests.mjs
+      - run: node test/browser/responsive-questions.mjs
       - run: node teamswarm/scripts/verify-composer.mjs
       - run: node teamswarm/scripts/verify-subscription-models.mjs
       - run: node teamswarm/scripts/verify-frontend-stability.mjs

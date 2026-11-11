@@ -3,6 +3,13 @@ import type { ExecutionApproval } from "@team/contracts/runtime";
 import { api, product } from "./service";
 import { useI18n } from "./i18n";
 import type { Workspace } from "./store";
+import {
+  useQuestionDraft,
+  updateQuestionDraft,
+  discardQuestionDraft,
+  retainPendingQuestionDrafts,
+  questionDraftRevision,
+} from "./questionDrafts";
 
 function approvalDetails(text: string): string {
   try {
@@ -47,35 +54,40 @@ function QuestionRequest({
 }) {
   const { t } = useI18n();
   const questions = request.questions ?? [];
-  const [chosen, setChosen] = useState<string[][]>(() =>
-    questions.map(() => []),
-  );
-  const [other, setOther] = useState<string[]>(() => questions.map(() => ""));
+  const { chosen, other } = useQuestionDraft(request.id);
   const answers = questions.map((_, i) => [
-    ...chosen[i],
-    ...(other[i].trim() ? [other[i].trim()] : []),
+    ...(chosen[i] ?? []),
+    ...(other[i]?.trim() ? [other[i].trim()] : []),
   ]);
   const complete = answers.every(
     (a, i) => a.length > 0 && (questions[i].multiSelect || a.length === 1),
   );
   const choose = (index: number, label: string, multi: boolean) => {
-    setChosen((old) =>
-      old.map((values, i) =>
-        i !== index
+    updateQuestionDraft(request.id, request.teamId, (old) => ({
+      chosen: questions.map((_, i) => {
+        const values = old.chosen[i] ?? [];
+        return i !== index
           ? values
           : !multi
             ? [label]
             : values.includes(label)
               ? values.filter((v) => v !== label)
-              : [...values, label],
+              : [...values, label];
+      }),
+      other: questions.map((_, i) =>
+        !multi && i === index ? "" : (old.other[i] ?? ""),
       ),
-    );
-    if (!multi) setOther((old) => old.map((v, i) => (i === index ? "" : v)));
+    }));
   };
   const write = (index: number, value: string, multi: boolean) => {
-    setOther((old) => old.map((v, i) => (i === index ? value : v)));
-    if (!multi && value.trim())
-      setChosen((old) => old.map((v, i) => (i === index ? [] : v)));
+    updateQuestionDraft(request.id, request.teamId, (old) => ({
+      chosen: questions.map((_, i) =>
+        !multi && value.trim() && i === index ? [] : (old.chosen[i] ?? []),
+      ),
+      other: questions.map((_, i) =>
+        i === index ? value : (old.other[i] ?? ""),
+      ),
+    }));
   };
   return (
     <section
@@ -98,7 +110,7 @@ function QuestionRequest({
               <input
                 type={q.multiSelect ? "checkbox" : "radio"}
                 name={`${request.id}:${i}`}
-                checked={chosen[i].includes(o.label)}
+                checked={chosen[i]?.includes(o.label) ?? false}
                 onChange={() => choose(i, o.label, !!q.multiSelect)}
               />
               <span>
@@ -110,7 +122,7 @@ function QuestionRequest({
           {q.allowOther && (
             <input
               className="question-other"
-              value={other[i]}
+              value={other[i] ?? ""}
               maxLength={2000}
               aria-label={t(q.options.length ? "Other answer" : "Your answer")}
               placeholder={t(q.options.length ? "Other answer" : "Your answer")}
@@ -156,12 +168,18 @@ export function ApprovalRequests({
   const cursor = workspace.executions?.[teamId]?.latestEvent;
   useEffect(() => {
     let active = true;
+    const draftRevision = questionDraftRevision();
     void api<ExecutionApproval[]>(
       `/teams/${encodeURIComponent(teamId)}/approvals`,
     )
       .then((rows) => {
         if (active) {
           setRequests(rows.filter((a) => !memberId || a.memberId === memberId));
+          retainPendingQuestionDrafts(
+            teamId,
+            new Set(rows.map((request) => request.id)),
+            draftRevision,
+          );
           setError("");
         }
       })
@@ -181,6 +199,7 @@ export function ApprovalRequests({
         { ...answer, language: workspace.language },
       );
       setRequests((old) => old.filter((a) => a.id !== request.id));
+      discardQuestionDraft(request.id);
       await product.refresh();
     } catch (e) {
       setError((e as Error).message);

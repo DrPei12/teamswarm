@@ -307,6 +307,9 @@ export class AntigravityHarness extends AcpHarness {
         }).error;
       },
     });
+    // The native CLI compacts its own history; local estimates must not force
+    // a replacement session merely because native capacity is unreported.
+    this.capabilities.contextCompaction = true;
   }
   override inspect() {
     return antigravityInspection();
