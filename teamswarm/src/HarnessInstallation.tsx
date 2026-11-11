@@ -17,6 +17,7 @@ type Installation = {
   updateAvailable: boolean | null;
   updateError: string | null;
   releaseUrl: string;
+  installUrl?: string;
   canInstall: boolean;
   restartRequired?: boolean;
   installVersion: string;
@@ -124,35 +125,48 @@ export function HarnessInstallation({
             </span>
           )}
         </div>
-        {status && (!status.installed || status.canInstall) && (
-          <button
-            type="button"
+        {status?.installUrl && !status.installed && (
+          <a
             className="secondary-button"
-            disabled={!status.canInstall || installing}
-            onClick={async () => {
-              setSubmitting(true);
-              setError("");
-              try {
-                await api(
-                  `/harnesses/${encodeURIComponent(harness)}/install`,
-                  {},
-                );
-                refresh((value) => value + 1);
-              } catch (e) {
-                setError((e as Error).message);
-              } finally {
-                setSubmitting(false);
-              }
-            }}
+            href={status.installUrl}
+            target="_blank"
+            rel="noreferrer noopener"
           >
-            {installing ? (
-              <LoaderCircle size={14} className="spinner" />
-            ) : (
-              <Download size={14} />
-            )}
-            {t(installing ? "Installing on device…" : "Install on device")}
-          </button>
+            {t("Install on device")}
+            <ExternalLink size={14} />
+          </a>
         )}
+        {status &&
+          !status.installUrl &&
+          (!status.installed || status.canInstall) && (
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!status.canInstall || installing}
+              onClick={async () => {
+                setSubmitting(true);
+                setError("");
+                try {
+                  await api(
+                    `/harnesses/${encodeURIComponent(harness)}/install`,
+                    {},
+                  );
+                  refresh((value) => value + 1);
+                } catch (e) {
+                  setError((e as Error).message);
+                } finally {
+                  setSubmitting(false);
+                }
+              }}
+            >
+              {installing ? (
+                <LoaderCircle size={14} className="spinner" />
+              ) : (
+                <Download size={14} />
+              )}
+              {t(installing ? "Installing on device…" : "Install on device")}
+            </button>
+          )}
         {status?.installed && (
           <button
             type="button"
@@ -169,15 +183,17 @@ export function HarnessInstallation({
           </button>
         )}
       </div>
-      {status && (!status.installed || status.canInstall) && (
-        <p className="form-hint">
-          {t(
-            status.canInstall
-              ? "Installs globally on this device, available to other applications and projects."
-              : "Install Node.js and npm, or check your configured harness path, then check again.",
-          )}
-        </p>
-      )}
+      {status &&
+        !status.installUrl &&
+        (!status.installed || status.canInstall) && (
+          <p className="form-hint">
+            {t(
+              status.canInstall
+                ? "Installs globally on this device, available to other applications and projects."
+                : "Install Node.js and npm, or check your configured harness path, then check again.",
+            )}
+          </p>
+        )}
       {status?.restartRequired && (
         <p className="form-hint">
           {t(

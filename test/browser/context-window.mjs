@@ -137,8 +137,13 @@ try {
     ]);
   await open();
   await pick("512K");
+  await dialog.getByRole("combobox").first().click();
+  await page.getByRole("option", { name: "简体中文", exact: true }).click();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.reload();
+  await page.getByRole("button", { name: "Workspace menu" }).waitFor();
   assert.equal((await call("/product")).contextWindowPreset, "auto");
+  assert.equal((await call("/product")).language, "en");
   await open();
   await pick("128K");
   await done();

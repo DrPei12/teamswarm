@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { TeamCapabilities } from "@team/contracts/allocation";
 import type { HarnessInspection } from "./harnessCatalog";
+import { harnessManifests } from "@team/contracts/harness-catalog";
 import { api } from "./service";
 import { modelChoices, subscriptionCatalogId } from "./modelCatalog";
 import { readSubscriptionCatalog } from "./subscriptionCatalog";
@@ -43,7 +44,11 @@ export function useModelCatalog(
         const ids = [
           ...new Set([
             harness,
-            ...(value.version === 0 ? ["codex", "claude-code", "grok"] : []),
+            ...(value.version === 0
+              ? harnessManifests()
+                  .filter((h) => h.models.nativeLogin)
+                  .map((h) => h.id)
+              : []),
             ...value.connections
               .filter((c) => c.enabled && c.kind === "subscription")
               .map(subscriptionCatalogId)

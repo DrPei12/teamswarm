@@ -18,7 +18,7 @@ export function ExecutionReceipt({ execution }: { execution: HostExecution }) {
         label={t(execution.status)}
       />
       {execution.error && (
-        <p className="execution-receipt-error">{execution.error}</p>
+        <p className="execution-receipt-error">{t(execution.error)}</p>
       )}
       {execution.detail && execution.detail !== execution.error && (
         <p className="execution-receipt-detail">{execution.detail}</p>

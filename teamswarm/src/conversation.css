@@ -233,6 +233,11 @@
   font-size: calc(11px * var(--font-scale));
   z-index: 2;
 }
+.member-action-area {
+  position: relative;
+  flex: none;
+  min-width: 0;
+}
 .member-composer {
   margin: 0 16px 16px;
   padding: 10px 12px;

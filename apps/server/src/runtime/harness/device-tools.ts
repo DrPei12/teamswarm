@@ -50,6 +50,10 @@ export function packageFor(
   return null;
 }
 export function deviceEntry(id: string): string | undefined {
+  if (id === "antigravity" && process.platform === "win32" && process.env.LOCALAPPDATA) {
+    const binary = path.join(process.env.LOCALAPPDATA, "agy", "bin", "agy.exe");
+    if (existsSync(binary) && isDeviceFile(binary)) return realpathSync(binary);
+  }
   // The npm bootstrap expands here using the device profile. Prefer that
   // executable before applying a separate GROK_HOME for account credentials.
   const grokBinary = path.join(homedir(), ".grok", "bin", process.platform === "win32" ? "grok.exe" : "grok");
@@ -61,6 +65,7 @@ export function deviceEntry(id: string): string | undefined {
     pi: "pi",
     opencode: "opencode",
     "deepseek-harness": "dsh",
+    antigravity: "agy",
   };
   const entries = harnessManifest(id)?.runtime?.entries ?? [];
   for (const directory of devicePaths()) {

@@ -10,6 +10,7 @@ import { badRequest, conflict, notFound } from "../errors.js";
 import { TeamRuntime } from "./engine.js";
 import { HarnessManagement } from "./harness/management.js";
 import { supportsSubscription, subscriptionAccounts } from "./harness/subscriptions.js";
+import { antigravityAccounts } from "./harness/antigravity-account.js";
 import { homedir } from "node:os";
 import { resourceInput, directoryQuery, directoryDetail } from "./catalog.js";
 import { capabilitiesInput } from "./capabilities.js";
@@ -682,6 +683,19 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
   // URLs/codes. These must never be cached or put in the public runtime catalog.
   router.post("/harnesses/:harnessId/subscription/:action", async (req, res) => {
     const id = param(req.params.harnessId);
+    if (id === "antigravity") {
+      res.setHeader("Cache-Control", "no-store");
+      const action = param(req.params.action);
+      if (action === "cancel") {
+        const input = parse(z.object({ loginId: z.string().uuid() }).strict(), req.body);
+        return res.json(await antigravityAccounts.cancel(input.loginId));
+      }
+      parse(z.object({}).strict(), req.body);
+      if (action === "status") return res.json(await antigravityAccounts.status());
+      if (action === "start") return res.json(await antigravityAccounts.start());
+      if (action === "poll") return res.json(antigravityAccounts.poll());
+      throw notFound();
+    }
     if (!supportsSubscription(id)) throw notFound();
     res.setHeader("Cache-Control", "no-store");
     const action = param(req.params.action);

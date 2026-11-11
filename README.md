@@ -114,8 +114,11 @@ A harness runs an agent's tools and execution loop. A model connection supplies 
 | Pi | Separate device installation | Supported |
 | DeepSeek Harness | Separate device installation | A new native session reads saved TeamSwarm work |
 | OpenCode | Separate device installation | Supported |
+| Antigravity | Google's official Antigravity CLI (agy) | ACP session loading |
 
-Integration versions are pinned in [config/harnesses.json](config/harnesses.json). Harnesses own their tools, permissions and sessions; independent connections supply models. A connection can be assigned to any of the six harnesses. The local service translates Responses, Chat Completions and Anthropic Messages when their protocols differ.
+Versions of npm-managed integrations are pinned in [config/harnesses.json](config/harnesses.json). Harnesses own their tools, permissions and sessions. Codex, Claude Code, Grok, Pi, DeepSeek Harness and OpenCode can use shared model connections. The local service translates Responses, Chat Completions and Anthropic Messages when their protocols differ.
+
+Antigravity uses the Google account signed in through the official CLI. Install the CLI, enable Antigravity in Team capabilities and add an Antigravity subscription connection. Its native catalog supplies models and reasoning levels. The account panel can start Google sign-in. Model execution requires an eligible account and region. The integration uses official ACP sessions, tools and permission handling. [Antigravity CLI installation and ACP](https://antigravity.google/docs/cli/acp/)
 
 In Team capabilities, enable harnesses and add model connections separately. Select **ChatGPT → Continue with ChatGPT**, authorize on the official page, load the account's model catalog and choose models for the Host to allocate. Claude Code can use that ChatGPT connection while running its own commands, handling tool results and continuing its native session. **ChatGPT (Codex)** retains the original Codex account path.
 

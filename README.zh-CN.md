@@ -111,8 +111,11 @@ Harness 执行代理工具与运行循环，模型连接提供模型 API。执�
 | Pi | 本机单独安装 | 支持 |
 | DeepSeek Harness | 本机单独安装 | 新原生会话读取保存的 TeamSwarm 工作 |
 | OpenCode | 本机单独安装 | 支持 |
+| Antigravity | 安装 Google 官方 Antigravity CLI（agy） | ACP 会话接续 |
 
-集成版本固定在 [config/harnesses.json](config/harnesses.json)。Harness 负责自己的工具、权限与会话，模型来源由独立的连接提供。同一模型连接可以分配给六种 Harness；跨协议组合由本机服务转换 Responses、Chat Completions 和 Anthropic Messages。
+通过 npm 管理的集成版本固定在 [config/harnesses.json](config/harnesses.json)。Harness 负责自己的工具、权限与会话。Codex、Claude Code、Grok、Pi、DeepSeek Harness 和 OpenCode 可以使用共享的模型连接；跨协议组合由本机服务转换 Responses、Chat Completions 和 Anthropic Messages。
+
+Antigravity 使用 Google 官方 CLI 的本机登录。安装 CLI 后，在团队能力中启用 Antigravity，并添加 Antigravity 订阅连接。模型与推理强度由原生目录提供，首次使用可在账号区域发起 Google 登录。实际调用需要账号及所在地区满足 Google 的服务条件。接入使用官方 ACP 的会话、工具和权限流程。[Antigravity CLI 安装与 ACP](https://antigravity.google/docs/cli/acp/)
 
 在团队能力中分别启用 Harness 和添加模型连接。选择 **ChatGPT → Continue with ChatGPT**，在官方页面授权后加载账号模型目录，再选择提供给 Host 分配的模型。ChatGPT 连接也可用于 Claude Code；Claude Code 自己执行命令、处理工具结果和继续会话。原有 **ChatGPT (Codex)** 入口保留 Codex 原生账号方式。
 

@@ -28,13 +28,13 @@ test('permission menus and native defaults use the agreed modes without an extra
 });
 
 test('each built-in package validates and retains its native permission vocabulary', () => {
-  assert.equal(harnessManifests().length, 6);
+  assert.equal(harnessManifests().length, 7);
   for (const m of harnessManifests()) assert.equal(validateManifest(m).id, m.id);
   assert.throws(() => nativePermissions.parse({ harness: 'pi', mode: 'default' }));
   assert.throws(() => nativePermissions.parse({ harness: 'codex', approvalPolicy: 'always' }));
   assert.throws(() => nativePermissions.parse({ harness: 'opencode', permission: { bash: 'skip' } }));
 });
-test('a seventh package registers permissions, routing, Host sections and connection resolution without core branches', async () => {
+test('an external package registers permissions, routing, Host sections and connection resolution without core branches', async () => {
   const adapters = await loadHarnesses(JSON.stringify([fileURLToPath(new URL('../../../harness-packages/qwen-code/index.mjs', import.meta.url))]));
   try {
     const qwen = adapters.find(h => h.id === 'qwen-code')!;

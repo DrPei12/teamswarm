@@ -345,7 +345,7 @@
 }
 .composer-toolbar > .send-button.ready,
 .member-composer-toolbar .member-send:not(:disabled) {
-  background: var(--cds-brand);
+  background: var(--accent-solid);
   color: white;
   border: 0;
   box-shadow: none;
@@ -887,7 +887,7 @@ html[data-pane-dragging] * {
   box-shadow: var(--cds-shadow-popover);
 }
 .host-thread-bottom,
-.member-composer .thread-bottom {
+.member-action-area > .thread-bottom {
   bottom: calc(100% + 12px);
   white-space: nowrap;
 }
@@ -1289,14 +1289,6 @@ html[data-pane-dragging] * {
 .messages .message-user .message-heading time {
   color: var(--subtle);
 }
-.message-heading {
-  opacity: 0.68;
-  transition: opacity var(--cds-dur-base) var(--cds-ease);
-}
-.message:hover .message-heading,
-.message:focus-within .message-heading {
-  opacity: 1;
-}
 .message-heading time {
   color: var(--subtle);
 }
@@ -1373,21 +1365,21 @@ html[data-pane-dragging] * {
 }
 .execution-receipt .status-indicator {
   color: var(--secondary);
-  font-size: 12px;
+  font-size: calc(13px * var(--font-scale));
 }
 .execution-receipt-error {
   margin: 0;
   color: var(--danger);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: calc(13px * var(--font-scale));
+  line-height: calc(20px * var(--font-scale));
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 .execution-receipt-detail {
   margin: 0;
   color: var(--subtle);
-  font-size: 11px;
-  line-height: 17px;
+  font-size: calc(12px * var(--font-scale));
+  line-height: calc(18px * var(--font-scale));
 }
 .execution-receipt.failed,
 .execution-receipt.interrupted {
@@ -1407,9 +1399,6 @@ html[data-pane-dragging] * {
   box-shadow:
     var(--cds-shadow-composer-focus),
     0 0 0 3px var(--focus);
-}
-.composer-toolbar > .send-button.ready {
-  background: var(--cds-brand);
 }
 .composer-toolbar > .send-button.ready:hover {
   background: var(--cds-clay-hover);

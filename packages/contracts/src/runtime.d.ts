@@ -3,6 +3,7 @@ import type { AttemptExecutionSnapshot, ResourceSelection } from "./allocation.j
 
 export type Access = "read-only" | "workspace-write";
 export type BuiltinNativePermissions =
+  | { harness: "antigravity"; mode: "plan" | "default" | "bypassPermissions" }
   | { harness: "codex"; approvalPolicy: "untrusted" | "never" | "on-request"; sandbox?: Access | "danger-full-access" }
   | { harness: "claude-code"; mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions"; allow?: string[]; deny?: string[] }
   | { harness: "grok"; mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions"; allow?: string[]; deny?: string[] }

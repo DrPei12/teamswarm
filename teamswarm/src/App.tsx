@@ -1467,10 +1467,6 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                         aria-relevant="additions text"
                         aria-label={tr("Conversation")}
                       >
-                        <ApprovalRequests
-                          teamId={team.id}
-                          workspace={workspace}
-                        />
                         {chat.historyBefore && (
                           <button
                             className="load-older-messages"
@@ -1684,6 +1680,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                     )}
                   </div>
                   <div className="composer-position">
+                    <ApprovalRequests teamId={team.id} workspace={workspace} />
                     {!chat && (
                       <div className="welcome">
                         <SwarmMark size={48} />

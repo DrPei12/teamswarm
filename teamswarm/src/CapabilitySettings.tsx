@@ -896,6 +896,7 @@ function ConnectionEditor({
                 { id: "codex", name: "Codex local sign-in" },
                 { id: "claude-code", name: "Claude" },
                 { id: "grok", name: "Grok" },
+                { id: "antigravity", name: "Antigravity" },
               ].map((a) => (
                 <button
                   type="button"

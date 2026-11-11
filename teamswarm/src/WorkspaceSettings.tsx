@@ -256,6 +256,11 @@ export function WorkspaceSettings({
 }) {
   const { t } = useI18n();
   const { value, save, error } = appearance;
+  const initial = useRef({
+    name: workspace.name,
+    language: workspace.language,
+  });
+  const [language, setLanguage] = useState<Language>(workspace.language);
   const [windowChoice, setWindowChoice] = useState<ContextWindowPreset | null>(
     null,
   );
@@ -312,27 +317,21 @@ export function WorkspaceSettings({
               const name = String(
                 new FormData(e.currentTarget).get("name") || "",
               ).trim();
-              if (!changedWindow) {
-                if (
-                  !name ||
-                  name === workspace.name ||
-                  update((old) => ({ ...old, name }))
-                )
-                  close();
-                return;
-              }
               setSavingWindow(true);
               setWindowError("");
               try {
-                await product.saveContextWindow(
-                  windowChoice,
-                  name && name !== workspace.name ? name : undefined,
-                );
+                await product.saveGeneralSettings({
+                  ...(name && name !== initial.current.name ? { name } : {}),
+                  ...(language !== initial.current.language
+                    ? { language }
+                    : {}),
+                  ...(changedWindow
+                    ? { contextWindowPreset: windowChoice }
+                    : {}),
+                });
                 close();
               } catch {
-                setWindowError(
-                  t("Could not save the context window. Try again."),
-                );
+                setWindowError(t("Could not save settings. Try again."));
               } finally {
                 setSavingWindow(false);
               }
@@ -343,7 +342,8 @@ export function WorkspaceSettings({
                 {t("Workspace name")}
                 <input
                   name="name"
-                  defaultValue={workspace.name}
+                  defaultValue={initial.current.name}
+                  disabled={savingWindow}
                   required
                   maxLength={60}
                 />
@@ -352,10 +352,9 @@ export function WorkspaceSettings({
                 {t("Language")}
                 <FieldSelect
                   name="language"
-                  value={workspace.language}
-                  onValueChange={(v) =>
-                    update((old) => ({ ...old, language: v as Language }))
-                  }
+                  value={language}
+                  disabled={savingWindow}
+                  onValueChange={(v) => setLanguage(v as Language)}
                 >
                   <option value="en">English</option>
                   <option value="zh-CN">简体中文</option>

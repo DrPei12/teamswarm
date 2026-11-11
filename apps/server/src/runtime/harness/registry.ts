@@ -3,6 +3,7 @@ import { statSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { CodexHarness } from "./codex.js";
 import { NativeHarness } from "./native.js";
+import { AntigravityHarness } from "./antigravity.js";
 import type { Harness } from "../types.js";
 import { registerHarnessManifest, type HarnessManifest } from "@team/contracts/harness-catalog";
 import { validateManifest } from "./manifest.js";
@@ -27,6 +28,7 @@ export async function loadHarnesses(
 ): Promise<Harness[]> {
   const adapters: Harness[] = [
     new CodexHarness(),
+    new AntigravityHarness(),
     ...(["claude-code", "grok", "pi", "deepseek-harness", "opencode"] as const).map(
       (id) => new NativeHarness(id),
     ),

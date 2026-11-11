@@ -53,7 +53,7 @@ export function nativeAccess(config: ExecutionConfig): "read-only" | "workspace-
   const p = config.permissions;
   if (!p || p.harness !== config.harness) return "workspace-write";
   if ((p.harness === "codex" || p.harness === "deepseek-harness") && p.sandbox === "danger-full-access") return "full-access";
-  if ((p.harness === "claude-code" || p.harness === "grok") && p.mode === "bypassPermissions") return "full-access";
+  if ((p.harness === "claude-code" || p.harness === "grok" || p.harness === "antigravity") && p.mode === "bypassPermissions") return "full-access";
   if (p.harness === "opencode") { const rules = p.permission as Record<string,unknown>;
     if (rules?.["*"] === "allow" && Object.values(rules).every(value => value === "allow")) return "full-access";
   }

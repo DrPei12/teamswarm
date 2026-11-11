@@ -734,6 +734,24 @@ export const zhCN: Record<string, string> = {
   Available: "可用",
   "Project folder": "项目文件夹",
   "Time limit per turn (minutes)": "单轮执行时限（分钟）",
+  "Pending requests": "待处理请求",
+  "Use this Harness's native account": "请使用此 Harness 的原生账号",
+  "Antigravity local sign-in": "Antigravity 本机登录",
+  "Antigravity uses the Google account signed in on this device.":
+    "Antigravity 使用这台设备上已登录的 Google 账号。",
+  "Complete sign-in in the browser opened by Antigravity.":
+    "请在 Antigravity 打开的浏览器中完成登录。",
+  "Sign in with Google": "使用 Google 登录",
+  "Antigravity reported an execution failure. Check the native CLI for the cause.":
+    "Antigravity 执行失败，请在原生 CLI 中检查具体原因。",
+  "Antigravity sign-in could not start. Check the CLI installation.":
+    "无法启动 Antigravity 登录，请检查 CLI 安装。",
+  "Antigravity sign-in ended before completion. Try again.":
+    "Antigravity 登录尚未完成，请重试。",
+  "Enter a duration from 10 seconds to 60 minutes.":
+    "请输入 10 秒至 60 分钟之间的时限。",
+  "A turn that runs longer is stopped and kept as interrupted. Applies to new requests; 10 seconds–60 minutes.":
+    "超时后会停止执行并保留中断记录。新设置从下一轮生效，可设为 10 秒至 60 分钟。",
   "A turn that runs longer is stopped and kept as interrupted. Applies to new requests; 1–60 minutes.":
     "单轮执行超过该时长会被停止并记为已中断。对新请求生效，可设 1–60 分钟。",
   "Execution reached its configured time limit.": "执行达到了设置的时限。",
@@ -902,6 +920,7 @@ export const zhCN: Record<string, string> = {
     "预计 Host 窗口为 {raw} 个标记，预留后可用约 {usable} 个。",
   "Could not save the context window. Try again.":
     "上下文窗口保存失败，请重试。",
+  "Could not save settings. Try again.": "设置保存失败，请重试。",
   "Nominal {raw} · reserved {reserve}": "额定 {raw} · 预留 {reserve}",
   "Next turn: {count} tokens available": "下一轮可用 {count} 个标记",
   "Context window": "上下文窗口",

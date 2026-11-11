@@ -1936,6 +1936,24 @@
   opacity: 0.45;
 }
 
+.approval-requests {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(360px, 38dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  margin-bottom: 12px;
+}
+.member-action-area > .approval-requests {
+  margin: 0 16px 12px;
+}
+.approval-requests .approval-request {
+  margin: 0;
+}
+.approval-requests .approval-request + .approval-request {
+  margin-top: 10px;
+}
 .approval-request {
   margin: 14px 0;
   padding: 14px;

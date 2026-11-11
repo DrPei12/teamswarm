@@ -188,8 +188,13 @@ export function ApprovalRequests({
       setBusy(null);
     }
   };
+  if (!requests.length && !error) return null;
   return (
-    <>
+    <div
+      className="approval-requests"
+      role="region"
+      aria-label={t("Pending requests")}
+    >
       {requests.map((request) =>
         request.kind === "question" ? (
           <QuestionRequest
@@ -278,6 +283,6 @@ export function ApprovalRequests({
           </button>
         </p>
       )}
-    </>
+    </div>
   );
 }

@@ -95,7 +95,7 @@
   --line: var(--cds-border);
   --accent: var(--cds-clay);
   --accent-ink: #a7492e;
-  --accent-solid: var(--cds-brand);
+  --accent-solid: #b65335;
   --accent-wash: #fbf3ef;
   --focus: rgb(217 119 87 / 13%);
   --shadow: var(--cds-shadow-popover);

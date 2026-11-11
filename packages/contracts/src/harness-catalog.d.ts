@@ -8,7 +8,8 @@ export interface HarnessManifest {
   runtime?: { package: string; version: string; entries: string[]; testedVersions: string[]; homepage?: string };
   models: {
     protocols: ConnectionProtocol[];
-    preferredProtocol: ConnectionProtocol;
+    preferredProtocol: ConnectionProtocol | null;
+    nativeOnly?: boolean;
     chatgptProtocol?: ConnectionProtocol | null;
     nativeLogin: boolean;
     nativeEffort?: { values: 'any' | string[]; nativeLoginOnly?: boolean; protocols?: ConnectionProtocol[] } | null;

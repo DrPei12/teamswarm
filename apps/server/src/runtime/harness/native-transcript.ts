@@ -13,6 +13,7 @@ export class NativeTranscript {
   private sequence = 0;
   private tools = new Map<string, { title: string; kind: TranscriptItem["kind"] }>();
   private acpCommands = new Set<string>();
+  private acp = false;
   constructor(private harness: string, private turn: string,
     private emit: (type: string, data: Record<string, unknown>) => void) {}
   private delta(id: string, delta: string) {
@@ -45,13 +46,14 @@ export class NativeTranscript {
       status: failed ? "failed" : "completed" });
   }
   finish(status: "completed" | "failed" | "interrupted" | "unknown") {
-    if (this.harness !== "opencode" || !this.message) return;
+    if (!this.acp || !this.message) return;
     this.emit("transcript.item", { id: this.message, kind: "message", text: "", phase: "final", status: status === "unknown" ? "running" : status });
     this.message = "";
   }
   observe(event: any) {
-    if (this.harness === "opencode") {
-      if (event.type !== "opencode.event") return;
+    if (event.type === "acp.event" || this.harness === "opencode") {
+      this.acp = true;
+      if (event.type !== "opencode.event" && event.type !== "acp.event") return;
       const e = event.event;
       if (e?.sessionUpdate === "agent_message_chunk" && e.content?.type === "text") {
         this.message ||= `${this.turn}:opencode:${this.sequence++}`;

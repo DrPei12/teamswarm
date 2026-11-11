@@ -34,6 +34,7 @@ import { cachedCatalog, invalidateModelCatalog } from "./modelCatalogCache";
 import type { TeamCapabilities } from "@team/contracts/allocation";
 import { HarnessInstallation } from "./HarnessInstallation";
 import { HarnessAccount, hasSubscription } from "./HarnessAccount";
+import { harnessManifest } from "@team/contracts/harness-catalog";
 import { api, product, resolveModelConnection } from "./service";
 import { useI18n } from "./i18n";
 import { Modal } from "./ui";
@@ -247,6 +248,7 @@ function ManualExecutionSettings({
     [error, setError] = useState(""),
     [inspection, setInspection] = useState<Inspection | null>(null);
   const [inspectionRevision, refreshInspection] = useState(0);
+  const [timeLimit, setTimeLimit] = useState("");
   const [sharedInspection, setSharedInspection] = useState<Inspection | null>(
     null,
   );
@@ -262,6 +264,8 @@ function ManualExecutionSettings({
   useEffect(() => {
     if (open) {
       setSettings(workspace.executions?.[teamId]?.settings ?? null);
+      const seconds = workspace.executions?.[teamId]?.settings?.timeoutSeconds;
+      setTimeLimit(seconds == null ? "" : String(seconds / 60));
       setTab("settings");
       setError("");
       setInspection(null);
@@ -441,10 +445,20 @@ function ManualExecutionSettings({
           onSubmit={async (e) => {
             e.preventDefault();
             if (busy) return;
+            const seconds = Math.round(Number(timeLimit) * 60);
+            if (
+              !timeLimit.trim() ||
+              !Number.isFinite(seconds) ||
+              seconds < 10 ||
+              seconds > 3600
+            ) {
+              setError(t("Enter a duration from 10 seconds to 60 minutes."));
+              return;
+            }
             setBusy(true);
             setError("");
             try {
-              let next = settings;
+              let next = { ...settings, timeoutSeconds: seconds };
               if (secret.trim()) {
                 const result = await api<{ reference: string }>(
                   `/product/teams/${teamId}/credential`,
@@ -452,7 +466,7 @@ function ManualExecutionSettings({
                   "PUT",
                 );
                 next = {
-                  ...settings,
+                  ...next,
                   config: {
                     ...settings.config,
                     credentialEnv: result.reference,
@@ -550,49 +564,51 @@ function ManualExecutionSettings({
               harness={settings.config.harness}
               onInstalled={inspect}
             />
-            {subscriptionHarness && !sharedAccount && (
-              <div
-                className="account-mode"
-                role="group"
-                aria-label={t("Connection method")}
-              >
-                <button
-                  type="button"
-                  aria-pressed={subscriptionMode}
-                  onClick={() => {
-                    if (subscriptionMode) return;
-                    config({
-                      provider: null,
-                      baseUrl: null,
-                      credentialEnv: null,
-                      protocol: null,
-                      model: null,
-                      effort: null,
-                      thinkingFormat: null,
-                    });
-                    setSecret("");
-                    setApiMode(false);
-                    setAdvanced(false);
-                  }}
+            {subscriptionHarness &&
+              !sharedAccount &&
+              !harnessManifest(settings.config.harness)?.models.nativeOnly && (
+                <div
+                  className="account-mode"
+                  role="group"
+                  aria-label={t("Connection method")}
                 >
-                  {t("Subscription sign-in")}
-                </button>
-                {
                   <button
                     type="button"
-                    aria-pressed={!subscriptionMode}
+                    aria-pressed={subscriptionMode}
                     onClick={() => {
-                      if (!subscriptionMode) return;
-                      config({ model: null, effort: null });
-                      setApiMode(true);
-                      setAdvanced(true);
+                      if (subscriptionMode) return;
+                      config({
+                        provider: null,
+                        baseUrl: null,
+                        credentialEnv: null,
+                        protocol: null,
+                        model: null,
+                        effort: null,
+                        thinkingFormat: null,
+                      });
+                      setSecret("");
+                      setApiMode(false);
+                      setAdvanced(false);
                     }}
                   >
-                    {t("API connection")}
+                    {t("Subscription sign-in")}
                   </button>
-                }
-              </div>
-            )}
+                  {
+                    <button
+                      type="button"
+                      aria-pressed={!subscriptionMode}
+                      onClick={() => {
+                        if (!subscriptionMode) return;
+                        config({ model: null, effort: null });
+                        setApiMode(true);
+                        setAdvanced(true);
+                      }}
+                    >
+                      {t("API connection")}
+                    </button>
+                  }
+                </div>
+              )}
             {subscriptionMode && hasSubscription(settings.config.harness) && (
               <HarnessAccount
                 key={"account:" + settings.config.harness}
@@ -779,22 +795,26 @@ function ManualExecutionSettings({
               {t("Time limit per turn (minutes)")}
               <input
                 type="number"
-                inputMode="numeric"
-                min={1}
+                inputMode="decimal"
+                min={10 / 60}
                 max={60}
-                step={1}
+                step="any"
                 required
                 disabled={busy}
-                value={Math.max(1, Math.round(settings.timeoutSeconds / 60))}
+                value={timeLimit}
                 onChange={(e) => {
-                  const minutes = Math.round(Number(e.target.value));
-                  if (Number.isFinite(minutes) && minutes >= 1 && minutes <= 60)
-                    setSettings({ ...settings, timeoutSeconds: minutes * 60 });
+                  e.currentTarget.setCustomValidity("");
+                  setTimeLimit(e.target.value);
+                }}
+                onInvalid={(e) => {
+                  e.currentTarget.setCustomValidity(
+                    t("Enter a duration from 10 seconds to 60 minutes."),
+                  );
                 }}
               />
               <small>
                 {t(
-                  "A turn that runs longer is stopped and kept as interrupted. Applies to new requests; 1–60 minutes.",
+                  "A turn that runs longer is stopped and kept as interrupted. Applies to new requests; 10 seconds–60 minutes.",
                 )}
               </small>
             </label>

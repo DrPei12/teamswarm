@@ -14,7 +14,11 @@ export function permissionMode(
     if (p.approvalPolicy === "untrusted") return "manual";
     if (p.approvalPolicy === "on-request") return "auto";
   }
-  if (p?.harness === "claude-code" || p?.harness === "grok")
+  if (
+    p?.harness === "claude-code" ||
+    p?.harness === "grok" ||
+    p?.harness === "antigravity"
+  )
     return (
       (
         {
@@ -103,8 +107,11 @@ export function permissionsForMode(
                 list: "allow",
               },
     };
-  if (mode === "full-access" && config.harness === "grok")
-    return { harness: "grok", mode: "bypassPermissions" };
+  if (
+    mode === "full-access" &&
+    (config.harness === "grok" || config.harness === "antigravity")
+  )
+    return { harness: config.harness, mode: "bypassPermissions" };
   if (mode === "full-access" && config.harness === "deepseek-harness")
     return {
       harness: "deepseek-harness",
@@ -151,6 +158,7 @@ export function permissionsForAccess(
         : {}),
     };
   if (p.harness === "deepseek-harness") return { ...p, sandbox: "read-only" };
+  if (p.harness === "antigravity") return { ...p, mode: "plan" };
   if (p.harness === "claude-code" && p.mode === "bypassPermissions")
     return { ...p, mode: "default" };
   if (p.harness === "opencode" && permissionMode(config) === "full-access")

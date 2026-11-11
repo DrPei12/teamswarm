@@ -984,12 +984,13 @@ class ProductClient {
       next = { ...next, permissions: config.permissions };
     return next;
   }
-  async saveContextWindow(preset: ContextWindowPreset, name?: string) {
-    await this.command(
-      "/product/preferences",
-      { contextWindowPreset: preset, name },
-      "PATCH",
-    );
+  async saveGeneralSettings(settings: {
+    name?: string;
+    language?: Workspace["language"];
+    contextWindowPreset?: ContextWindowPreset;
+  }) {
+    if (!Object.keys(settings).length) return;
+    await this.command("/product/preferences", settings, "PATCH");
   }
   async resources(teamId: string) {
     return api<{ resources: ExecutionResource[] }>(
