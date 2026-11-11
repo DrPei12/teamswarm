@@ -39,6 +39,7 @@ const readJSON = (file, fallback) => {
     return fallback;
   }
 };
+const clientBuild = app.isPackaged ? readJSON(path.join(productRoot, "build-identity.json"), null) : null;
 let windowState = readJSON(stateFile, {}),
   mainWindow,
   serviceChild,
@@ -136,8 +137,21 @@ async function existingService() {
       headers: { Authorization: `Bearer ${credential.token}` },
       signal: AbortSignal.timeout(1500),
     });
-    if (response.ok && Array.isArray((await response.json()).teams))
-      return { port: info.port, token: credential.token, credentialStore: info.credentialStore };
+    if (response.ok && Array.isArray((await response.json()).teams)) {
+      let incompatible = false;
+      if (app.isPackaged) {
+        incompatible = true;
+        try {
+          const health = await fetch(`http://127.0.0.1:${info.port}/api/health`, {
+            headers: { Authorization: `Bearer ${credential.token}` },
+            signal: AbortSignal.timeout(1500),
+          });
+          const identity = health.ok ? (await health.json()).build : null;
+          incompatible = !clientBuild?.sourceSha256 || identity?.sourceSha256 !== clientBuild.sourceSha256;
+        } catch { /* The authenticated service still owns this workspace. */ }
+      }
+      return { port: info.port, token: credential.token, credentialStore: info.credentialStore, incompatible };
+    }
   } catch {}
   return null;
 }
@@ -199,6 +213,8 @@ async function stopService(child, grace = 15000) {
 async function startService() {
   const existing = await existingService();
   if (existing) {
+    if (existing.incompatible)
+      throw new Error(label("Another TeamSwarm build is using this workspace. Close that service, then reopen TeamSwarm.", "另一个 TeamSwarm 版本正在使用此工作区。请关闭该服务后重新打开 TeamSwarm。"));
     if (process.platform !== "win32" && existing.credentialStore !== "desktop-keyring")
       throw new Error("A TeamSwarm browser service is already using this workspace. Stop that service, then reopen the desktop application to use the system keyring.");
     return existing;
