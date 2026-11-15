@@ -52,3 +52,11 @@ jobs:
       - run: node --import tsx test/browser/managed-services.mjs
       - run: node test/native/opencode-output-budget.mjs
       - run: node test/native/pi-model-configuration.mjs
+      - name: Upload browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: browser-failure-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+          path: .local/browser-evidence/
