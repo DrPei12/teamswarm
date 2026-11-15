@@ -6,6 +6,7 @@ import {createServer} from "node:http";
 import {chromium} from "../../teamswarm/node_modules/playwright/index.mjs";
 import {createApp} from "../../apps/server/dist/app.js";
 
+fs.mkdirSync(path.resolve(".local/verification"), {recursive:true});
 const root=fs.mkdtempSync(path.resolve(".local/verification/conversation-ui-"));
 const project=path.join(root,"project");
 fs.mkdirSync(project);
