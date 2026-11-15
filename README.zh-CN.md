@@ -234,7 +234,9 @@ npm run build
 npm run start:rework
 ```
 
-启动器在 `http://127.0.0.1:4317` 打开已连接的浏览器工作空间。`TEAM_API_PORT` 指定其他端口，`TEAM_DATA_DIR` 指定独立工作空间，同一数据目录由一个服务管理。`npm run dev` 在 4318 启动 API，在 4317 启动 Vite。
+此入口在 `http://127.0.0.1:4427` 打开已连接的浏览器工作空间。`TEAMSWARM_REWORK_PORT` 指定其他端口，`TEAMSWARM_REWORK_PROFILE` 选择 `.local/rework/` 下的另一组独立数据。
+
+常规产品入口 `npm start` 使用 `TEAM_API_PORT`（默认 4317）和 `TEAM_DATA_DIR`，同一数据目录由一个服务管理。`npm run dev` 在 4318 启动 API，在 4317 启动 Vite。
 
 构建后安装、检查指定 Harness：
 

@@ -144,7 +144,7 @@ async function seed({ legacy = false } = {}) {
   const team = (await api("/teams")).teams.find(item => item.name === "Installer project");
   assert(team);
   const conversation = await api(`/teams/${team.id}/conversations`, "POST", { title: "Installer conversation" });
-  const { reference } = await api(`/product/teams/${team.id}/credential`, "PUT", { secret });
+  const { reference } = await api(`/product/teams/${team.id}/credential`, "PUT", legacy ? { secret } : { secret, purpose: "connection" });
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1.1));
   return { team, conversation, reference };
 }

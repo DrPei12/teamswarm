@@ -121,7 +121,7 @@ try {
   await page.screenshot({ path: path.join(output, 'macos-desktop.png') });
   const team = (await api(page, '/teams')).teams.find(item => item.name === 'macOS package check');
   assert(team);
-  const { reference } = await api(page, `/product/teams/${team.id}/credential`, 'PUT', { secret });
+  const { reference } = await api(page, `/product/teams/${team.id}/credential`, 'PUT', { secret, purpose: 'connection' });
   const credentialFile = path.join(data, 'credentials.json');
   assert.match(fs.readFileSync(credentialFile, 'utf8'), /electron-v1:/);
   assert(!fs.readFileSync(credentialFile, 'utf8').includes(secret));

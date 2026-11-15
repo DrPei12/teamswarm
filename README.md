@@ -237,7 +237,9 @@ npm run build
 npm run start:rework
 ```
 
-The launcher opens a connected browser at `http://127.0.0.1:4317`. Use `TEAM_API_PORT` for another port and `TEAM_DATA_DIR` for a separate workspace. One service owns a data directory. `npm run dev` starts the API on 4318 and Vite on 4317.
+This launcher opens a connected browser at `http://127.0.0.1:4427`. Use `TEAMSWARM_REWORK_PORT` for another port and `TEAMSWARM_REWORK_PROFILE` for another isolated profile under `.local/rework/`.
+
+For the regular product launcher, `npm start` uses `TEAM_API_PORT` (4317 by default) and `TEAM_DATA_DIR`. One service owns a data directory. `npm run dev` starts the API on 4318 and Vite on 4317.
 
 After building, install and inspect selected harnesses:
 
