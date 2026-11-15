@@ -136,7 +136,7 @@ async function seed({ legacy = false } = {}) {
     await page.getByRole("textbox", { name: "Team name", exact: true }).fill("Installer project");
     await page.getByRole("button", { name: "Create team", exact: true }).click();
   } else {
-    await page.locator(".sidebar-primary").getByRole("button", { name: "New chat", exact: true }).click();
+    await page.getByRole("button", { name: "New chat", exact: true }).click();
     const created = await api("/product/teams", "POST", { name: "Installer project", clientRequestId: randomUUID() });
     await page.goto(new URL(`/#/team/${created.id}/chat/${created.mainChatId}`, page.url()).href);
   }

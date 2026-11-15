@@ -114,7 +114,7 @@ try {
   await new Promise(resolve => provider.listen(0, '127.0.0.1', resolve));
   const providerOrigin = `http://127.0.0.1:${provider.address().port}`;
   page = await launch();
-  await page.locator('.sidebar-primary').getByRole('button', { name: 'New chat', exact: true }).click();
+  await page.getByRole('button', { name: 'New chat', exact: true }).click();
   const created = await api(page, '/product/teams', 'POST', { name: 'macOS package check', clientRequestId: randomUUID() });
   await page.goto(new URL(`/#/team/${created.id}/chat/${created.mainChatId}`, page.url()).href);
   await page.locator('.sidebar-primary').getByRole('button', { name: 'New chat', exact: true }).waitFor();
