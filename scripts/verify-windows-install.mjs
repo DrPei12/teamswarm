@@ -136,11 +136,11 @@ async function seed({ legacy = false } = {}) {
     await page.getByRole("textbox", { name: "Team name", exact: true }).fill("Installer project");
     await page.getByRole("button", { name: "Create team", exact: true }).click();
   } else {
-    await page.getByRole("button", { name: "New chat", exact: true }).click();
+    await page.locator(".sidebar-primary").getByRole("button", { name: "New chat", exact: true }).click();
     const created = await api("/product/teams", "POST", { name: "Installer project", clientRequestId: randomUUID() });
     await page.goto(new URL(`/#/team/${created.id}/chat/${created.mainChatId}`, page.url()).href);
   }
-  await page.getByRole("button", { name: "New chat", exact: true }).waitFor();
+  await page.locator(".sidebar-primary").getByRole("button", { name: "New chat", exact: true }).waitFor();
   const team = (await api("/teams")).teams.find(item => item.name === "Installer project");
   assert(team);
   const conversation = await api(`/teams/${team.id}/conversations`, "POST", { title: "Installer conversation" });
@@ -149,7 +149,7 @@ async function seed({ legacy = false } = {}) {
   return { team, conversation, reference };
 }
 async function verifySeed(saved) {
-  await page.getByRole("button", { name: "New chat", exact: true }).waitFor();
+  await page.locator(".sidebar-primary").getByRole("button", { name: "New chat", exact: true }).waitFor();
   assert.equal((await api("/teams")).teams.find(item => item.id === saved.team.id)?.name, saved.team.name);
   const item = await api(`/teams/${saved.team.id}/conversations/${saved.conversation.id}`);
   assert.equal(item.conversation.title, saved.conversation.title);

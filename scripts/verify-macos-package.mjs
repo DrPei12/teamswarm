@@ -114,10 +114,10 @@ try {
   await new Promise(resolve => provider.listen(0, '127.0.0.1', resolve));
   const providerOrigin = `http://127.0.0.1:${provider.address().port}`;
   page = await launch();
-  await page.getByRole('button', { name: 'New chat', exact: true }).click();
+  await page.locator('.sidebar-primary').getByRole('button', { name: 'New chat', exact: true }).click();
   const created = await api(page, '/product/teams', 'POST', { name: 'macOS package check', clientRequestId: randomUUID() });
   await page.goto(new URL(`/#/team/${created.id}/chat/${created.mainChatId}`, page.url()).href);
-  await page.getByRole('button', { name: 'New chat', exact: true }).waitFor();
+  await page.locator('.sidebar-primary').getByRole('button', { name: 'New chat', exact: true }).waitFor();
   await page.screenshot({ path: path.join(output, 'macos-desktop.png') });
   const team = (await api(page, '/teams')).teams.find(item => item.name === 'macOS package check');
   assert(team);
@@ -128,10 +128,12 @@ try {
   await page.screenshot({ path: path.join(output, 'macos-desktop.png') });
   await close();
   page = await launch();
-  await page.getByRole('button', { name: 'New chat', exact: true }).waitFor();
+  await page.locator('.sidebar-primary').getByRole('button', { name: 'New chat', exact: true }).waitFor();
   assert.equal((await api(page, '/teams')).teams.find(item => item.id === team.id)?.name, team.name);
   const models = await api(page, `/teams/${team.id}/model-catalog`, 'POST', { endpoints: { responses: providerOrigin }, credentialEnv: reference });
   assert.deepEqual(models.models, ['macos-fixture-model']);
+  await page.evaluate(() => document.fonts.ready);
+  assert(!diagnostics.some(message => /violates.*Content Security Policy/.test(message)), 'Packaged assets violate the desktop Content Security Policy.');
   await close();
   assert.deepEqual(errors, []);
   Object.assign(report.checks, { desktopLaunch: true, sandbox: true, createTeam: true, coldRestart: true, keychainCredentialRecovery: true, cleanShutdown: true });

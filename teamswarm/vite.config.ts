@@ -55,6 +55,9 @@ export default defineConfig({
   ],
   build: {
     copyPublicDir: false,
+    // Desktop CSP serves fonts from the app origin, including small subsets.
+    assetsInlineLimit: (file) =>
+      /\.(woff2?|ttf|otf)$/i.test(file) ? false : undefined,
     rollupOptions: {
       output: {
         manualChunks(id) {
