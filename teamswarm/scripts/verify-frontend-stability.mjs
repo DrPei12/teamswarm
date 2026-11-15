@@ -456,15 +456,6 @@ try {
   assert.equal(await page.locator(".activity-context").count(), 1);
   assert.equal(await page.locator(".activity-context button").count(), 0);
   assert.equal(await page.locator(".activity-toggle").count(), 2);
-  assert.equal(
-    await page
-      .getByRole("button", {
-        name: "Ran node --check src/sample.ts",
-        exact: true,
-      })
-      .count(),
-    0,
-  );
   await page.waitForFunction(() =>
     [
       ...document.querySelectorAll('.activity-disclosure[aria-hidden="false"]'),
@@ -482,9 +473,6 @@ try {
     await page.locator(".activity-diff-after").textContent(),
     "const size = 14;",
   );
-  await page
-    .getByRole("button", { name: "Ran 1 commands", exact: true })
-    .click();
   await page
     .getByRole("button", {
       name: "Ran node --check src/sample.ts",

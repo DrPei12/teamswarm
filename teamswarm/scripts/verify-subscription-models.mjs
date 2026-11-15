@@ -181,6 +181,7 @@ try {
     .getByRole("tab", { name: "Models and connections", exact: true })
     .click();
   await page
+    .locator(".cap-intro-row")
     .getByRole("button", { name: "Add connection", exact: true })
     .click();
   await page
