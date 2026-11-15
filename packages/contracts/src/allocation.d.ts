@@ -15,6 +15,8 @@ export interface ModelAccess {
 }
 export interface TeamCapabilities {
   version: number;
+  globalVersion?: number;
+  inheritsDefaults?: boolean;
   enabledHarnesses: string[];
   connections: ModelAccess[];
   preferences: {

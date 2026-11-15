@@ -1,3 +1,6 @@
+/** A correlated error response, as opposed to a timeout or a lost transport. */
+export class JsonRpcResponseError extends Error {}
+
 /** Shared ACP framing/correlation. Native tool and permission semantics stay in each package. */
 export class JsonRpcPeer {
   private next = 0;
@@ -25,7 +28,7 @@ export class JsonRpcPeer {
       this.pending.delete(message.id); clearTimeout(item.timer);
       // Close a turn's event gate before another line in the same input chunk.
       this.onResponse?.(item.method);
-      message.error ? item.reject(new Error(`${this.name}: ${message.error.message ?? 'Request failed'}`)) : item.resolve(message.result);
+      message.error ? item.reject(new JsonRpcResponseError(`${this.name}: ${message.error.message ?? 'Request failed'}`)) : item.resolve(message.result);
     }
     return true;
   }

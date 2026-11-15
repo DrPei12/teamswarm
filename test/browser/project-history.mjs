@@ -63,6 +63,7 @@ try {
   const artifacts = store.capture(final.work, "Reading guide completed.", []);
   history.delivery(team.id, main.id, history.context(team.id, main.id).nodeId, "Reading guide", { actor: "host", workId: final.work.id, conversationId: mainChat }, artifacts.map(a => a.id), false);
   browser = await chromium.launch({ headless: true,
+    channel: process.env.TEAMSWARM_BROWSER_CHANNEL || undefined,
     ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } : {}) });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: "reduce" });
   await context.request.post(origin + "/api/control/session", { headers: { Authorization: `Bearer ${service.controlToken}` } });

@@ -1,12 +1,61 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { loginPrompt, grokModels, SubscriptionAccounts, subscriptionInspection, subscriptionEnvironment, subscriptionScope } from "../src/runtime/harness/subscriptions.js";
+import { loginPrompt, grokModels, SubscriptionAccounts, subscriptionInspection, subscriptionEnvironment, subscriptionScope, startSubscriptionProcess } from "../src/runtime/harness/subscriptions.js";
 import { checkExecutionCompatibility } from "../src/runtime/allocation-contract.js";
 
 const claudeURL = "https://claude.com/cai/oauth/authorize?response_type=code&state=fixture&code_challenge=fixture&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fcallback";
+
+for (const operation of ["start", "status"] as const) {
+  for (const afterSpawn of [false, true]) {
+    test(`account close waits for ${operation} ${afterSpawn ? "after spawn before registration" : "before process creation"}`, { timeout: 15000 }, async () => {
+      const root = mkdtempSync(path.join(tmpdir(), "teamswarm-start-close-"));
+      const previous = { account: process.env.TEAM_ACCOUNT_HOME, entry: process.env.TEAM_CLAUDE_CODE_BIN };
+      const entry = path.join(root, "fixture.mjs");
+      const marker = path.join(root, "started.json");
+      writeFileSync(entry, `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({pid:process.pid}));setInterval(()=>{},1000);`);
+      process.env.TEAM_ACCOUNT_HOME = root;
+      process.env.TEAM_CLAUDE_CODE_BIN = entry;
+      let enter!: () => void, release!: () => void;
+      const entered = new Promise<void>(resolve => { enter = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      let child: Awaited<ReturnType<typeof startSubscriptionProcess>> | undefined;
+      const accounts = new SubscriptionAccounts(async (id, args, signal) => {
+        if (afterSpawn) child = await startSubscriptionProcess(id, args, signal);
+        enter();
+        await gate;
+        return child ?? startSubscriptionProcess(id, args, signal);
+      });
+      try {
+        const pending = operation === "start" ? accounts.start("claude-code") : accounts.status("claude-code", null);
+        const rejected = assert.rejects(pending);
+        await entered;
+        let closed = false;
+        const closing = accounts.close().then(() => { closed = true; });
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(closed, false, "Close must retain ownership of unfinished startup");
+        release();
+        await Promise.all([rejected, closing]);
+        assert.equal(accounts.login("claude-code"), null);
+        assert.equal(existsSync(path.join(root, "claude-code/.teamswarm-login.lock")), false);
+        if (child?.pid) assert.throws(() => process.kill(child!.pid!, 0));
+        if (existsSync(marker)) {
+          const { pid } = JSON.parse(readFileSync(marker, "utf8"));
+          assert.throws(() => process.kill(pid, 0));
+        }
+        if (!afterSpawn) assert.equal(existsSync(marker), false);
+      } finally {
+        release();
+        await accounts.close();
+        if (previous.account === undefined) delete process.env.TEAM_ACCOUNT_HOME; else process.env.TEAM_ACCOUNT_HOME = previous.account;
+        if (previous.entry === undefined) delete process.env.TEAM_CLAUDE_CODE_BIN; else process.env.TEAM_CLAUDE_CODE_BIN = previous.entry;
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+}
 test("official login links are validated before being exposed to the UI", () => {
   assert.equal(loginPrompt("claude-code", claudeURL)?.url, claudeURL);
   assert.equal(loginPrompt("claude-code", claudeURL.replace("claude.com", "claude.com.evil.test")), null);
@@ -89,7 +138,7 @@ test("login cancellation, account switching, native catalog and model checks rem
     const log=value=>console.log(JSON.stringify(value));
     fs.appendFileSync(path.join(home,'calls.jsonl'),JSON.stringify(args)+'\\n');
     if(args[0]==='auth' && args[1]==='status') {
-      if(flag('delay')) await new Promise(r=>setTimeout(r,350));
+      if(flag('delay')) { fs.writeFileSync(path.join(home,'verifying'),'1'); while(!flag('verify-release')) await new Promise(r=>setTimeout(r,10)); }
       log({loggedIn:flag('signed'),authMethod:flag('signed')?'claude.ai':'none',email:'fixture@example.test'});
     } else if(args[0]==='auth' && args[1]==='login') {
       console.log(${JSON.stringify(claudeURL)});
@@ -138,9 +187,11 @@ test("login cancellation, account switching, native catalog and model checks rem
     const third = (await accounts.start("claude-code"))!;
     await waitFor(()=>accounts.login("claude-code")?.state === "waiting");
     accounts.submitCode("claude-code", third.id, "fixture-code");
-    await new Promise(r=>setTimeout(r,70));
-    await accounts.cancel("claude-code", third.id);
-    await new Promise(r=>setTimeout(r,700));
+    await waitFor(()=>existsSync(path.join(home, "verifying")));
+    const thirdCancelled = await accounts.cancel("claude-code", third.id);
+    assert.equal(thirdCancelled?.state, "cancelled", thirdCancelled?.error);
+    writeFileSync(path.join(home, "verify-release"), "1");
+    await accounts.status("claude-code", "sonnet");
     assert.equal(accounts.login("claude-code")?.state, "cancelled");
     const calls = readFileSync(path.join(home, "calls.jsonl"), "utf8");
     assert.ok(calls.includes('--claudeai')); assert.ok(!calls.includes('--bare'));

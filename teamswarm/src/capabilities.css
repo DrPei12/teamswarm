@@ -785,3 +785,10 @@
     grid-template-columns: 1fr;
   }
 }
+
+.cap-inherit {
+  margin: 12px 24px 0;
+}
+.cap-body[inert] {
+  opacity: 0.68;
+}

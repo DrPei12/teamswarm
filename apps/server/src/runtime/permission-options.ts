@@ -1,12 +1,13 @@
+import { harnessManifest } from "@team/contracts/harness-catalog";
+import { isDeepStrictEqual } from "node:util";
 import { readOnlyExecution } from "./harness/permissions.js";
-import { conflict } from "../errors.js";
 import type { ExecutionConfig, Harness, Member, NativePermissions, PermissionOptions } from "./types.js";
 
 export const codexPermissionOptions: PermissionOptions = {
   defaultId: "manual",
   options: [
     { id: "manual", label: "Request approval", permissions: { harness: "codex", approvalPolicy: "untrusted" } },
-    { id: "auto", label: "Automatic review", permissions: { harness: "codex", approvalPolicy: "on-request" } },
+    { id: "auto", label: "Automatic review", permissions: { harness: "codex", approvalPolicy: "on-request", approvalsReviewer: "auto_review" } },
     { id: "full-access", label: "Full access", requiresWrite: true, permissions: { harness: "codex", approvalPolicy: "never", sandbox: "danger-full-access" } },
   ],
 };
@@ -52,6 +53,8 @@ export function nativeAccess(config: ExecutionConfig): "read-only" | "workspace-
   if (config.access === "read-only") return "read-only";
   const p = config.permissions;
   if (!p || p.harness !== config.harness) return "workspace-write";
+  const declared = harnessManifest(config.harness)?.integration?.presets["full-access"];
+  if (declared && isDeepStrictEqual(p, declared)) return "full-access";
   if ((p.harness === "codex" || p.harness === "deepseek-harness") && p.sandbox === "danger-full-access") return "full-access";
   if ((p.harness === "claude-code" || p.harness === "grok" || p.harness === "antigravity") && p.mode === "bypassPermissions") return "full-access";
   if (p.harness === "opencode") { const rules = p.permission as Record<string,unknown>;
@@ -108,14 +111,24 @@ export function mergePermissionChoice(config: ExecutionConfig, permissions: Nati
   return { ...config, permissions: merged };
 }
 
+export function hasSharedModel(config: Pick<ExecutionConfig, "baseUrl" | "chatgptAccountId">): boolean {
+  return !!(config.baseUrl || config.chatgptAccountId);
+}
+
 /** An explicit Host permission choice belongs to its conversation branch. */
+export function approvalPresetAvailable(harness: string | undefined, preset: string): boolean {
+  return preset !== "auto" || harness !== "opencode";
+}
+
 export function hostPermissions(config: ExecutionConfig, member: Member, branchId: string, harnesses: Map<string,Harness>): ExecutionConfig {
   const preset=member.hostSelections?.[branchId]?.permissionPreset;
   if(preset === "read-only") { const {permissions:_old,...model}=config; return readOnlyExecution(model); }
-  if(preset === "full-access") {
-    const policy=harnesses.get(config.harness)?.permissionOptions?.().options.find(o=>o.id === "full-access");
-    if(!policy) throw conflict("permission_choice","This Harness does not provide full access.");
-    return {...config,access:"workspace-write",permissions:{...policy.permissions}};
+  if (preset) {
+    if (config.harness === "antigravity" && preset === "auto" && !hasSharedModel(config))
+      return { ...config, access: "workspace-write", permissions: { harness: "antigravity", mode: "default" } };
+    const policy=harnesses.get(config.harness)?.permissionOptions?.().options.find(o=>o.id === preset);
+    if (!policy || !approvalPresetAvailable(config.harness, preset)) return readOnlyExecution(config);
+    return mergePermissionChoice({ ...config, access: "workspace-write" }, policy.permissions);
   }
   const current=memberPermissions(config,member);
   return member.config.access === "read-only" ? readOnlyExecution(current) : current;

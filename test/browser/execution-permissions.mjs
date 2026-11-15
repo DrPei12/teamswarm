@@ -70,7 +70,7 @@ try {
     await page.locator('.member-permission-menu').waitFor({state:'hidden'});
   };
   await permissions().click();
-  assert.deepEqual(await page.getByRole('menuitemradio').locator('.item-label > span').allTextContents(), ['Read-only', 'Full access']);
+  assert.deepEqual(await page.getByRole('menuitemradio').locator('.item-label > span').allTextContents(), ['Read-only', 'Request approval', 'Automatic review', 'Full access']);
   assert.notEqual(await page.getByRole('menuitemradio', {name:/^Full access/}).getAttribute('aria-disabled'), 'true');
   const branch = {id:(await call('/product')).executions[team.id].host.branchId};
   // Change from the inherited default before testing an explicit Host override.
@@ -147,7 +147,7 @@ try {
   await page.locator('.react-flow__node').filter({hasText:'Claude permission member'}).getByRole('button').first().click();
   const memberPermissions = page.getByRole('dialog').getByRole('button',{name:'Execution permissions',exact:true});
   await memberPermissions.click();
-  assert.deepEqual(await page.getByRole('menuitemradio').locator('.item-label > span').allTextContents(), ['Read-only', 'Full access']);
+  assert.deepEqual(await page.getByRole('menuitemradio').locator('.item-label > span').allTextContents(), ['Read-only', 'Request approval', 'Automatic review', 'Full access']);
   await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:/^Full access/}).click());
   await page.waitForFunction(() => [...document.querySelectorAll('.member-permission-choice')].some(el=>el.textContent.includes('Full access')));
   assert.equal(service.runtime.store.get('members',team.id,member.id).config.permissions.mode,'bypassPermissions');

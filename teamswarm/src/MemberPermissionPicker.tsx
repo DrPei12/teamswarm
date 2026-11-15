@@ -12,7 +12,7 @@ export type MemberPermissionOptions = {
   version: number;
   policy: "request" | "autonomous";
   defaultPreset: MemberPermissionPreset;
-  options: { id: MemberPermissionPreset; label: string }[];
+  options: { id: MemberPermissionPreset; label: string; available?: boolean }[];
 };
 export const currentMemberPreset = (
   config: ExecutionConfig,
@@ -29,6 +29,7 @@ export function MemberPermissionPicker({
   disabled,
   compact,
   includeDefault,
+  sharedModel,
   refreshKey = 0,
   onOptions,
   onAdvanced,
@@ -42,6 +43,7 @@ export function MemberPermissionPicker({
   disabled?: boolean;
   compact?: boolean;
   includeDefault?: boolean;
+  sharedModel?: boolean;
   refreshKey?: number;
   onOptions?: (options: MemberPermissionOptions) => void;
   onAdvanced?: () => void;
@@ -89,18 +91,38 @@ export function MemberPermissionPicker({
               ? t("Team default: {permission}", { permission: t(defaultLabel) })
               : t("Team default"),
             help: "",
+            available: true,
           },
         ]
       : []),
-    ...(options?.options ?? []).map((option) => ({
-      ...option,
-      label: t(option.label),
-      help: t(
-        option.id === "full-access"
-          ? "Read and write files across the device and run system commands."
-          : "Read files without changing them.",
-      ),
-    })),
+    ...(options?.options ?? []).map((option) => {
+      const needsSharedModel =
+        id === "antigravity" && option.id === "auto" && sharedModel === false;
+      return {
+        ...option,
+        available: option.available !== false && !needsSharedModel,
+        label: t(option.label),
+        help: t(
+          needsSharedModel
+            ? "Choose a shared model to use automatic approval."
+            : option.available === false
+              ? "Unavailable for this Harness."
+              : (
+                  {
+                    "full-access":
+                      "Read and write files across the device and run system commands.",
+                    manual: "You approve operations when the Harness asks.",
+                    auto:
+                      id === "antigravity"
+                        ? "Automatically review file operations within the workspace."
+                        : "The Harness reviews approval requests for you.",
+                    "read-only": "Read files without changing them.",
+                    "workspace-write": "Read and write in the workspace.",
+                  } as const
+                )[option.id],
+        ),
+      };
+    }),
   ];
   const selected = choices.find((option) => option.id === value);
   const save = async (next: MemberPermissionPreset | "team-default") => {
@@ -180,7 +202,7 @@ export function MemberPermissionPicker({
                   key={option.id}
                   value={option.id}
                   className="menu-item member-permission-option"
-                  disabled={saving}
+                  disabled={saving || option.available === false}
                   onSelect={(e) => e.preventDefault()}
                 >
                   <span className="item-label">

@@ -1,11 +1,11 @@
 {
   "name": "teamswarm",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 4317 --strictPort",
-    "build": "tsc --noEmit && vite build",
+    "build": "node ../scripts/build-frontend.mjs",
     "typecheck": "tsc --noEmit",
     "check": "npm run format:check && npm run build",
     "start": "vite preview --host 127.0.0.1 --port 4317 --strictPort",
@@ -56,5 +56,5 @@
     "typescript": "^5.9.3",
     "vite": "^7.3.0"
   },
-  "license": "Apache-2.0"
+  "license": "MIT"
 }

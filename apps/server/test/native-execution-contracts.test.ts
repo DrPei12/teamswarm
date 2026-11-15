@@ -224,3 +224,27 @@ test("private results publish after commit, preserve concurrent edits, and recov
     assert.equal(readFileSync(path.join(f.workspace, "source.txt"), "utf8"), "user-edit");
   } finally { await f.close(); }
 });
+
+test("TeamSwarm automatic review records bounded decisions without a pending or reusable grant", async () => {
+  const f = fixture();
+  try {
+    const worker = f.member("Automatic reviewer fixture");
+    const work = f.work(worker.id);
+    const attempt = f.store.start(work, { ...worker.config, harness: "antigravity",
+      baseUrl: "https://provider.invalid/v1", permissions: { harness: "antigravity", mode: "teamswarmAuto" } });
+    const target = path.join(f.workspace, "document.txt");
+    const request = { nativeId: "create", tool: "write_file", input: { Path: target, Content: "example" } };
+    const decide = (input: typeof request) => f.runtime.nativePermissions.request(work, attempt, input);
+    assert.equal(await decide(request), "allow");
+    assert.equal(existsSync(target), false, "The reviewer must not itself execute the action.");
+    assert.equal(await decide(request), "deny");
+    assert.equal(await decide({ ...request, nativeId: "outside", input: { ...request.input, Path: path.join(f.root, "outside.txt") } }), "deny");
+    assert.equal(await decide({ ...request, nativeId: "overwrite", input: { ...request.input, Path: path.join(f.workspace, "source.txt") } }), "deny");
+    assert.equal(await decide({ ...request, nativeId: "command", tool: "run_command" }), "deny");
+    assert.deepEqual(f.runtime.nativePermissions.list(f.team.id), []);
+    const receipts = f.store.events(f.team.id).filter(event => event.type === "permission.resolved");
+    assert.deepEqual(receipts.map(event => [event.data.state, event.data.policy]), [
+      ["allow", "teamswarm-auto"], ["deny", "teamswarm-auto"], ["deny", "teamswarm-auto"], ["deny", "teamswarm-auto"],
+    ]);
+  } finally { await f.close(); }
+});

@@ -629,6 +629,49 @@ try {
     .locator(".context-details")
     .screenshot({ path: path.join(root, "context-window-zh.png") });
   await request("/product/preferences", { language: "en" }, "PATCH");
+  await page.reload();
+  const chooseHarness = page.getByRole("button", {
+    name: "Choose harness",
+    exact: true,
+  });
+  const harnessMenu = page.getByRole("dialog", {
+    name: "Harness",
+    exact: true,
+  });
+  await chooseHarness.click();
+  await harnessMenu.getByRole("button", { name: "Claude Code" }).waitFor();
+  assert.equal(
+    await harnessMenu.getByRole("button", { name: "Pi" }).count(),
+    0,
+  );
+  await harnessMenu.getByRole("button", { name: "Team capabilities" }).click();
+  const teamCapabilities = page.getByRole("dialog", {
+    name: "Team capabilities",
+  });
+  await teamCapabilities
+    .getByRole("button", { name: "Allow Claude Code", pressed: true })
+    .click();
+  await teamCapabilities.getByRole("button", { name: "Save settings" }).click();
+  await teamCapabilities.getByText("Saved", { exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  await teamCapabilities.waitFor({ state: "hidden" });
+  await chooseHarness.click();
+  await harnessMenu
+    .getByText("The current Harness is disabled for this team.")
+    .waitFor();
+  await harnessMenu.getByRole("button", { name: "Codex" }).waitFor();
+  assert.equal(
+    await harnessMenu.getByRole("button", { name: "Claude Code" }).count(),
+    0,
+  );
+  assert.equal((await hostConfig()).harness, "claude-code");
+  await page.reload();
+  await chooseHarness.click();
+  await harnessMenu.getByRole("button", { name: "Codex" }).waitFor();
+  assert.equal(
+    await harnessMenu.getByRole("button", { name: "Claude Code" }).count(),
+    0,
+  );
   const legacyTeam = await request("/product/teams", {
     name: "Legacy catalog regression",
     clientRequestId: randomUUID(),

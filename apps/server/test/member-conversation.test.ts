@@ -72,23 +72,25 @@ async function until(check: () => boolean) {
     await new Promise((r) => setTimeout(r, 10));
   }
 }
-async function fixture() {
+async function fixture(includeAlternate = false) {
   const root = mkdtempSync(path.join(process.cwd(), ".test-member-mail-"));
   const workspace = path.join(root, "project");
   mkdirSync(workspace);
   const harness = new MailHarness();
+  const alternate = new MailHarness();
+  alternate.id = "mail-alternate";
   const service = createApp({
     dataDir: path.join(root, "data"),
-    harnesses: [harness],
+    harnesses: includeAlternate ? [harness, alternate] : [harness],
   });
   autonomousWorkers(service.runtime);
   const server = service.app.listen(0, "127.0.0.1");
   await new Promise<void>((r) => server.once("listening", r));
-  const api = async (route: string, body?: unknown) => {
+  const api = async (route: string, body?: unknown, method = body ? "POST" : "GET") => {
     const response = await fetch(
       `http://127.0.0.1:${(server.address() as { port: number }).port}/api${route}`,
       {
-        method: body ? "POST" : "GET",
+        method,
         headers: {
           authorization: `Bearer ${service.controlToken}`,
           "content-type": "application/json",
@@ -166,6 +168,7 @@ async function fixture() {
     root,
     service,
     harness,
+    alternate,
     api,
     store,
     team,
@@ -960,6 +963,8 @@ test("restart settles legacy queued mail without duplicating work or dropping a 
     const next = f.service.runtime.correspondence.send(f.team.id, "user", f.a.id, "A separate new message", undefined, undefined, f.wa.id);
     await f.service.close();
     const harness = new MailHarness();
+  const alternate = new MailHarness();
+  alternate.id = "mail-alternate";
     reopened = createApp({ dataDir: path.join(f.root, "data"), harnesses: [harness] });
       autonomousWorkers(reopened.runtime);
     await until(() => harness.requests.length === 1);
@@ -990,5 +995,49 @@ test("approval decisions are scoped to a live attempt, idempotent, and cancelled
     await f.service.runtime.stop(f.team.id, f.wa.id);
     assert.equal(await second, false);
     assert.equal((await f.api(`/teams/${f.team.id}/approvals/${waiting.id}`, { accepted: true })).status, 409);
+  } finally { await f.close(); }
+});
+
+test("member composer changes future execution without changing the running attempt or shared resource", async () => {
+  const f = await fixture(true);
+  try {
+    const resource = f.service.runtime.catalog.put(f.team.id, "shared-composer", {
+      expectedVersion: 0, name: "Shared fixture", description: "", config: {...f.a.config, model: "old-model"},
+    });
+    for (const member of [f.a, f.b]) {
+      member.selection = {resourceId: resource.id, resourceVersion: resource.version, reason: "Shared fixture"};
+      f.store.save("members", member);
+    }
+    const route = `/product/teams/${f.team.id}/members/${f.a.id}`;
+    await f.api(`${route}/messages`, {clientRequestId: randomUUID(), content: "First fixture turn"});
+    await until(() => f.harness.requests.length === 1);
+    const first = f.harness.requests[0];
+    assert.equal(first.config.model, "old-model");
+    const config = {...f.a.config, harness: f.alternate.id, model: "new-model", effort: "high"};
+    const saved = await f.api(`${route}/runtime`, {expectedVersion: 1, config}, "PUT");
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+    assert.equal(first.config.model, "old-model");
+    assert.equal(first.config.harness, f.harness.id);
+    const snapshot = (await f.api("/product")).body;
+    const current = snapshot.members.find((m: any) => m.id === f.a.id);
+    assert.equal(current.executionConfig.harness, f.alternate.id);
+    assert.equal(current.executionConfig.model, "new-model");
+    assert.equal(current.configurationVersion, 2);
+    assert.equal(f.store.get<Member>("members", f.team.id, f.a.id).selection, undefined);
+    assert.deepEqual(f.store.get<Member>("members", f.team.id, f.b.id).selection, f.b.selection);
+    assert.deepEqual(f.service.runtime.catalog.resource(f.team.id, resource.id), resource);
+    const stale = await f.api(`${route}/runtime`, {expectedVersion: 1, config: f.a.config}, "PUT");
+    assert.equal(stale.status, 409);
+    const permissions = await f.api(`${route}/runtime`, {expectedVersion: 2, config: {...config, access: "read-only"}}, "PUT");
+    assert.equal(permissions.status, 400);
+    f.harness.finish();
+    await until(() => f.store.list<Work>("works", f.team.id).filter(w => w.interaction).every(w => w.status === "submitted"));
+    await f.api(`${route}/messages`, {clientRequestId: randomUUID(), content: "Second fixture turn"});
+    await until(() => f.alternate.requests.length === 1);
+    assert.equal(f.alternate.requests[0].config.model, "new-model");
+    assert.equal(f.alternate.requests[0].config.effort, "high");
+    assert.equal(f.alternate.requests[0].sessionId, undefined);
+    assert.equal(f.alternate.requests[0].config.access, "read-only");
+    f.alternate.finish();
   } finally { await f.close(); }
 });

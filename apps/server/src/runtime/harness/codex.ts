@@ -758,6 +758,8 @@ export class CodexHarness implements Harness {
       model,
       modelProvider: c.baseUrl ? "teamswarm" : c.provider,
       approvalPolicy: c.permissions?.harness === "codex" ? policyFor(c, "codex")!.approvalPolicy : "never",
+      approvalsReviewer: c.access !== "read-only" && !request.workspaceBoundary && !verificationDirectory &&
+        policyFor(c, "codex")?.approvalsReviewer === "auto_review" ? "auto_review" : "user",
       ...(verificationDirectory ? { permissions: reviewPermissionProfile } : { sandbox: c.permissions?.harness === "codex" ? policyFor(c, "codex")!.sandbox ?? c.access : c.access }),
       config,
       developerInstructions: request.instructions + (verificationDirectory
@@ -804,6 +806,8 @@ export class CodexHarness implements Harness {
         request.onEvent({type: "session.rebuilt", data: {previousSessionId, nativeSessionId: started.thread.id, reason: "native_history_unsupported"}});
       }
     }
+    if (common.approvalsReviewer === "auto_review" && started.approvalsReviewer !== "auto_review")
+      throw new Error("The installed Codex did not enable automatic approval review.");
     const sessionId = started.thread.id as string;
     request.onSession(sessionId, {
       model: started.model,
@@ -811,6 +815,7 @@ export class CodexHarness implements Harness {
       threadEffort: started.reasoningEffort,
       requestedTurnEffort: c.effort,
       sandbox: started.sandbox,
+      approvalsReviewer: started.approvalsReviewer,
       ...(request.workspaceBoundary ? { workspaceBoundary: request.workspaceBoundary, nativeSourceAccess: "read-only" } : {}),
       ...(verificationDirectory ? {
         permissionProfile: reviewPermissionProfile,

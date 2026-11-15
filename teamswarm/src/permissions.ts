@@ -4,15 +4,36 @@ import type {
   NativePermissions,
 } from "@team/contracts/runtime";
 
+import { harnessManifest } from "@team/contracts/harness-catalog";
+
 export type PermissionMode = "manual" | "auto" | "full-access" | "accept-edits";
 export function permissionMode(
   config: Pick<ExecutionConfig, "permissions">,
 ): PermissionMode | "" {
   const p = config.permissions as BuiltinNativePermissions | undefined;
+  const declared = p && harnessManifest(p.harness)?.integration?.presets;
+  if (declared) {
+    for (const id of ["manual", "auto", "full-access"] as const) {
+      const entries = Object.entries(declared[id]);
+      if (
+        Object.keys(p).length === entries.length &&
+        entries.every(
+          ([key, value]) =>
+            JSON.stringify(config.permissions?.[key]) === JSON.stringify(value),
+        )
+      )
+        return id;
+    }
+  }
   if (p?.harness === "codex") {
     if (p.sandbox === "danger-full-access") return "full-access";
-    if (p.approvalPolicy === "untrusted") return "manual";
-    if (p.approvalPolicy === "on-request") return "auto";
+    if (
+      p.approvalPolicy === "on-request" &&
+      p.approvalsReviewer === "auto_review"
+    )
+      return "auto";
+    if (p.approvalPolicy === "untrusted" || p.approvalPolicy === "on-request")
+      return "manual";
   }
   if (
     p?.harness === "claude-code" ||
@@ -23,18 +44,25 @@ export function permissionMode(
       (
         {
           default: "manual",
+          teamswarmAuto: "auto",
           auto: "auto",
           acceptEdits: "accept-edits",
           bypassPermissions: "full-access",
         } as const
-      )[p.mode as "default" | "auto" | "acceptEdits" | "bypassPermissions"] ??
-      ""
+      )[
+        p.mode as
+          | "default"
+          | "teamswarmAuto"
+          | "auto"
+          | "acceptEdits"
+          | "bypassPermissions"
+      ] ?? ""
     );
   if (p?.harness === "opencode") {
     if (p.permission["*"] === "ask") return "manual";
     if (p.permission["*"] === "allow")
       return p.permission.doom_loop === "ask"
-        ? "auto"
+        ? "manual"
         : Object.values(p.permission).every((value) => value === "allow")
           ? "full-access"
           : "";
@@ -53,6 +81,11 @@ export function permissionsForMode(
   config: Pick<ExecutionConfig, "harness" | "access" | "permissions">,
   mode: PermissionMode,
 ): NativePermissions | undefined {
+  const declared = harnessManifest(config.harness)?.integration?.presets;
+  if (declared && mode !== "accept-edits") {
+    const selected = config.access === "read-only" ? "read-only" : mode;
+    return { ...declared[selected], harness: config.harness };
+  }
   if (config.harness === "codex")
     return {
       harness: "codex",
@@ -62,6 +95,7 @@ export function permissionsForMode(
           : mode === "full-access"
             ? "never"
             : "untrusted",
+      ...(mode === "auto" ? { approvalsReviewer: "auto_review" as const } : {}),
       ...(mode === "full-access" && config.access !== "read-only"
         ? { sandbox: "danger-full-access" as const }
         : {}),
@@ -108,6 +142,14 @@ export function permissionsForMode(
               },
     };
   if (
+    config.harness === "antigravity" &&
+    (mode === "manual" || mode === "auto")
+  )
+    return {
+      harness: "antigravity",
+      mode: mode === "auto" ? "teamswarmAuto" : "default",
+    };
+  if (
     mode === "full-access" &&
     (config.harness === "grok" || config.harness === "antigravity")
   )
@@ -148,7 +190,12 @@ export function permissionsForAccess(
   access: ExecutionConfig["access"],
 ): NativePermissions | undefined {
   const p = config.permissions as BuiltinNativePermissions | undefined;
-  if (access !== "read-only" || !p) return p;
+  if (access !== "read-only") return p;
+  const readOnly = harnessManifest(config.harness)?.integration?.presets[
+    "read-only"
+  ];
+  if (readOnly) return { ...readOnly, harness: config.harness };
+  if (!p) return p;
   if (p.harness === "codex")
     return {
       ...p,

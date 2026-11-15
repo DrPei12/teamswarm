@@ -19,6 +19,8 @@ export function harnessProtocol(
 export function needsModelRoute(c: ExecutionConfig) {
   return (
     !!c.chatgptAccountId ||
+    (c.harness === "antigravity" && !!c.baseUrl) ||
+    (!!c.baseUrl && !!harnessManifest(c.harness)?.integration) ||
     !!apiEffortPolicy(c) ||
     (!!c.baseUrl &&
       !!c.protocol &&

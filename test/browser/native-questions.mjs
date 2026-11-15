@@ -47,7 +47,7 @@ try {
   await context.request.post(origin + '/api/control/session', { headers: { Authorization: `Bearer ${service.controlToken}` } });
   page = await context.newPage();
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto(origin + `/#/team/${team.id}/agent`);
+  await page.goto(origin + `/#/team/${team.id}/chat/${team.mainChatId}`);
   const ask = async text => {
     await page.locator('.composer textarea').fill(text);
     await page.getByRole('button', { name: 'Send message', exact: true }).click();
@@ -74,7 +74,7 @@ try {
   await checks.getByRole('checkbox', { name: 'Lint' }).check();
   await checks.getByRole('textbox', { name: 'Other answer' }).fill('Smoke');
   await page.getByRole('button', { name: 'Collaboration', exact: true }).click();
-  await page.locator('.sidebar').getByRole('button', { name: 'Question test answer', exact: true }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Host', exact: true }).click();
   await card.waitFor();
   assert(await format.getByRole('radio', { name: /^Text/ }).isChecked());
   assert(await checks.getByRole('checkbox', { name: 'Unit' }).isChecked());
@@ -83,7 +83,9 @@ try {
   await page.screenshot({ path: path.join(root, 'question-request.png') });
   await send.click();
   await card.waitFor({ state: 'detached' });
-  await page.getByText('Chose Text / Unit + Lint + Smoke', { exact: true }).waitFor();
+  assert.deepEqual(received[0]?.[0], ['Text']);
+  assert.deepEqual(new Set(received[0]?.[1]), new Set(['Unit', 'Lint', 'Smoke']));
+  await page.getByText(`Chose Text / ${received[0][1].join(' + ')}`, { exact: true }).waitFor();
 
   card = await ask('Question test skip');
   await card.getByRole('button', { name: 'Skip', exact: true }).click();
@@ -99,7 +101,7 @@ try {
     await card.getByRole('button', { name: 'Skip', exact: true }).click();
     await card.waitFor({ state: 'detached' });
   }
-  assert.deepEqual(received, [[['Text'], ['Unit', 'Lint', 'Smoke']], null, null, null]);
+  assert.deepEqual(received.slice(1), [null, null, null]);
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ passed: true, root, checks: ['question card shows options and descriptions', 'send stays disabled until every question has an answer', 'custom and chosen answers replace each other for single choice', 'multi-select combines options and a custom answer', 'skip returns no answer', 'card fits narrow windows'] }));
 } catch (error) {

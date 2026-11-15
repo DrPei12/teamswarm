@@ -5,6 +5,7 @@ import http from 'node:http';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { digest } from './release-identity.mjs';
+import { randomUUID } from 'node:crypto';
 
 assert.equal(process.platform, 'darwin', 'Verify macOS packages on macOS.');
 assert.equal(process.arch, 'arm64');
@@ -113,8 +114,9 @@ try {
   await new Promise(resolve => provider.listen(0, '127.0.0.1', resolve));
   const providerOrigin = `http://127.0.0.1:${provider.address().port}`;
   page = await launch();
-  await page.getByRole('textbox', { name: 'Team name', exact: true }).fill('macOS package check');
-  await page.getByRole('button', { name: 'Create team', exact: true }).click();
+  await page.getByRole('button', { name: 'New chat', exact: true }).click();
+  const created = await api(page, '/product/teams', 'POST', { name: 'macOS package check', clientRequestId: randomUUID() });
+  await page.goto(new URL(`/#/team/${created.id}/chat/${created.mainChatId}`, page.url()).href);
   await page.getByRole('button', { name: 'New chat', exact: true }).waitFor();
   await page.screenshot({ path: path.join(output, 'macos-desktop.png') });
   const team = (await api(page, '/teams')).teams.find(item => item.name === 'macOS package check');

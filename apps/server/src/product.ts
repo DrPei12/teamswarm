@@ -6,10 +6,10 @@ import { permissionCatalog, mergePermissionChoice } from "./runtime/permission-o
 import { nativePermissions, validateNativePermissions } from "./runtime/harness/permissions.js";
 import { setHostConfiguration } from "./runtime/allocation.js";
 import { allocationTaskIds } from "./runtime/allocation-tasks.js";
-import { memberPermissionPreset } from "./runtime/member-permissions.js";
+import { executionPermissionPreset, memberPermissionPreset } from "./runtime/member-permissions.js";
 import { harnessManifest } from "@team/contracts/harness-catalog";
 import express, { Router } from "express";
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { randomUUID, createHash } from "node:crypto";
@@ -46,6 +46,7 @@ import { CodexHarness } from "./runtime/harness/codex.js";
 import type { TeamRuntime } from "./runtime/engine.js";
 import { definitionInput } from "./runtime/project-history.js";
 import { insightInput } from "./runtime/collaboration-records.js";
+import { overlaps } from "./runtime/store.js";
 import { parse, key, executionConfig } from "./runtime/validation.js";
 import { badRequest, conflict, notFound } from "./errors.js";
 import {
@@ -145,6 +146,8 @@ export class ProductStore {
       .exec(`CREATE TABLE IF NOT EXISTS product_state(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS product_imports(id TEXT PRIMARY KEY,content TEXT NOT NULL,created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS product_files(id TEXT PRIMARY KEY,data TEXT NOT NULL,sha256 TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS product_chat_kind(conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,kind TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS product_independent_team(team_id TEXT PRIMARY KEY REFERENCES teams(id) ON DELETE CASCADE);
       CREATE TABLE IF NOT EXISTS product_message_details(message_id TEXT PRIMARY KEY REFERENCES messages(id),data TEXT NOT NULL);`);
     this.db
       .prepare("INSERT OR IGNORE INTO product_state VALUES(1,0,?)")
@@ -225,8 +228,8 @@ export class ProductStore {
       .run(file.id, JSON.stringify(file), digest);
     return file;
   }
-  configureDefault(teamId: string) {
-    const workspace = path.join(
+  configureDefault(teamId: string, folder?: string) {
+    const workspace = folder ?? path.join(
       process.env.TEAM_PROJECTS_DIR ?? `${this.runtime.store.teams.dataDir}-projects`,
       teamId,
     );
@@ -385,6 +388,7 @@ export class ProductStore {
       workspace.teams.push({
         ...prefs,
         mainChatId,
+        independent: !!this.db.prepare("SELECT 1 FROM product_independent_team WHERE team_id=?").get(team.id),
         id: team.id,
         name: team.name,
         color: prefs.color ?? "#7774cf",
@@ -488,6 +492,8 @@ export class ProductStore {
           messages,
           historyBefore: detail.historyBefore,
           branchId: branch.id,
+          workspace: branch.workspace ?? settings?.workspace,
+          kind: this.db.prepare("SELECT kind FROM product_chat_kind WHERE conversation_id=?").get(conversation.id)?.kind as Chat["kind"],
         });
       }
       if (page) return workspace;
@@ -515,10 +521,11 @@ export class ProductStore {
         );
         if (!fork) continue;
         const base = nodes.find((n) => n.id === fork.parentNodeId);
-        if (base?.source.conversationId)
+        const origin = fork.source.conversationId && fork.source.conversationId !== chat.id ? fork.source : base?.source;
+        if (origin?.conversationId && origin.conversationId !== chat.id)
           chat.parent = {
-            chatId: base.source.conversationId,
-            messageId: base.source.messageIds?.at(-1) ?? "",
+            chatId: origin.conversationId,
+            messageId: origin.messageIds?.at(-1) ?? "",
           };
         chat.inheritedDefinitions = Object.values(fork.documents).map((id) => {
           const d = documents.get(id)!;
@@ -998,11 +1005,11 @@ export function productRoutes(runtime: TeamRuntime): Router {
   });
   router.post("/product/teams/:teamId/permission-config",(req,res)=>{
     const teamId=parse(key,req.params.teamId);
-    const input=parse(z.object({config:executionConfig,preset:z.enum(["read-only","full-access"])}).strict(),req.body);
+    const input=parse(z.object({config:executionConfig,preset:executionPermissionPreset}).strict(),req.body);
     const config=runtime.memberPermissions.configuration(teamId,input.config,input.preset);validateNativePermissions(config);res.json(config);
   });
   router.put("/product/teams/:teamId/branches/:branchId/host/permission-preset",(req,res)=>{
-    const input=parse(z.object({expectedVersion:z.number().int().positive(),preset:z.enum(["read-only","full-access"])}).strict(),req.body);
+    const input=parse(z.object({expectedVersion:z.number().int().positive(),preset:executionPermissionPreset}).strict(),req.body);
     res.json(runtime.memberPermissions.setHostFromUser(parse(key,req.params.teamId),parse(key,req.params.branchId),input.expectedVersion,input.preset));
   });
   router.put("/product/teams/:teamId/members/:memberId/permission-preset", (req, res) => {
@@ -1369,6 +1376,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
         .object({
           clientRequestId: key,
           name: z.string().trim().min(1).max(80),
+          workspace: z.string().trim().min(1).max(4096).optional(),
         })
         .strict(),
       req.body,
@@ -1378,8 +1386,10 @@ export function productRoutes(runtime: TeamRuntime): Router {
       input.clientRequestId,
       input,
       () => {
+        if (input.workspace && (!path.isAbsolute(input.workspace) || !existsSync(input.workspace) || !statSync(input.workspace).isDirectory()))
+          throw badRequest("workspace_missing", "Choose an existing project folder.");
         const team = runtime.store.teams.createTeam(input.name, "");
-        product.configureDefault(team.id);
+        product.configureDefault(team.id, input.workspace ? realpathSync(input.workspace) : undefined);
         // Bind the team's first Host conversation before the client navigates,
         // so its first message cannot create an unrelated "Recent" chat.
         return { ...team, mainChatId: runtime.history.mainConversation(team.id) };
@@ -1392,7 +1402,8 @@ export function productRoutes(runtime: TeamRuntime): Router {
   const teamWorks = (teamId: string, statuses: string[]) =>
     runtime.store.list<Work>("works", teamId).filter(w => statuses.includes(w.status));
   const requireAnotherTeam = (teamId: string) => {
-    if (!runtime.store.teams.listTeams().some(t => t.id !== teamId && !t.archivedAt))
+    const independent = product.db.prepare("SELECT 1 FROM product_independent_team WHERE team_id=?");
+    if (!runtime.store.teams.listTeams().some(t => t.id !== teamId && !t.archivedAt && !independent.get(t.id)))
       throw conflict("last_team", "Keep at least one active team. Create another team first.");
   };
   router.patch("/product/teams/:teamId", (req, res) => {
@@ -1439,6 +1450,125 @@ export function productRoutes(runtime: TeamRuntime): Router {
       p.skills = p.skills.filter(skill => skill.teamId !== teamId);
     });
     res.json({ id: teamId, deleted: true });
+  });
+  router.put("/product/conversations/:id/workspace", (req, res) => {
+    const id = parse(key, req.params.id);
+    const input = parse(z.object({ teamId: key, expectedVersion: z.number().int().min(1),
+      workspace: z.string().trim().min(1).max(4096),
+    }).strict(), req.body);
+    const { teamId } = input;
+    const branch = runtime.history.forConversation(teamId, id);
+    const current = runtime.store.settings(teamId);
+    if (!current || product.read().preferences.chats[id]?.archived) throw notFound();
+    if (!path.isAbsolute(input.workspace) || !existsSync(input.workspace) || !statSync(input.workspace).isDirectory())
+      throw badRequest("workspace_missing", "Choose an existing project folder.");
+    const folder = realpathSync(input.workspace);
+    if (overlaps(folder, realpathSync(runtime.store.teams.dataDir)))
+      throw badRequest("unsafe_workspace", "Project workspace and TeamSwarm service data must be separate, non-overlapping directories.");
+    const db = runtime.store.db;
+    const independent = !!db.prepare("SELECT 1 FROM product_independent_team WHERE team_id=?").get(teamId);
+    const result = runtime.store.transaction(() => {
+      if (current.version !== input.expectedVersion) throw conflict("version_conflict", "Runtime settings changed. Reload before saving.");
+      if (teamWorks(teamId, [...active]).length)
+        throw conflict("active_execution", "Stop and reconcile pending work before changing runtime settings.");
+      const { teamId: _team, policyVersion: _policy, version, ...settings } = current;
+      if (branch.workspace) {
+        db.prepare("UPDATE project_branches SET data=? WHERE team_id=? AND id=?")
+          .run(JSON.stringify({ ...branch, workspace: folder }), teamId, branch.id);
+        runtime.store.save("settings", { ...current, version: version + 1 });
+        runtime.store.event(teamId, "project.workspace_changed", { branchId: branch.id });
+      } else {
+        runtime.store.configure(teamId, { ...settings, workspace: folder }, version);
+      }
+      if (independent) {
+        db.prepare("DELETE FROM product_independent_team WHERE team_id=?").run(teamId);
+        db.prepare("DELETE FROM product_chat_kind WHERE conversation_id=? AND kind='independent'").run(id);
+        const name = (path.basename(folder) || path.parse(folder).root).slice(0, 80);
+        runtime.store.teams.renameTeam(teamId, name);
+        db.prepare("UPDATE conversations SET title=? WHERE id=?").run("Host", id);
+      }
+      return { teamId, id };
+    });
+    res.json(result);
+  });
+  router.post("/product/independent-conversations", (req, res) => {
+    const input = parse(z.object({ clientRequestId: key, title: z.string().trim().min(1).max(160) }).strict(), req.body);
+    const result = runtime.store.once("independent-conversation", input.clientRequestId, input, () => {
+      const team = runtime.store.teams.createTeam(input.title, "")!;
+      product.configureDefault(team.id);
+      product.db.prepare("INSERT INTO product_independent_team VALUES(?)").run(team.id);
+      const id = runtime.history.mainConversation(team.id);
+      const branch = runtime.history.forConversation(team.id, id);
+      const host = runtime.store.list<RuntimeMember>("members",team.id).find(member => member.kind === "host")!;
+      const config = runtime.memberPermissions.configuration(team.id, host.config, "read-only");
+      host.hostSelections = { [branch.id]: { revision: 1, selection: null, config, permissionPreset: "read-only" } };
+      runtime.store.save("members",host);
+      product.db.prepare("UPDATE conversations SET title=? WHERE id=?").run(input.title, id);
+      product.db.prepare("INSERT INTO product_chat_kind VALUES(?,?)").run(id, "independent");
+      return { teamId: team.id, id };
+    });
+    res.status(201).json(result);
+  });
+  router.post("/product/conversations/:id/fork", (req, res) => {
+    const parentId = parse(key, req.params.id);
+    const input = parse(z.object({
+      clientRequestId: key, teamId: key, title: z.string().trim().min(1).max(160),
+      kind: z.enum(["branch", "side", "edit"]), messageId: key.optional(), content: z.string().trim().min(1).max(20000).optional(),
+    }).strict(), req.body);
+    const teamId = input.teamId;
+    const kickoff = runtime.store.once(`conversation-fork:${teamId}`, input.clientRequestId, { ...input, parentId }, () => {
+      const parent = runtime.history.forConversation(teamId, parentId);
+      if (product.read().preferences.chats[parentId]?.archived) throw notFound();
+      if (input.kind === "side" && product.db.prepare("SELECT 1 FROM product_independent_team WHERE team_id=?").get(teamId))
+        throw conflict("project_required", "Open a Team conversation to create a side chat.");
+      const editing = input.kind === "edit";
+      if (editing && (!input.messageId || !input.content)) throw badRequest("invalid_input", "Select a user message and enter the revised text.");
+      const source = runtime.store.list<RuntimeMember>("members", teamId).find(m => m.kind === "host");
+      if (!source) throw notFound();
+      const current = runtime.catalog.memberExecution(teamId, parent.id, source).config;
+      const result = runtime.history.forkConversation(teamId, parentId, input.title, input.messageId, editing);
+      const preset = "read-only";
+      const config = runtime.memberPermissions.configuration(teamId, current, preset);
+      source.hostSelections = { ...source.hostSelections, [result.branch.id]: { revision: 1, selection: null, config, permissionPreset: preset } };
+      runtime.store.save("members", source);
+      product.db.prepare("INSERT INTO product_chat_kind VALUES(?,?)").run(result.conversation.id, input.kind === "side" ? "side" : "branch");
+      let messageId: string | undefined;
+      if (editing) {
+        const recorded = runtime.store.teams.recordMessage(teamId, result.conversation.id, input.content!, input.clientRequestId, message => {
+          const previous = product.db.prepare("SELECT data FROM product_message_details WHERE message_id=?").get(input.messageId!);
+          if (previous) {
+            const details = JSON.parse(String(previous.data));
+            delete details.legacyId;
+            product.db.prepare("INSERT INTO product_message_details VALUES(?,?)").run(message.id, JSON.stringify(details));
+          }
+          runtime.store.enqueueHost(teamId, result.conversation.id, message.id, true, false);
+        });
+        messageId = recorded?.message.id;
+      }
+      return { id: result.conversation.id, teamId, messageId };
+    });
+    if (kickoff.messageId) runtime.enqueue(teamId, kickoff.id, kickoff.messageId);
+    res.status(201).json(kickoff);
+  });
+  router.delete("/product/conversations/:id", (req, res) => {
+    const id = parse(key, req.params.id);
+    const entry = product.db.prepare("SELECT team_id FROM conversations WHERE id=?").get(id);
+    if (!entry) throw notFound();
+    const teamId = String(entry.team_id);
+    const branch = runtime.history.forConversation(teamId, id);
+    const kind = product.db.prepare("SELECT kind FROM product_chat_kind WHERE conversation_id=?").get(id)?.kind;
+    if (!branch.baseNodeId && kind !== "independent") throw conflict("main_chat", "Keep the Team's main Host conversation.");
+    const runs = new Set(runtime.store.list<Run>("runs", teamId).filter(run => run.conversationId === id).map(run => run.id));
+    if (runtime.store.list<Work>("works", teamId).some(work => runs.has(work.runId) && active.has(work.status)))
+      throw conflict("conversation_busy", "Finish or stop this conversation before deleting it.");
+    product.update(p => {
+      p.chats[id] = { ...p.chats[id], archived: true };
+      if (p.teams[teamId]?.lastChatId === id) {
+        p.teams[teamId] = { ...p.teams[teamId] };
+        delete p.teams[teamId].lastChatId;
+      }
+    });
+    res.json({ id });
   });
   router.post("/product/conversations", (req, res) => {
     const input = parse(
@@ -1639,6 +1769,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
     );
     if (!input.content.trim() && !input.files.length)
       throw badRequest("empty_message", "Write a message or attach a file.");
+    if (product.read().preferences.chats[input.conversationId]?.archived) throw notFound();
     const settings = runtime.store.settings(input.teamId);
     if (!settings)
       throw badRequest(

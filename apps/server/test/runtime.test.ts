@@ -70,8 +70,9 @@ class FixtureHarness implements Harness {
       this.pending.delete(sessionId);
     }
   }
+  recoveryStatus: "interrupted" | "unknown" = "interrupted";
   async reconcile() {
-    return { status: "interrupted" as const, text: "" };
+    return { status: this.recoveryStatus, text: "" };
   }
   async close() {
     for (const resolve of this.pending.values())
@@ -332,16 +333,12 @@ test("a Host provider failure cannot complete a run", async () => {
 
 for (const mode of ["unknown", "throw"] as const)
   test(`transport ${mode} retains execution ownership and requires reconciliation`, async () => {
-    const app = await setup(
-      new FixtureHarness(async () => {
-        if (mode === "throw") throw new HarnessTransportError("write EPIPE");
-        return {
-          status: "unknown",
-          text: "",
-          error: "Invalid protocol message.",
-        };
-      }),
-    );
+    const harness = new FixtureHarness(async () => {
+      if (mode === "throw") throw new HarnessTransportError("write EPIPE");
+      return { status: "unknown", text: "", error: "Invalid protocol message." };
+    });
+    harness.recoveryStatus = "unknown";
+    const app = await setup(harness);
     try {
       const sent = await app.request(app.messageRoute, {
         content: "Hello",
@@ -368,6 +365,8 @@ for (const mode of ["unknown", "throw"] as const)
         ).status,
         409,
       );
+      assert.equal(harness.calls, 1);
+      harness.recoveryStatus = "interrupted";
       assert.equal(
         (
           await app.request(
@@ -814,7 +813,7 @@ test("explicit local harness modules load; remote paths and duplicate adapters a
       file,
       `export function createHarness() { return { id: 'test-extension', capabilities: { testingOnly: true }, async inspect(){return {fixture:true}}, async execute(){return {status:'failed',text:'',error:'Test adapter has no executor'}}, async interrupt(){}, async close(){} }; }`,
     );
-    const adapters = await loadHarnesses(JSON.stringify([file]));
+    const adapters = await loadHarnesses(JSON.stringify([file]), "inspection");
     assert.deepEqual(
       adapters.map((a) => a.id),
       [
@@ -834,13 +833,16 @@ test("explicit local harness modules load; remote paths and duplicate adapters a
       loadHarnesses(JSON.stringify(["https://example.invalid/harness.js"])),
       /absolute local/,
     );
-    await assert.rejects(loadHarnesses(JSON.stringify([file, file])), /unique/);
+    await assert.rejects(loadHarnesses(JSON.stringify([file, file]), "inspection"), /unique/);
     const invalid = path.join(root, "invalid.mjs");
     writeFileSync(
       invalid,
       `export let closed = false; export function createHarness() { return { id: 'INVALID', async close(){closed=true} }; }`,
     );
-    await assert.rejects(loadHarnesses(JSON.stringify([invalid])), /contract/);
+    const rejected = await loadHarnesses(JSON.stringify([invalid]));
+    assert.equal(rejected.length, adapters.length - 1);
+    await Promise.all(rejected.map(adapter => adapter.close()));
+    await assert.rejects(loadHarnesses(JSON.stringify([invalid]), "inspection"), /contract/);
     const { pathToFileURL } = await import("node:url");
     assert.equal((await import(pathToFileURL(invalid).href)).closed, true);
   } finally {

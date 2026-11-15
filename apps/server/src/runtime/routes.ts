@@ -5,15 +5,17 @@ import { Router, type RequestHandler } from "express";
 import path from "node:path";
 import { z } from "zod";
 import { isDeepStrictEqual } from "node:util";
-import { memberPermissionPreset } from "./member-permissions.js";
+import { memberPermissionChoices, memberPermissionPreset } from "./member-permissions.js";
 import { badRequest, conflict, notFound } from "../errors.js";
 import { TeamRuntime } from "./engine.js";
+import { completeChecks, contractIssues } from "./harness/admission.js";
+import { validateManifest } from "./harness/manifest.js";
 import { HarnessManagement } from "./harness/management.js";
 import { supportsSubscription, subscriptionAccounts } from "./harness/subscriptions.js";
 import { antigravityAccounts } from "./harness/antigravity-account.js";
 import { homedir } from "node:os";
 import { resourceInput, directoryQuery, directoryDetail } from "./catalog.js";
-import { capabilitiesInput } from "./capabilities.js";
+import { capabilitiesInput, capabilityOverridesInput } from "./capabilities.js";
 import { devicePolicyInput } from "./resources.js";
 import { allocationRequest, resourceSelection } from "./allocation-contract.js";
 import {
@@ -116,6 +118,38 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
     const teamId = param(req.params.teamId);
     if (!store.teams.getTeam(teamId)) throw notFound();
     res.json(runtime.resources.state(teamId));
+  });
+  router.get("/global/capabilities", (_req, res) => res.json(runtime.catalog.capabilities.readGlobal()));
+  router.put("/global/capabilities", (req, res) => res.json(runtime.catalog.capabilities.saveGlobal(parse(capabilitiesInput, req.body))));
+  router.put("/teams/:teamId/capability-overrides", (req, res) => res.json(runtime.catalog.capabilities.saveOverride(
+    param(req.params.teamId), parse(capabilityOverridesInput, req.body),
+  )));
+  router.get("/service-policy", (_req, res) => res.json(runtime.services.policy()));
+  router.put("/service-policy", async (req, res) => {
+    const input = parse(z.object({ expectedVersion: z.number().int().nonnegative(), autoRelease: z.boolean() }).strict(), req.body);
+    res.json(await runtime.services.configure(input.expectedVersion, input.autoRelease));
+  });
+  router.get("/teams/:teamId/services", (req, res) => {
+    const teamId = param(req.params.teamId);
+    if (!store.teams.getTeam(teamId)) throw notFound();
+    res.json({ policy: runtime.services.policy(), services: runtime.services.list(teamId).map(service => ({ ...service, ...(["starting", "running", "switching", "stopping"].includes(service.status) ? runtime.resources.processMetrics(service.pid) : {}) })),
+      suggestion: runtime.serviceAdviser.latest(teamId), ...(runtime.services.error ? { error: runtime.services.error } : {}) });
+  });
+  router.post("/teams/:teamId/services/:id/stop", async (req, res) => {
+    const input = parse(z.object({ expectedVersion: z.number().int().positive() }).strict(), req.body);
+    res.json(await runtime.services.stop(param(req.params.teamId), param(req.params.id), input.expectedVersion, "user", "Stopped by user."));
+  });
+  router.post("/teams/:teamId/services/:id/restart", async (req, res) => {
+    const input = parse(z.object({ expectedVersion: z.number().int().positive() }).strict(), req.body);
+    res.json(await runtime.services.restart(param(req.params.teamId), param(req.params.id), input.expectedVersion));
+  });
+  router.put("/teams/:teamId/services/:id/retention", async (req, res) => {
+    const input = parse(z.object({ expectedVersion: z.number().int().positive(), retained: z.boolean() }).strict(), req.body);
+    res.json(await runtime.services.retain(param(req.params.teamId), param(req.params.id), input.expectedVersion, input.retained));
+  });
+  router.post("/teams/:teamId/service-suggestions/:id/dismiss", (req, res) => {
+    parse(z.object({}).strict(), req.body);
+    runtime.serviceAdviser.dismiss(param(req.params.teamId), param(req.params.id)); res.json({ ok: true });
   });
   router.get("/teams/:teamId/capabilities", (req,res)=>res.json(runtime.catalog.capabilities.read(param(req.params.teamId))));
   router.put("/teams/:teamId/capabilities", (req,res)=>res.json(runtime.catalog.capabilities.save(param(req.params.teamId),parse(capabilitiesInput,req.body))));
@@ -655,14 +689,37 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
         ),
       );
   });
+  router.post("/harness-packages/preview", (req, res) => {
+    const input = parse(z.object({ manifest: z.unknown() }).strict(), req.body);
+    try {
+      const manifest = validateManifest(input.manifest);
+      const issues = contractIssues(manifest);
+      res.json({
+        id: manifest.id, name: manifest.name, packageVersion: manifest.packageVersion,
+        status: issues.length ? "limited" : "unverified",
+        issues, requiredChecks: completeChecks,
+      });
+    } catch (error) {
+      throw badRequest("invalid_harness_manifest", error instanceof Error ? error.message : "Invalid Harness manifest.");
+    }
+  });
   router.get("/harnesses", (_req, res) =>
     res.json({
-      harnesses: [...runtime.harnesses.values()].map((h) => ({
-        id: h.id,
-        name: harnessManifest(h.id)?.name ?? h.id,
-        manifest: harnessManifest(h.id) ?? null,
-        capabilities: h.capabilities,
-      })),
+      harnesses: [...runtime.harnesses.values()].map((h) => {
+        const manifest = harnessManifest(h.id);
+        const missing = memberPermissionChoices(h).filter(option => !option.available).map(option => option.label);
+        const issues = [
+          ...(manifest?.models.nativeOnly ? ["Shared model connections are unavailable."] : []),
+          ...missing,
+        ];
+        return {
+          id: h.id, name: manifest?.name ?? h.id, manifest: manifest ?? null, capabilities: h.capabilities,
+          admission: {
+            status: h.capabilities.fullIntegrationVerified === true ? "complete" : issues.length ? "limited" : "unverified",
+            issues,
+          },
+        };
+      }),
     }),
   );
   router.post("/harnesses/:harnessId/check", async (req, res) => {
@@ -835,7 +892,7 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       ),
     ),
   );
-  router.post("/teams/:teamId/works/:workId/retry", (req, res) => {
+  router.post("/teams/:teamId/works/:workId/retry", async (req, res) => {
     const input = parse(
       z.object({ expectedRevision: z.number().int().positive(), fromAllocationList: z.literal(true).optional() }).strict(),
       req.body,
@@ -845,7 +902,7 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       requireAllocationTask(store, param(req.params.teamId), param(req.params.workId));
     }
     res.json(
-      runtime.retry(
+      await runtime.retryAfterRecovery(
         param(req.params.teamId),
         param(req.params.workId),
         input.expectedRevision,

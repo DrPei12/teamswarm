@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { ContextWindowUsage } from "@team/contracts/product";
 import type { Attempt, ExecutionConfig } from "./runtime/types.js";
 import { DEEPSEEK_NATIVE_WINDOW } from "./runtime/context-budget.js";
+import { needsModelRoute } from "./runtime/model-routing.js";
 
 const count = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) && value >= 0
@@ -170,7 +171,8 @@ export function contextWindowUsage(
       limitSource: "configured",
     });
   if (used === null && next) return upcoming;
-  if (harnessManifest(config.harness)?.models.nativeOnly)
+  if (harnessManifest(config.harness)?.models.nativeOnly ||
+      (config.harness === "antigravity" && !needsModelRoute(config)))
     return addNext({ used, limit: null, estimated, limitSource: "estimate" });
   const planned = capacity(frame?.plannedWindow);
   return addNext({

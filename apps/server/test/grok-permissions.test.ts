@@ -6,7 +6,8 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn } from "node:child_process";
+import { spawnOwned } from "../src/runtime/harness/owned-process.js";
+import { terminateNative } from "../src/runtime/harness/native-support.js";
 
 test("Grok ACP permits only an exact tool in the current attempt, once", () => {
   const tools = [{ name: "read_fact" }];
@@ -158,8 +159,7 @@ test("Grok native ACP permissions honor the attempt access without persistent gr
 
 test(
   "Grok worker authorizes the attempt MCP call and separates progress from its final answer",
-  { timeout: 120000 },
-  async () => {
+  async (t) => {
     const root = mkdtempSync(
       path.join(tmpdir(), "teamswarm-grok-worker-test-"),
     );
@@ -291,6 +291,7 @@ test(
         ),
       ];
       for (const { access, resume, scenario } of cases) {
+        await t.test(`${scenario}: ${access}, ${resume ? "resume" : "new"}`, { timeout: 20000 }, async (scenarioTest) => {
         if (resume)
           writeFileSync(
             path.join(root, "native-session.json"),
@@ -309,7 +310,7 @@ test(
             resume,
           }),
         );
-        const child = spawn(
+        const child = await spawnOwned(
           process.execPath,
           ["--import", "tsx", worker, spec],
           {
@@ -318,7 +319,8 @@ test(
             env: { ...process.env, TEAMSWARM_TEST_CATALOG_CASE: scenario },
           },
         );
-        const timer = setTimeout(() => child.kill(), 15000);
+        scenarioTest.after(async () => { if (child.exitCode === null && child.signalCode === null) await terminateNative(child); });
+        const timer = setTimeout(() => { void terminateNative(child); }, 15000);
         let output = "",
           error = "";
         child.stdout.on("data", (chunk) => {
@@ -394,7 +396,7 @@ test(
             !requests.some((request) => request.method === "session/prompt"),
             `${scenario} must fail before sending a model prompt`,
           );
-          continue;
+          return;
         }
         assert.ok(
           !messages.some(
@@ -428,6 +430,7 @@ test(
             text: resume ? "RESUMED ANSWER" : "ANSWER",
           },
         );
+        });
       }
     } finally {
       await rm(root, {

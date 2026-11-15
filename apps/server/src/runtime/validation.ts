@@ -99,6 +99,26 @@ export function parse<T extends z.ZodType>(
   return result.data;
 }
 export const tools = {
+  team_preview_prepare: {
+    description: "Prepare a project-owned Vite or Next.js development server. Run the returned commandPrefix through your own native command tool; preparing starts no process. A stable runtime copy preserves the framework CLI, compiler and hot reload across compatible handoffs. Requires writable production work and an adapter-verified execution policy. Currently Pi requires an explicit bash or powershell tool; other adapters without a verified launcher are refused. Use a plain vite or next dev script, with a local readiness path and expected text. Read-only work cannot launch services.",
+    schema: z.object({ name: z.string().trim().min(1).max(80), directory: z.string().min(1).max(500).default("."), development: z.object({ framework: z.enum(["vite", "next"]), script: z.string().regex(/^[\w.-]+$/).default("dev"), ready: z.object({ path: z.string().regex(/^\/($|[^/])/).max(500), contains: z.string().min(1).max(500) }).strict() }).strict() }).strict(),
+  },
+  team_preview_start: {
+    description: "Start a loopback frontend preview from this work's static files or built output. directory is relative to this work's actual working copy and must contain index.html. The project owns the preview process separately from the Harness. Read its service ID and version for handoff. A preview explicitly stopped by the user must be reopened by the user.",
+    schema: z.object({ name: z.string().trim().min(1).max(80).default("Frontend preview"), directory: z.string().min(1).max(500).default(".") }).strict(),
+  },
+  team_preview_status: {
+    description: "Read running preview services in this project branch, including current owner, working copy, pending handoff, endpoint and version.",
+    schema: z.object({}).strict(),
+  },
+  team_preview_handoff: {
+    description: "Reserve an existing preview for a receiving work in this branch. Only the current owner or Host can offer a handoff. The recipient must call team_preview_accept after its working copy is ready. The same process and endpoint switch to the recipient's files.",
+    schema: z.object({ serviceId: key, targetWorkId: key, expectedVersion: z.number().int().positive() }).strict(),
+  },
+  team_preview_accept: {
+    description: "Accept a preview explicitly handed to this work. Switch the existing preview process to this work's actual source. For a development server, ready is required: a local path and expected text from the receiving copy. Compatible dependencies and startup configuration preserve the actual CLI, compiler, and endpoint. A configuration mismatch requires a new instance and leaves the existing service intact.",
+    schema: z.object({ serviceId: key, expectedVersion: z.number().int().positive(), ready: z.object({ path: z.string().regex(/^\/($|[^/])/).max(500), contains: z.string().min(1).max(500) }).strict().optional() }).strict(),
+  },
   team_pending_permissions: {
     description: "Host only. Read native operation approvals for this conversation and worker-permission changes for this branch. Each request identifies its target and requested action. Native grants are one-time; worker defaults affect future Attempts.",
     schema: z.object({}).strict(),

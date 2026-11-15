@@ -1,6 +1,6 @@
 # Third-party software and assets
 
-TeamSwarm's own code is licensed under Apache-2.0. The following software and assets retain their original licenses.
+TeamSwarm's own code is licensed under MIT. The following software and assets retain their original licenses.
 
 | Component | Use | License and notice |
 |---|---|---|
@@ -35,8 +35,8 @@ the updated glob and minimatch versions. The npm version in `package.json`
 and `TEAMSWARM-NOTICE.md` identify this modified distribution; other
 upstream file bytes and modes are retained.
 
-The Apache-2.0 adapters in `vendor/glob-compat` and `vendor/minimatch-compat`
-provide the callback and callable exports used by older build dependencies.
+The TeamSwarm adapters in `vendor/glob-compat` and `vendor/minimatch-compat`
+use MIT and provide the callback and callable exports used by older build dependencies.
 They delegate matching and filesystem traversal to the unmodified upstream
 glob and minimatch releases listed above, whose ISC licenses remain with
 their installed packages.

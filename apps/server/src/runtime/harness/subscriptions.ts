@@ -1,5 +1,6 @@
 import { applicationDataBase } from "../../../../../scripts/platform.cjs";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawnOwned, confirmOwnedExit } from "./owned-process.js";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
@@ -11,6 +12,14 @@ import { badRequest, conflict } from "../../errors.js";
 import { isolateGrokEnvironment } from "./grok-config.js";
 
 export type SubscriptionHarness = "claude-code" | "grok";
+const processScopes = new Map<SubscriptionHarness, AbortController>();
+const startingProcesses = new Map<Promise<ChildProcessWithoutNullStreams>, SubscriptionHarness>();
+const processScope = (id: SubscriptionHarness) => {
+  let scope = processScopes.get(id);
+  if (!scope) { scope = new AbortController(); processScopes.set(id, scope); }
+  return scope;
+};
+type ProcessLauncher = (id: SubscriptionHarness, args: string[], signal?: AbortSignal) => Promise<ChildProcessWithoutNullStreams>;
 export const supportsSubscription = (id: string): id is SubscriptionHarness => id === "claude-code" || id === "grok";
 export function accountHome(id: SubscriptionHarness) {
   const home = path.join(process.env.TEAM_ACCOUNT_HOME ?? path.join(applicationDataBase(), "TeamSwarm", "accounts"), id);
@@ -35,13 +44,25 @@ export function subscriptionEnvironment(id: SubscriptionHarness): NodeJS.Process
 }
 export const claudeSubscriptionFlags = ["--setting-sources", "", "--settings", '{"disableAllHooks":true}', "--disable-slash-commands"];
 export function subscriptionScope(id: SubscriptionHarness) { return sessionStoreScope(accountHome(id)); }
-export function startSubscriptionProcess(id: SubscriptionHarness, args: string[]) {
+export async function startSubscriptionProcess(id: SubscriptionHarness, args: string[], signal = processScope(id).signal) {
+  signal.throwIfAborted();
   const entry = nativeEntry(id);
   if (id === "grok" && path.basename(entry) === "grok-bootstrap.js") throw new Error("Finish the device installation check, then refresh the account status.");
-  return spawn(/\.[cm]?js$/i.test(entry) ? process.execPath : entry, /\.[cm]?js$/i.test(entry) ? [entry, ...args] : args, {
-    cwd: accountHome(id), env: subscriptionEnvironment(id), windowsHide: true,
-    shell: false, stdio: "pipe", detached: process.platform !== "win32",
-  });
+  const starting = (async () => {
+    const child = await spawnOwned(/\.[cm]?js$/i.test(entry) ? process.execPath : entry, /\.[cm]?js$/i.test(entry) ? [entry, ...args] : args, {
+      cwd: accountHome(id), env: subscriptionEnvironment(id), windowsHide: true,
+      shell: false, stdio: "pipe", detached: process.platform !== "win32",
+    });
+    pendingCommands.set(child, id);
+    child.once("close", () => pendingCommands.delete(child));
+    if (signal.aborted) {
+      if (!await stopSubscriptionProcess(child)) unconfirmedCommands.add(id);
+      signal.throwIfAborted();
+    }
+    return child;
+  })();
+  startingProcesses.set(starting, id);
+  try { return await starting; } finally { startingProcesses.delete(starting); }
 }
 export function cleanTerminal(text: string) {
   return text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\r/g, "");
@@ -75,20 +96,26 @@ export type ModelOption = { model: string; name: string; provider: string; isDef
 type CommandResult = { code: number | null; stdout: string; stderr: string; timedOut: boolean };
 const pendingCommands = new Map<ChildProcessWithoutNullStreams, SubscriptionHarness>();
 const unconfirmedCommands = new Set<SubscriptionHarness>();
+async function stopSubscriptionProcess(child: ChildProcessWithoutNullStreams) {
+  return await confirmOwnedExit(child) || await terminateNative(child) || await confirmOwnedExit(child);
+}
 function assertStopped(id: SubscriptionHarness) {
   if (unconfirmedCommands.has(id)) throw conflict("harness_stopping", "A previous harness check could not be stopped. Close the harness processes before restarting TeamSwarm.");
 }
-async function command(id: SubscriptionHarness, args: string[], input?: string, timeout = 20000, control = false): Promise<CommandResult> {
+async function command(id: SubscriptionHarness, args: string[], input?: string, timeout = 20000, control = false, signal = processScope(id).signal, launch: ProcessLauncher = startSubscriptionProcess): Promise<CommandResult> {
+  signal.throwIfAborted();
   assertStopped(id);
-  const child = startSubscriptionProcess(id, args);
-  pendingCommands.set(child, id);
+  const child = await launch(id, args, signal);
+  if (signal.aborted) { if (!await stopSubscriptionProcess(child)) unconfirmedCommands.add(id); signal.throwIfAborted(); }
   return new Promise((resolve, reject) => {
     let stdout = "", stderr = "", timedOut = false, settled = false;
     const timer = setTimeout(() => { timedOut = true; void terminateNative(child).then(confirmed => { if (!confirmed) unconfirmedCommands.add(id); finish(null); }); }, timeout);
     const finish = (code: number | null) => {
       if (settled) return;
-      settled = true; clearTimeout(timer); resolve({ code, stdout, stderr, timedOut });
+      settled = true; clearTimeout(timer); signal.removeEventListener("abort", cancel); resolve({ code, stdout, stderr, timedOut });
     };
+    const cancel = () => { void stopSubscriptionProcess(child).then(confirmed => { if (!confirmed) unconfirmedCommands.add(id); finish(null); }); };
+    signal.addEventListener("abort", cancel, { once: true });
     child.stdout.on("data", (chunk) => {
       stdout = (stdout + chunk).slice(-256000);
       if (control && stdout.split("\n").some(line => { try { return JSON.parse(line).type === "control_response"; } catch { return false; } })) {
@@ -97,7 +124,7 @@ async function command(id: SubscriptionHarness, args: string[], input?: string, 
       }
     });
     child.stderr.on("data", chunk => { stderr = (stderr + chunk).slice(-16000); });
-    child.once("error", () => { pendingCommands.delete(child); clearTimeout(timer); reject(new Error("Unable to start the installed harness.")); });
+    child.once("error", () => { pendingCommands.delete(child); clearTimeout(timer); signal.removeEventListener("abort", cancel); reject(new Error("Unable to start the installed harness.")); });
     child.once("close", code => { pendingCommands.delete(child); finish(code); });
     child.stdin.on("error", () => {});
     if (control) child.stdin.write(input ?? ""); else child.stdin.end(input ?? "");
@@ -120,17 +147,19 @@ export function grokModels(output: string): ModelOption[] {
     return match ? [{ model: match[2], name: match[2], provider: "xAI", isDefault: match[1] === "*" }] : [];
   });
 }
-export async function subscriptionInspection(id: SubscriptionHarness) {
+export async function subscriptionInspection(id: SubscriptionHarness, signal = processScope(id).signal, launch: ProcessLauncher = startSubscriptionProcess) {
+  signal.throwIfAborted();
   let entry: string;
   try { entry = nativeEntry(id); } catch { return { id, installed: false, available: false, authenticated: false, models: [] as ModelOption[], loginState: "not_installed", modelState: "not_checked" }; }
   let authenticated: boolean | null = null, models: ModelOption[] = [], account: string | undefined;
   try {
     if (id === "claude-code") {
-      const auth = await command(id, ["auth", "status", "--json"]);
+      const auth = await command(id, ["auth", "status", "--json"], undefined, 20000, false, signal, launch);
+      signal.throwIfAborted();
       const data = JSON.parse(auth.stdout);
       authenticated = data.loggedIn === true && ["claude.ai", "oauth_token"].includes(data.authMethod);
       account = authenticated && typeof data.email === "string" ? data.email : undefined;
-      const catalog = await command(id, ["--print", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--permission-mode", "dontAsk", "--tools", "", ...claudeSubscriptionFlags], JSON.stringify({ type: "control_request", request_id: "catalog", request: { subtype: "initialize" } }) + "\n", 15000, true);
+      const catalog = await command(id, ["--print", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--permission-mode", "dontAsk", "--tools", "", ...claudeSubscriptionFlags], JSON.stringify({ type: "control_request", request_id: "catalog", request: { subtype: "initialize" } }) + "\n", 15000, true, signal, launch);
       for (const line of catalog.stdout.split("\n")) {
         try {
           const response = JSON.parse(line);
@@ -139,20 +168,33 @@ export async function subscriptionInspection(id: SubscriptionHarness) {
         } catch { /* Ignore non-protocol text. */ }
       }
     } else {
-      const result = await command(id, ["models"]);
+      const result = await command(id, ["models"], undefined, 20000, false, signal, launch);
       models = grokModels(result.stdout);
       authenticated = grokCredentialPresent();
       if (/not authenticated|No auth credentials|unauthorized|invalid.*token|expired.*token/i.test(result.stdout + result.stderr)) authenticated = false;
       else if (result.timedOut || result.code !== 0) authenticated = null;
     }
-  } catch { /* Unknown is distinct from signed out and software missing. */ }
+  } catch { signal.throwIfAborted(); /* Unknown is distinct from signed out and software missing. */ }
+  signal.throwIfAborted();
   return { id, installed: true, available: true, entry, authenticated, account, models, loginState: authenticated === true ? "signed_in" : authenticated === false ? "signed_out" : "unknown", modelState: "not_checked", capabilities: { reasoningEffort: models.some(m => m.reasoningEfforts?.length) } };
 }
 
 type Login = { id: string; harness: SubscriptionHarness; state: "starting" | "waiting" | "verifying" | "complete" | "failed" | "cancelled"; url?: string; code?: string; error?: string; expiresAt: number };
-type ActiveLogin = { view: Login; child: ChildProcessWithoutNullStreams; timer: ReturnType<typeof setTimeout>; stopping: boolean; buffer: string; lock: string };
+type ActiveLogin = { view: Login; child: ChildProcessWithoutNullStreams; timer: ReturnType<typeof setTimeout>; stopping: boolean; buffer: string; lock: string; controller: AbortController };
 type ModelCheck = { model: string | null; state: "available" | "unavailable"; checkedAt: number; error?: string };
 export class SubscriptionAccounts {
+  private operations = new Map<Promise<unknown>, { id: SubscriptionHarness; controller: AbortController }>();
+  private closed = false;
+  private closing = new Set<SubscriptionHarness>();
+  constructor(private launch: ProcessLauncher = startSubscriptionProcess) {}
+  private operate<T>(id: SubscriptionHarness, action: (signal: AbortSignal, controller: AbortController) => Promise<T>) {
+    if (this.closed || this.closing.has(id)) return Promise.reject(new Error("Subscription account operations are closing."));
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, processScope(id).signal]);
+    const task = Promise.resolve().then(() => { signal.throwIfAborted(); return action(signal, controller); });
+    this.operations.set(task, { id, controller });
+    return task.finally(() => this.operations.delete(task));
+  }
   private logins = new Map<SubscriptionHarness, ActiveLogin>();
   private checks = new Map<string, { stamp: string; value: ModelCheck }>();
   private probes = new Set<SubscriptionHarness>();
@@ -162,11 +204,16 @@ export class SubscriptionAccounts {
     try { const lock = JSON.parse(readFileSync(job.lock, "utf8")); if (lock.id === job.view.id) unlinkSync(job.lock); } catch { /* Already released. */ }
   }
   async status(id: SubscriptionHarness, model: string | null) {
-    const inspection = await subscriptionInspection(id);
+    return this.operate(id, async signal => {
+    const inspection = await subscriptionInspection(id, signal, this.launch);
     const cached = this.checks.get(`${id}:${model ?? ""}`);
     return { ...inspection, login: this.publicLogin(this.logins.get(id)), modelCheck: cached && cached.stamp === credentialStamp(id) && Date.now() - cached.value.checkedAt < 300000 && inspection.authenticated ? cached.value : { model, state: "not_checked" } };
+    });
   }
   async start(id: SubscriptionHarness) {
+    return this.operate(id, (signal, controller) => this.startLogin(id, signal, controller));
+  }
+  private async startLogin(id: SubscriptionHarness, signal: AbortSignal, controller: AbortController) {
     assertStopped(id);
     nativeEntry(id);
     if (this.probes.has(id)) throw conflict("model_check_busy", "A model check is already running.");
@@ -185,10 +232,13 @@ export class SubscriptionAccounts {
       writeFileSync(lock, JSON.stringify({ id: loginId, pid: process.pid }), { flag: "wx", mode: 0o600 });
     } catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") throw conflict("login_busy", "Another sign-in is already running for this harness."); throw error; }
     let child: ChildProcessWithoutNullStreams;
-    try { child = startSubscriptionProcess(id, id === "claude-code" ? ["auth", "login", "--claudeai"] : ["login", "--device-auth"]); }
+    try {
+      child = await this.launch(id, id === "claude-code" ? ["auth", "login", "--claudeai"] : ["login", "--device-auth"], signal);
+      if (signal.aborted) { if (!await stopSubscriptionProcess(child)) unconfirmedCommands.add(id); signal.throwIfAborted(); }
+    }
     catch { unlinkSync(lock); throw new Error("Unable to start the installed harness."); }
     writeFileSync(lock, JSON.stringify({ id: loginId, pid: process.pid, childPid: child.pid }), { mode: 0o600 });
-    const job: ActiveLogin = { view: { id: loginId, harness: id, state: "starting", expiresAt: Date.now() + 600000 }, child, timer: setTimeout(() => void this.cancel(id, loginId, true), 600000), stopping: false, buffer: "", lock };
+    const job: ActiveLogin = { view: { id: loginId, harness: id, state: "starting", expiresAt: Date.now() + 600000 }, child, timer: setTimeout(() => void this.cancel(id, loginId, true), 600000), stopping: false, buffer: "", lock, controller };
     this.logins.set(id, job); this.checks.clear();
     // Account changes must not resume another account's native conversation.
     writeFileSync(path.join(accountHome(id), ".teamswarm-session-store"), randomUUID(), { mode: 0o600 });
@@ -199,11 +249,11 @@ export class SubscriptionAccounts {
       if (prompt) { job.view = { ...job.view, ...prompt, state: "waiting" }; job.buffer = ""; }
     };
     child.stdout.on("data", output); child.stderr.on("data", output); child.stdin.on("error", () => {});
-    child.once("error", () => { job.view.state = "failed"; job.view.error = "Unable to start the installed harness."; this.release(job); });
+    child.once("error", () => { if (job.stopping || this.logins.get(id) !== job) return; job.view.state = "failed"; job.view.error = "Unable to start the installed harness."; this.release(job); });
     child.once("close", async code => {
       if (job.stopping || job.view.state === "failed") return;
       job.view.state = "verifying"; delete job.view.url; delete job.view.code; job.buffer = "";
-      const inspection = code === 0 ? await subscriptionInspection(id) : null;
+      const inspection = code === 0 ? await subscriptionInspection(id, signal, this.launch).catch(() => null) : null;
       if (job.stopping || this.logins.get(id) !== job || job.view.state !== "verifying") return;
       job.view.state = inspection?.authenticated === true ? "complete" : "failed";
       if (job.view.state === "failed") job.view.error = "Sign-in was not completed. Check your subscription and network, then try again.";
@@ -225,25 +275,30 @@ export class SubscriptionAccounts {
     if (!job || job.view.id !== loginId) throw badRequest("invalid_login", "This sign-in is no longer active.");
     if (!["starting", "waiting", "verifying"].includes(job.view.state)) return this.publicLogin(job);
     job.stopping = true;
-    const stopped = job.child.exitCode !== null || await terminateNative(job.child);
+    job.controller.abort();
+    const stopped = await stopSubscriptionProcess(job.child);
     job.view.state = stopped && !expired ? "cancelled" : "failed";
     job.view.error = stopped ? expired ? "Sign-in expired. Start again to receive a new code." : undefined : "Sign-in could not be stopped. Close the harness login process before trying again.";
     if (stopped) this.release(job); else { clearTimeout(job.timer); delete job.view.url; delete job.view.code; job.buffer = ""; }
     return this.publicLogin(job);
   }
   async checkModel(id: SubscriptionHarness, model: string | null) {
+    return this.operate(id, signal => this.checkSelectedModel(id, model, signal));
+  }
+  private async checkSelectedModel(id: SubscriptionHarness, model: string | null, signal: AbortSignal) {
     if (this.probes.has(id)) throw conflict("model_check_busy", "A model check is already running.");
     if (["starting", "waiting", "verifying"].includes(this.logins.get(id)?.view.state ?? "")) throw conflict("login_busy", "Another sign-in is already running for this harness.");
     this.probes.add(id);
     try {
-      const inspection = await subscriptionInspection(id);
+      const inspection = await subscriptionInspection(id, signal, this.launch);
       if (!inspection.authenticated) throw badRequest("sign_in_required", "Sign in to your subscription before checking a model.");
       const scope = subscriptionScope(id);
       const args = id === "claude-code"
         ? ["--print", "Reply exactly OK.", "--output-format", "json", "--max-turns", "1", "--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "dontAsk", "--no-session-persistence", ...claudeSubscriptionFlags]
         : ["--single", "Reply exactly OK.", "--output-format", "streaming-json", "--max-turns", "1", "--tools", "mcp__*", "--disallowed-tools", "search_tool,use_tool", "--deny", "*", "--permission-mode", "dontAsk", "--no-plan", "--no-subagents", "--disable-web-search"];
       if (model) args.push("--model", model);
-      const result = await command(id, args, undefined, 60000);
+      const result = await command(id, args, undefined, 60000, false, signal, this.launch);
+      signal.throwIfAborted();
       if (scope !== subscriptionScope(id)) throw conflict("account_changed", "The account changed during this check. Check the model again.");
       let available = false, responseText = "";
       for (const line of result.stdout.split("\n")) {
@@ -263,8 +318,16 @@ export class SubscriptionAccounts {
     } finally { this.probes.delete(id); }
   }
   async close(id?: SubscriptionHarness) {
+    if (!id) this.closed = true; else this.closing.add(id);
+    const owners: SubscriptionHarness[] = id ? [id] : ["claude-code", "grok"];
+    for (const owner of owners) { processScope(owner).abort(); processScopes.set(owner, new AbortController()); }
+    const operations = [...this.operations].filter(([, operation]) => !id || operation.id === id);
+    for (const [, operation] of operations) operation.controller.abort();
+    const starts = [...startingProcesses].filter(([, owner]) => !id || owner === id).map(([task]) => task);
     await Promise.allSettled([...this.logins.values()].filter(job => !id || job.view.harness === id).map(job => this.cancel(job.view.harness, job.view.id)));
-    await Promise.allSettled([...pendingCommands].filter(([, owner]) => !id || owner === id).map(([child]) => terminateNative(child)));
+    await Promise.allSettled([...operations.map(([task]) => task), ...starts]);
+    await Promise.allSettled([...pendingCommands].filter(([, owner]) => !id || owner === id).map(async ([child, owner]) => { if (!await stopSubscriptionProcess(child)) unconfirmedCommands.add(owner); }));
+    if (id) this.closing.delete(id);
   }
 }
 export const subscriptionAccounts = new SubscriptionAccounts();

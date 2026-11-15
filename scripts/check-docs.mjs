@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const excluded = new Set(['node_modules', '.git', '.local', '.codex-local', 'release', 'dist', 'coverage', 'test-results']);
 const allowed = new Set(['README.md', 'README.zh-CN.md', 'THIRD_PARTY_NOTICES.md']);
+export const workspaceDocuments = ['AGENTS.md', 'DOCS.md', 'docs/baseline/PRODUCT.md', 'docs/ARCHITECTURE-REWORK.md'];
 export const sections = ['install', 'first-project', 'harnesses-and-models', 'work-and-results', 'data-and-recovery', 'run-from-source', 'offline-audit', 'troubleshooting', 'license'];
 
 function anchors(text) {
@@ -12,12 +13,17 @@ function anchors(text) {
   return result;
 }
 
-export function checkDocumentation(root) {
+export function checkDocumentation(root, { workspace = false } = {}) {
   root = path.resolve(root);
   const errors = [], files = [];
   function walk(directory) {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       if (excluded.has(entry.name) || entry.name.startsWith('.test-')) continue;
+      if (workspace && ((directory === root && ['research', 'archive'].includes(entry.name)) ||
+          (directory === path.join(root, 'teamswarm') && entry.name === 'artifacts'))) {
+        errors.push(path.relative(root, path.join(directory, entry.name)) + ': historical material is outside this workspace scope');
+        continue;
+      }
       const file = path.join(directory, entry.name);
       if (entry.isSymbolicLink()) { errors.push(path.relative(root, file) + ': filesystem link'); continue; }
       if (entry.isDirectory()) walk(file);
@@ -27,9 +33,11 @@ export function checkDocumentation(root) {
   walk(root);
   const rootPackage = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
   const version = rootPackage.version;
+  if (rootPackage.license !== 'MIT') errors.push('package.json: expected MIT license');
   for (const file of files) {
     const relative = path.relative(root, file).replaceAll('\\', '/');
-    if (!allowed.has(relative)) { errors.push(relative + ': document outside public README/license scope'); continue; }
+    const workspaceGuide = workspace && workspaceDocuments.includes(relative);
+    if (!allowed.has(relative) && !workspaceGuide) { errors.push(relative + ': document outside public README/license scope'); continue; }
     const text = readFileSync(file, 'utf8').replace(/^\x60{3}[^\n]*\n[\s\S]*?^\x60{3}[ \t]*$/gm, '');
     for (const match of text.matchAll(/!?\[[^\]]*\]\(([^\s)]+)(?:\s+"[^"]*")?\)/g)) {
       const target = match[1].replace(/^<|>$/g, '');
@@ -49,6 +57,11 @@ export function checkDocumentation(root) {
       if (match[1] !== version) errors.push(relative + ': outdated package filename');
     }
   }
+  if (workspace) {
+    for (const name of workspaceDocuments) if (!existsSync(path.join(root, name))) errors.push('Missing workspace document ' + name);
+    for (const name of ['docs/baseline.lock.json', 'docs/baseline/manifest.json', 'docs/evidence'])
+      if (existsSync(path.join(root, name))) errors.push(name + ': retired documentation index');
+  }
   for (const name of ['README.md', 'README.zh-CN.md']) {
     const file = path.join(root, name);
     if (!existsSync(file)) { errors.push('Missing ' + name); continue; }
@@ -57,7 +70,7 @@ export function checkDocumentation(root) {
   }
   for (const file of ['apps/desktop/package.json', 'apps/server/package.json', 'teamswarm/package.json', 'packages/contracts/package.json']) {
     const item = JSON.parse(readFileSync(path.join(root, file), 'utf8'));
-    if (item.version !== version || item.license !== 'Apache-2.0') errors.push(file + ': inconsistent version/license');
+    if (item.version !== version || item.license !== rootPackage.license) errors.push(file + ': inconsistent version/license');
     if (['apps/server/package.json', 'teamswarm/package.json'].includes(file) && item.dependencies?.['@team/contracts'] && item.dependencies['@team/contracts'] !== version)
       errors.push(file + ': inconsistent contracts dependency');
   }
@@ -65,13 +78,16 @@ export function checkDocumentation(root) {
   const desktop = JSON.parse(readFileSync(path.join(root, 'electron-builder.json'), 'utf8'));
   if (desktop.electronVersion !== rootPackage.devDependencies.electron || desktop.electronVersion !== lock.packages['node_modules/electron'].version)
     errors.push('Electron packaging version must match the installed runtime');
-  for (const name of ['LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES.md']) if (!existsSync(path.join(root, name))) errors.push('Missing ' + name);
-  if (existsSync(path.join(root, 'LICENSE')) && !readFileSync(path.join(root, 'LICENSE'), 'utf8').includes('Version 2.0, January 2004')) errors.push('Apache-2.0 license is missing');
+  for (const name of ['NOTICE', 'THIRD_PARTY_NOTICES.md']) if (!existsSync(path.join(root, name))) errors.push('Missing ' + name);
+  for (const name of ['LICENSE', 'packages/contracts/LICENSE']) {
+    const file = path.join(root, name);
+    if (!existsSync(file) || !/^MIT License\r?\n/.test(readFileSync(file, 'utf8'))) errors.push(name + ': expected MIT license text');
+  }
   return { passed: errors.length === 0, documents: files.length, version, languages: ['en', 'zh-CN'], errors };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const report = checkDocumentation(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
+  const report = checkDocumentation(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), { workspace: process.argv.includes('--workspace') });
   if (!report.passed) { console.error(report.errors.join('\n')); process.exitCode = 1; }
   else console.log(JSON.stringify(report));
 }

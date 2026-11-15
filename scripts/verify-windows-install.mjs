@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { parseArgs } from "node:util";
@@ -131,9 +131,15 @@ function verifyPayload() {
   }
   report.productFiles = Object.keys(inventory.files).length;
 }
-async function seed() {
-  await page.getByRole("textbox", { name: "Team name", exact: true }).fill("Installer project");
-  await page.getByRole("button", { name: "Create team", exact: true }).click();
+async function seed({ legacy = false } = {}) {
+  if (legacy) {
+    await page.getByRole("textbox", { name: "Team name", exact: true }).fill("Installer project");
+    await page.getByRole("button", { name: "Create team", exact: true }).click();
+  } else {
+    await page.getByRole("button", { name: "New chat", exact: true }).click();
+    const created = await api("/product/teams", "POST", { name: "Installer project", clientRequestId: randomUUID() });
+    await page.goto(new URL(`/#/team/${created.id}/chat/${created.mainChatId}`, page.url()).href);
+  }
   await page.getByRole("button", { name: "New chat", exact: true }).waitFor();
   const team = (await api("/teams")).teams.find(item => item.name === "Installer project");
   assert(team);
@@ -174,7 +180,7 @@ try {
   install(previousInstaller);
   report.previousVersion = await launch();
   assert.notEqual(report.previousVersion, manifest.version);
-  const saved = await seed();
+  const saved = await seed({ legacy: true });
   await close();
   const projectFile = path.join(root, "projects", saved.team.id, "kept.txt");
   assert(fs.statSync(path.dirname(projectFile)).isDirectory());

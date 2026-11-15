@@ -1,7 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import type { HarnessRequest, HarnessResult } from "../types.js";
-import { JsonRpcPeer } from "./json-rpc-peer.js";
+import { JsonRpcPeer, JsonRpcResponseError } from "./json-rpc-peer.js";
 
 /** ACP transport; the native Harness keeps its own tools and agent loop. */
 export class AcpSession {
@@ -40,9 +40,11 @@ export class AcpSession {
     const p = message.params, option = p?.options?.find((v: any) => v.kind === "allow_once");
     let allowed = false;
     if (option && !this.options.denyNativePermissions && p.sessionId === this.session && this.streaming && !this.cancelled) {
-      try { allowed = await this.request.onPermission?.({ nativeId: String(p.toolCall?.toolCallId ?? message.id), tool: p.toolCall?.title ?? `${this.name} tool`, input: p.toolCall?.rawInput ?? {}, reason: p.toolCall?.title }, this.controller.signal) === "allow"; } catch {}
+      try { allowed = await this.request.onPermission?.({ nativeId: String(p.toolCall?.toolCallId ?? message.id), tool: (this.options.name === "Antigravity" ? p.toolCall?.name : p.toolCall?.title) ?? `${this.name} tool`, input: p.toolCall?.rawInput ?? {}, reason: p.toolCall?.title }, this.controller.signal) === "allow"; } catch {}
     }
-    this.send({ jsonrpc: "2.0", id: message.id, result: { outcome: allowed && !this.cancelled ? { outcome: "selected", optionId: option.optionId } : { outcome: "cancelled" } } });
+    const reject = p?.options?.find((v: any) => v.kind === "reject_once");
+    const decision = this.cancelled || p?.sessionId !== this.session || !this.streaming ? undefined : allowed ? option : reject;
+    this.send({ jsonrpc: "2.0", id: message.id, result: { outcome: decision ? { outcome: "selected", optionId: decision.optionId } : { outcome: "cancelled" } } });
   }
   async start() {
     try {
@@ -70,7 +72,10 @@ export class AcpSession {
       this.streaming = false;
       this.finish({ status: this.cancelled || result.stopReason === "cancelled" ? "interrupted" : result.stopReason === "end_turn" ? "completed" : "failed", text: this.text,
         ...(result.stopReason === "end_turn" ? {} : { error: result.stopReason === "max_tokens" ? `${this.name} reached the model output limit before completing the turn.` : `${this.name} stopped: ${result.stopReason ?? "unknown"}.` }) });
-    } catch (error) { this.finish({ status: this.cancelled ? "interrupted" : this.dispatched ? "unknown" : "failed", text: this.text, error: (error as Error).message }); }
+    } catch (error) {
+      const uncertain = this.dispatched && !(error instanceof JsonRpcResponseError);
+      this.finish({ status: this.cancelled ? "interrupted" : uncertain ? "unknown" : "failed", text: this.text, error: (error as Error).message });
+    }
   }
   cancel() { this.cancelled = true; this.controller.abort(); if (this.session) this.send({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: this.session } }); }
   close() { this.controller.abort(); this.rpc.close(); }

@@ -151,6 +151,14 @@ function openToolListener() {
   });
   return { routes, server, origin };
 }
+// ACP exposes Team tools under this MCP server prefix. These calls inspect
+// existing Team state through an attempt-bound bridge.
+export const teamReadTools = new Set([
+  "team_state", "team_directory", "team_directory_detail", "team_context_index", "team_context_read",
+  "team_project_context", "team_read_work", "team_read_exchange", "team_read_artifact",
+  "team_read_file", "team_list_files", "team_pending_permissions",
+]);
+
 const toolListeners = new Map<string, ReturnType<typeof openToolListener>>();
 
 /** Attempts share a native Harness listener. Each capability still belongs to one attempt. */
@@ -209,7 +217,7 @@ export async function toolBridge(request: HarnessRequest) {
         });
       if (message.method === "ping") return reply({});
       if (message.method === "tools/list")
-        return reply({ tools: request.tools });
+        return reply({ tools: request.tools.map(tool => teamReadTools.has(tool.name) ? { ...tool, annotations: { readOnlyHint: true } } : tool) });
       if (message.method === "tools/call") {
         const { name, arguments: args } = message.params ?? {};
         if (!request.tools.some((t) => t.name === name))

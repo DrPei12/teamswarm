@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { conflict, notFound } from "../errors.js";
+import { approvalPresetAvailable, hasSharedModel, mergePermissionChoice } from "./permission-options.js";
 import { readOnlyExecution } from "./harness/permissions.js";
 import type { MemberPermissionPreset } from "@team/contracts/allocation";
 import type { Attempt, ExecutionApproval, ExecutionConfig, Harness, Member, Run, Work } from "./types.js";
@@ -9,13 +10,16 @@ import type { RuntimeStore } from "./store.js";
 import type { TeamCatalog } from "./catalog.js";
 
 export const memberPermissionPreset = z.enum(["read-only", "workspace-write", "manual", "auto", "full-access"]);
+export const executionPermissionPreset = z.enum(["read-only", "manual", "auto", "full-access"]);
 const labels: Record<MemberPermissionPreset, string> = {
   "read-only": "Read-only", "workspace-write": "Workspace write", manual: "Request approval", auto: "Automatic review", "full-access": "Full access",
 };
 export function memberPermissionChoices(harness?: Harness) {
   const native = harness?.permissionOptions?.().options ?? [];
-  return [{ id: "read-only", label: labels["read-only"] },
-    ...native.filter(o => o.id === "full-access").map(o => ({ id: o.id, label: o.label }))];
+  return [{ id: "read-only" as const, label: labels["read-only"], available: true },
+    ...(["manual", "auto", "full-access"] as const).map(id => ({
+      id, label: labels[id], available: native.some(option => option.id === id) && approvalPresetAvailable(harness?.id, id),
+    }))];
 }
 export type MemberPermissionChange = { preset?: MemberPermissionPreset; access?: ExecutionConfig["access"]; permissions?: ExecutionConfig["permissions"] };
 type Pending = ExecutionApproval & { expectedVersion: number; preset?: MemberPermissionPreset; change?: MemberPermissionChange; branchId: string };
@@ -34,7 +38,7 @@ export class MemberPermissions {
   options(teamId: string, harness: string) {
     const choices = memberPermissionChoices(this.harnesses.get(harness));
     return { version: this.catalog.capabilities.read(teamId).version, policy: this.mode(teamId), options: choices,
-      defaultPreset: this.mode(teamId) === "request" ? "read-only" : choices.some(c => c.id === "full-access") ? "full-access" : "read-only" };
+      defaultPreset: this.mode(teamId) === "request" ? "read-only" : choices.some(c => c.id === "full-access" && c.available) ? "full-access" : "read-only" };
   }
   configuration(teamId: string, base: ExecutionConfig, preset: MemberPermissionPreset | "team-default") {
     const selected = preset === "team-default" ? this.options(teamId, base.harness).defaultPreset : preset;
@@ -45,9 +49,12 @@ export class MemberPermissions {
       const initial = options?.options.find(o => o.id === options.defaultId);
       return { ...model, access: "workspace-write" as const, ...(initial ? { permissions: { ...initial.permissions } } : {}) };
     }
+    if (base.harness === "antigravity" && selected === "auto" && !hasSharedModel(base))
+      throw conflict("permission_choice", "Select a shared model before using automatic approval with Antigravity.");
     const option = this.harnesses.get(base.harness)?.permissionOptions?.().options.find(o => o.id === selected);
-    if (!option) throw conflict("permission_choice", `This permission strategy is unavailable. Choose ${this.options(teamId,base.harness).options.map(o=>o.id).join(", ")}.`);
-    return { ...model, access: "workspace-write" as const, permissions: { ...option.permissions } };
+    if (!option || !approvalPresetAvailable(base.harness, selected))
+      throw conflict("permission_choice", "This permission strategy is unavailable for the selected Harness.");
+    return mergePermissionChoice({ ...base, access: "workspace-write" }, option.permissions);
   }
   requestedConfiguration(teamId: string, base: ExecutionConfig, change: MemberPermissionChange) {
     if (change.preset) return this.configuration(teamId,base,change.preset);
@@ -108,7 +115,7 @@ export class MemberPermissions {
       return { status: "saved" as const, config, version: member.allocationVersion, appliesTo: "future_attempts" as const };
     });
   }
-  setHostFromUser(teamId:string,branchId:string,expectedVersion:number,preset:"read-only"|"full-access") {
+  setHostFromUser(teamId:string,branchId:string,expectedVersion:number,preset: z.infer<typeof executionPermissionPreset>) {
     this.catalog.history.branch(teamId,branchId);
     return this.store.transaction(()=>{
       const host=this.store.list<Member>("members",teamId).find(m=>m.kind === "host");
@@ -116,7 +123,11 @@ export class MemberPermissions {
       const current=this.catalog.memberExecution(teamId,branchId,host);
       if(current.allocationRevision!==expectedVersion)throw conflict("version_conflict","Host configuration changed. Reload before saving.");
       const config=this.configuration(teamId,current.config,preset);this.validate(config);
-      host.hostSelections={...host.hostSelections,[branchId]:{revision:expectedVersion+1,selection:null,config,permissionPreset:preset}};
+      const previous = host.hostSelections?.[branchId];
+      host.hostSelections = { ...host.hostSelections, [branchId]: {
+        ...previous, revision: expectedVersion + 1, selection: previous?.selection ?? null,
+        config, permissionPreset: preset,
+      } };
       host.permissionVersion=(host.permissionVersion??1)+1;
       this.store.save("members",host);this.store.event(teamId,"host.configuration",{branchId,permissions:true,preset,revision:expectedVersion+1});
       return {config,version:expectedVersion+1,appliesTo:"future_attempts"};

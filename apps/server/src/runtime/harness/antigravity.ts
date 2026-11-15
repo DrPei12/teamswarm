@@ -1,7 +1,8 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { createHash, randomUUID } from "node:crypto";
 import { harnessManifest } from "@team/contracts/harness-catalog";
 import type {
   HarnessRequest,
@@ -11,6 +12,9 @@ import type {
 import { AcpHarness } from "./acp-harness.js";
 import { JsonRpcPeer } from "./json-rpc-peer.js";
 import { nativeEntry, nativeHome, terminateNative } from "./native-support.js";
+import { usesTeamSwarmReview } from "../automatic-permission.js";
+import { nativeAccess } from "../permission-options.js";
+import { antigravityWireModel } from "../gemini-wire.js";
 import { installerEnvironment } from "./device-tools.js";
 import { spawnOwned, confirmOwnedExit } from "./owned-process.js";
 import { antigravityAccounts } from "./antigravity-account.js";
@@ -251,10 +255,12 @@ export async function configureAntigravity(
     if (current.find((o) => o.id === id)?.currentValue !== value)
       throw new Error(`Antigravity did not apply ${id}.`);
   };
-  if (request.config.model) {
+  const shared = request.modelRoute?.sourceConfig;
+  const nativeModel = shared ? antigravityWireModel : request.config.model;
+  if (nativeModel) {
     const id = current.find((o) => o.category === "model")?.id;
     if (!id) throw new Error("Antigravity did not report a model selector.");
-    await select(id, request.config.model);
+    await select(id, nativeModel);
   }
   if (request.config.effort) {
     const id = current.find((o) => o.category === "thought_level")?.id;
@@ -270,7 +276,7 @@ export async function configureAntigravity(
     model:
       current.find((o) => o.category === "model")?.currentValue ??
       description.models?.currentModelId,
-    effort:
+    effort: shared ? null :
       current.find((o) => o.category === "thought_level")?.currentValue ?? null,
     mode,
   };
@@ -279,18 +285,59 @@ export async function configureAntigravity(
 export class AntigravityHarness extends AcpHarness {
   constructor() {
     super(harnessManifest("antigravity")!, {
+      allowsSharedWorkspace(request) {
+        if (request.config.access === "read-only") return true;
+        if (Object.values(request.requirements).some(Boolean)) return false;
+        if (request.hostWorkspaceWrite && nativeAccess(request.config) === "full-access") return true;
+        return !!request.config.baseUrl && request.legacyWorkspaceWrite === true;
+      },
+      validateConfig(config) {
+        if (usesTeamSwarmReview(config) && !config.baseUrl)
+          throw new Error("Select a shared model before using automatic approval with Antigravity.");
+      },
       prepare({ request, home }) {
+        const profile = applicationDirectory(home);
+        const automatic = usesTeamSwarmReview(request.config);
+        const manual = (request.config.permissions?.mode === "default" || automatic) && request.config.access !== "read-only";
+        const env: NodeJS.ProcessEnv = installerEnvironment();
+        const shared = request.modelRoute;
+        if (shared) {
+          const base = new URL(request.config.baseUrl!);
+          if (base.protocol !== "http:" || base.hostname !== "127.0.0.1" || !base.port)
+            throw new Error("Antigravity requires a TeamSwarm model route.");
+          env.GEMINI_API_KEY = shared.token;
+          env.GOOGLE_GEMINI_BASE_URL = base.href;
+        }
+        if (shared || manual) {
+          const settings = path.join(homedir(), ".gemini", profile);
+          mkdirSync(settings, { recursive: true });
+          // The native CLI expects a stable installation identity in each profile.
+          try { writeFileSync(path.join(settings, "installation_id"), randomUUID(), { flag: "wx", mode: 0o600 }); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+          const settingsFile = path.join(settings, "settings.json");
+          let previous: Record<string, unknown> = {};
+          try { previous = JSON.parse(readFileSync(settingsFile, "utf8")); }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+          writeFileSync(settingsFile, JSON.stringify({
+            ...previous,
+            ...(shared ? { modelProvider: "gemini" } : {}),
+            toolPermission: "request-review",
+            ...(manual ? {
+              permissions: { ask: [...(automatic ? ["read_file(*)"] : []), "write_file(*)", "command(*)", "mcp(*)", "execute_url(*)", "download_url(*)"] },
+            } : {}),
+          }), { mode: 0o600 });
+        }
         return {
           args: [
             ...args,
             "--app-data-dir",
-            applicationDirectory(home),
+            profile,
             ...(request.config.access !== "read-only" &&
             request.config.permissions?.mode === "bypassPermissions"
               ? ["--dangerously-skip-permissions"]
               : []),
           ],
-          env: installerEnvironment(),
+          env,
         };
       },
       configureSession: configureAntigravity,
@@ -310,6 +357,12 @@ export class AntigravityHarness extends AcpHarness {
     // The native CLI compacts its own history; local estimates must not force
     // a replacement session merely because native capacity is unreported.
     this.capabilities.contextCompaction = true;
+    this.capabilities.sharedModelResume = false;
+  }
+  override async execute(request: HarnessRequest): Promise<HarnessResult> {
+    if (usesTeamSwarmReview(request.config) && !request.modelRoute)
+      throw new Error("Antigravity automatic approval requires the TeamSwarm model gateway.");
+    return super.execute(request);
   }
   override inspect() {
     return antigravityInspection();
@@ -318,10 +371,12 @@ export class AntigravityHarness extends AcpHarness {
     await antigravityAccounts.close();
     await super.close();
   }
-  permissionOptions(): PermissionOptions {
+  override permissionOptions(): PermissionOptions {
     return {
-      defaultId: "",
+      defaultId: "manual",
       options: [
+        { id: "manual", label: "Request approval", permissions: { harness: "antigravity", mode: "default" } },
+        { id: "auto", label: "Automatic review", requiresWrite: true, permissions: { harness: "antigravity", mode: "teamswarmAuto" } },
         {
           id: "full-access",
           label: "Full access",

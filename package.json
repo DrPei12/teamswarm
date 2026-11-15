@@ -1,6 +1,6 @@
 {
   "name": "teamswarm-product",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -26,7 +26,8 @@
     "harness:check": "node scripts/check-harness.mjs",
     "test:platform": "node --test test/*.test.mjs",
     "release:check": "node scripts/check-publication.mjs",
-    "test:smoke": "node scripts/smoke-service.mjs"
+    "test:smoke": "node scripts/smoke-service.mjs",
+    "start:rework": "node scripts/start-rework.mjs"
   },
   "devDependencies": {
     "@openai/codex": "0.163.0",
@@ -37,7 +38,7 @@
     "npm": "file:vendor/npm-11.21.1-teamswarm.3.tgz",
     "typescript": "^5.9.0"
   },
-  "license": "Apache-2.0",
+  "license": "MIT",
   "description": "A local workspace for teams of coding agents.",
   "engines": {
     "node": ">=24 <25"

@@ -196,7 +196,12 @@ export async function chooseModel(
   if (connection?.kind === "subscription" || model === null)
     return {
       harness: config.harness,
-      permissions: config.permissions,
+      permissions:
+        config.harness === "antigravity" &&
+        config.permissions?.mode === "teamswarmAuto" &&
+        !connection?.chatgptAccountId
+          ? { harness: "antigravity", mode: "default" }
+          : config.permissions,
       model,
       access: config.access,
       effort: null,

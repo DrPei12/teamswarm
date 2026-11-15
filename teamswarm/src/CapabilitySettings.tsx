@@ -1,3 +1,4 @@
+import { ResourceReleaseSetting } from "./RunningServices";
 import { FieldSelect } from "./FieldSelect";
 import { useEffect, useState } from "react";
 import {
@@ -51,6 +52,7 @@ export function CapabilitySettings({
   workspace,
   onAdvanced,
   initialTab = "harnesses",
+  scope = "global",
 }: {
   open: boolean;
   onClose: () => void;
@@ -58,8 +60,15 @@ export function CapabilitySettings({
   workspace: Workspace;
   onAdvanced: () => void;
   initialTab?: Tab;
+  scope?: "global" | "team";
 }) {
   const { t } = useI18n();
+  const teamScope = scope === "team";
+  const teamName =
+    workspace.teams.find((team) => team.id === teamId)?.name ?? "";
+  const endpoint = teamScope
+    ? `/teams/${encodeURIComponent(teamId)}/capabilities`
+    : "/global/capabilities";
   const harnesses = useHarnessCatalog((error) => setError(error.message));
   const [draft, setDraft] = useState<TeamCapabilities | null>(null),
     [saved, setSaved] = useState("");
@@ -81,7 +90,7 @@ export function CapabilitySettings({
     setNotice("");
     setEditor(null);
     setTab(initialTab);
-    void api<TeamCapabilities>(`/teams/${teamId}/capabilities`)
+    void api<TeamCapabilities>(endpoint)
       .then((v) => {
         if (live) {
           setDraft(v);
@@ -92,7 +101,7 @@ export function CapabilitySettings({
     return () => {
       live = false;
     };
-  }, [open, teamId, initialTab]);
+  }, [open, endpoint, initialTab]);
   useEffect(() => {
     if (!open) return;
     let live = true;
@@ -119,10 +128,21 @@ export function CapabilitySettings({
     setError("");
     setNotice("");
     try {
-      const { version, ...body } = draft;
+      const { version, globalVersion, inheritsDefaults, ...body } = draft;
       const next = await api<TeamCapabilities>(
-        `/teams/${teamId}/capabilities`,
-        { expectedVersion: version, ...body },
+        teamScope
+          ? `/teams/${encodeURIComponent(teamId)}/capability-overrides`
+          : endpoint,
+        {
+          expectedVersion: version,
+          ...body,
+          ...(teamScope
+            ? {
+                expectedGlobalVersion: globalVersion ?? 0,
+                inheritsDefaults: inheritsDefaults ?? true,
+              }
+            : {}),
+        },
         "PUT",
       );
       setDraft(next);
@@ -149,7 +169,11 @@ export function CapabilitySettings({
     <Modal
       open={open}
       onOpenChange={(v) => !v && !busy && onClose()}
-      title={t("Team capabilities")}
+      title={
+        teamScope
+          ? t("Team capabilities for {name}", { name: teamName })
+          : t("Global capabilities")
+      }
       className="capability-modal"
     >
       {!editor && (
@@ -225,9 +249,24 @@ export function CapabilitySettings({
         />
       ) : (
         <>
+          {teamScope && (
+            <label className="cap-preference-toggle cap-inherit">
+              <span>
+                <strong>{t("Inherit global defaults")}</strong>
+              </span>
+              <input
+                type="checkbox"
+                checked={draft.inheritsDefaults ?? true}
+                disabled={busy}
+                onChange={(event) =>
+                  setDraft({ ...draft, inheritsDefaults: event.target.checked })
+                }
+              />
+            </label>
+          )}
           <div
             className="cap-body"
-            inert={busy}
+            inert={busy || (teamScope && (draft.inheritsDefaults ?? true))}
             role="tabpanel"
             id={`cap-panel-${tab}`}
             aria-labelledby={`cap-tab-${tab}`}
@@ -312,13 +351,15 @@ export function CapabilitySettings({
                   <div>
                     <h3>{t("Models")}</h3>
                   </div>
-                  <button
-                    className="primary-button"
-                    onClick={() => setEditor("new")}
-                  >
-                    <Plus size={15} />
-                    {t("Add connection")}
-                  </button>
+                  {!teamScope && (
+                    <button
+                      className="primary-button"
+                      onClick={() => setEditor("new")}
+                    >
+                      <Plus size={15} />
+                      {t("Add connection")}
+                    </button>
+                  )}
                 </div>
                 <div className="cap-connections">
                   {draft.connections.map((c) => (
@@ -338,12 +379,14 @@ export function CapabilitySettings({
                           <h4>{c.name}</h4>
                           <span>{t(connectionSource(c))}</span>
                         </div>
-                        <button
-                          className="secondary-button"
-                          onClick={() => setEditor(c)}
-                        >
-                          {t("Edit")}
-                        </button>
+                        {!teamScope && (
+                          <button
+                            className="secondary-button"
+                            onClick={() => setEditor(c)}
+                          >
+                            {t("Edit")}
+                          </button>
+                        )}
                       </div>
                       {!!c.models.length && (
                         <div className="cap-model-chips">
@@ -368,7 +411,11 @@ export function CapabilitySettings({
                               })
                             }
                           />
-                          {t("Allow team to use")}
+                          {t(
+                            teamScope
+                              ? "Allow team to use"
+                              : "Enable by default",
+                          )}
                         </label>
                       </div>
                     </article>
@@ -383,12 +430,14 @@ export function CapabilitySettings({
                         "Use an existing subscription or add an API key from your provider.",
                       )}
                     </p>
-                    <button
-                      className="secondary-button"
-                      onClick={() => setEditor("new")}
-                    >
-                      {t("Add connection")}
-                    </button>
+                    {!teamScope && (
+                      <button
+                        className="secondary-button"
+                        onClick={() => setEditor("new")}
+                      >
+                        {t("Add connection")}
+                      </button>
+                    )}
                   </div>
                 )}
                 <p className="cap-footnote">
@@ -400,6 +449,7 @@ export function CapabilitySettings({
             )}
             {tab === "preferences" && (
               <>
+                <ResourceReleaseSetting />
                 <fieldset className="cap-priority cap-worker-policy">
                   <legend>{t("Worker permission policy")}</legend>
                   <div>
@@ -542,31 +592,33 @@ export function CapabilitySettings({
                     )}
                   />
                 </label>
-                <div className="cap-current">
-                  <SlidersHorizontal size={17} />
-                  <div>
-                    <strong>{t("Host starting configuration")}</strong>
-                    <p>
-                      {harnesses.find((h) => h.id === current?.harness)?.name ??
-                        current?.harness}{" "}
-                      {current?.model && ` · ${current.model}`}
-                    </p>
+                {teamScope && (
+                  <div className="cap-current">
+                    <SlidersHorizontal size={17} />
+                    <div>
+                      <strong>{t("Host starting configuration")}</strong>
+                      <p>
+                        {harnesses.find((h) => h.id === current?.harness)
+                          ?.name ?? current?.harness}{" "}
+                        {current?.model && ` · ${current.model}`}
+                      </p>
+                    </div>
+                    <button
+                      className="text-button"
+                      disabled={dirty}
+                      title={
+                        dirty
+                          ? t(
+                              "Save your changes before opening advanced settings.",
+                            )
+                          : undefined
+                      }
+                      onClick={onAdvanced}
+                    >
+                      {t("Advanced settings")} →
+                    </button>
                   </div>
-                  <button
-                    className="text-button"
-                    disabled={dirty}
-                    title={
-                      dirty
-                        ? t(
-                            "Save your changes before opening advanced settings.",
-                          )
-                        : undefined
-                    }
-                    onClick={onAdvanced}
-                  >
-                    {t("Advanced settings")} →
-                  </button>
-                </div>
+                )}
               </>
             )}
           </div>

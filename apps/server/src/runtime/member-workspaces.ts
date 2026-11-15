@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync, rmSync } from "node:fs";
 import { commitPreparedDirectory } from "./prepared-directory.js";
+import { threadOf } from "./collaboration-records.js";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { conflict } from "../errors.js";
@@ -52,12 +53,17 @@ export class MemberWorkspaces {
     if (member.kind === "host" || work.workspaceMode !== "isolated" || work.workspace) return;
     if (work.interaction?.resumeFromWorkId) {
       const base = this.store.get<Work>("works", work.teamId, work.interaction.resumeFromWorkId);
-      if (base.memberId !== member.id || this.history.forRun(this.store.get<Run>("runs", work.teamId, base.runId)).id !== this.history.forRun(run).id)
-        throw conflict("workspace_identity", "A conversation must remain in its member's project branch.");
+      if (base.memberId !== member.id || threadOf(base) !== threadOf(work) || this.history.forRun(this.store.get<Run>("runs", work.teamId, base.runId)).id !== this.history.forRun(run).id)
+        throw conflict("workspace_identity", "A conversation must use its own member, thread and branch working copy.");
       // A read-only conversation reuses its thread's workspace. It does not
       // create a new production copy just to deliver a message.
       work.workspace = this.store.workspace(base);
+      if (!lstatSync(work.workspace).isDirectory() || lstatSync(work.workspace).isSymbolicLink() || realpathSync(work.workspace).toLowerCase() !== path.resolve(work.workspace).toLowerCase())
+        throw conflict("workspace_link", "The conversation working copy changed identity.");
       work.workspaceMode = base.workspace ? base.workspaceMode ?? "shared" : "shared";
+      work.sourceWorkspace = base.sourceWorkspace;
+      work.sourceSnapshotId = base.sourceSnapshotId;
+      work.baseSnapshotId = base.baseSnapshotId;
       this.store.save("works", work);
       this.store.event(work.teamId, "work.workspace_reused", { memberId: member.id, sourceWorkId: base.id }, work);
       return;

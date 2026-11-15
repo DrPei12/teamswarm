@@ -5,6 +5,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
+import { prepareRuntimeTemp } from "./runtime-temp.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 function diagnoseServiceError(error, origin) {
   const code = typeof error?.code === "string" && /^[A-Z_]{1,60}$/.test(error.code) ? error.code : null;
@@ -18,6 +19,7 @@ const dev = process.argv.includes("--dev");
 const dataDir = dataDirectory();
 process.env.TEAM_HARNESS_HOME ??= path.join(dataDir, "harnesses");
 mkdirSync(dataDir, { recursive: true });
+prepareRuntimeTemp(dataDir);
 const credentialFile = path.join(dataDir, "control.json");
 const token = existsSync(credentialFile)
   ? JSON.parse(readFileSync(credentialFile, "utf8")).token

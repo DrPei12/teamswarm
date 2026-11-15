@@ -21,6 +21,19 @@ export class Correspondence {
       .all(teamId)
       .map((r) => JSON.parse(String(r.data)));
   }
+  systemNotice(work: Work, content: string, sourceEventId: string, passive = false) {
+    const existing = this.list(work.teamId).find(message => message.sourceEventId === sourceEventId && message.recipientId === work.memberId);
+    if (existing) return existing;
+    const run = this.store.get<Run>("runs", work.teamId, work.runId);
+    const message: MemberMessage = {
+      id: randomUUID(), teamId: work.teamId, branchId: this.store.history!.forRun(run).id,
+      senderId: "system", recipientId: work.memberId, content, sourceEventId, passive,
+      createdAt: new Date().toISOString(), status: "queued", targetWorkId: work.id, threadId: threadOf(work),
+    };
+    this.save(message);
+    this.store.event(work.teamId, "communication.queued", { messageId: message.id, senderId: "system", recipientId: work.memberId, sourceEventId }, work);
+    return message;
+  }
   private save(message: MemberMessage) {
     this.store.db
       .prepare(
@@ -278,7 +291,7 @@ export class Correspondence {
     }
   }
   schedule(teamId: string) {
-    const pending = this.store.db.prepare("SELECT data FROM runtime_correspondence WHERE team_id=? AND json_extract(data,'$.status')='queued' ORDER BY rowid")
+    const pending = this.store.db.prepare("SELECT data FROM runtime_correspondence WHERE team_id=? AND json_extract(data,'$.status')='queued' AND coalesce(json_extract(data,'$.passive'),0)=0 ORDER BY rowid")
       .all(teamId).map(row => JSON.parse(String(row.data)) as MemberMessage);
     const groups = new Map<string, MemberMessage[]>();
     for (const message of pending) {

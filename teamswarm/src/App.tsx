@@ -1,13 +1,17 @@
+import { RunningServices, useRunningServices } from "./RunningServices";
 import { WorkspaceSettings } from "./WorkspaceSettings";
 import { useAppearance } from "./appearance";
 import { NewMemberDialog } from "./NewMemberDialog";
 import { ApprovalRequests } from "./ApprovalRequests";
 import { Disclosure } from "./Disclosure";
+import { HostBranches, collectHostBranches } from "./HostBranches";
 import { AttachmentChip, isImageAttachment } from "./AttachmentChip";
 import { ViewBoundary } from "./ViewBoundary";
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
+  Fragment,
   useRef,
   useState,
   lazy,
@@ -45,6 +49,8 @@ import {
   Trash2,
   Paperclip,
   Copy,
+  Folder,
+  Monitor,
 } from "lucide-react";
 import { ComposerInput, RuntimeControls } from "./ComposerTools";
 import { ComposerChin, ComposerSurface } from "./design-system/ComposerSurface";
@@ -91,14 +97,7 @@ import {
 } from "./store";
 
 type Screen =
-  | "settings"
-  | "team"
-  | "skill"
-  | "shortcuts"
-  | "search"
-  | "member"
-  | "plugins"
-  | null;
+  "settings" | "skill" | "shortcuts" | "search" | "member" | "plugins" | null;
 type Route = {
   teamId: string;
   chatId?: string;
@@ -161,6 +160,8 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   const [screen, setScreen] = useState<Screen>(null);
   const appearance = useAppearance();
   const [executionSettings, setExecutionSettings] = useState(false);
+  const [settingsTeamId, setSettingsTeamId] = useState<string | null>(null);
+  const [hostBranches, setHostBranches] = useState<Record<string, boolean>>({});
   const [executionTab, setExecutionTab] = useState<
     "harnesses" | "connections" | "runtime"
   >("harnesses");
@@ -196,6 +197,8 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   const [notice, setNotice] = useState("");
   const [history, setHistory] = useState(false);
   const [recordsOpen, setRecordsOpen] = useState(false);
+  const [servicesOpen, setServicesOpen] = useState(false);
+  const servicesShown = useRef<string | null>(null);
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesMounted, setFilesMounted] = useState(false);
   const [insightSource, setInsightSource] = useState<Message>();
@@ -212,6 +215,18 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   const [busy, setBusy] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [historyLoadError, setHistoryLoadError] = useState("");
+  const [hostMenu, setHostMenu] = useState<string | null>(null);
+  const [sideOpen, setSideOpen] = useState(false);
+  const [sideChatId, setSideChatId] = useState<string>();
+  const [sideDrafts, setSideDrafts] = useState<Record<string, string>>({});
+  const [folderDialog, setFolderDialog] = useState(false);
+  const [workspaceFolder, setWorkspaceFolder] = useState("");
+  const [removeChat, setRemoveChat] = useState<Chat | null>(null);
+  const [editing, setEditing] = useState<{
+    message: Message;
+    text: string;
+    request: string;
+  } | null>(null);
   const [rename, setRename] = useState<Chat | null>(null);
   const [teamMenu, setTeamMenu] = useState<string | null>(null);
   const [teamRename, setTeamRename] = useState<Team | null>(null);
@@ -256,12 +271,34 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   currentState.current = workspace;
   // Archived teams keep their records but leave the working list.
   const activeTeams = workspace.teams.filter((t) => !t.archived);
-  const archivedTeams = workspace.teams.filter((t) => t.archived);
+  const projectTeams = activeTeams.filter((t) => !t.independent);
+  const archivedTeams = workspace.teams.filter(
+    (t) => t.archived && !t.independent,
+  );
+  const independentTeams = new Set(
+    activeTeams.filter((t) => t.independent).map((t) => t.id),
+  );
+  const independentChats = workspace.chats.filter(
+    (c) => independentTeams.has(c.teamId) && !c.archived && c.kind !== "side",
+  );
   const team =
     activeTeams.find((t) => t.id === route.teamId) ||
+    projectTeams[0] ||
     activeTeams[0] ||
     workspace.teams[0];
   const view = route.view || "host";
+  const runningServices = useRunningServices(team.id);
+  useEffect(() => {
+    if (runningServices.count > 0 && servicesShown.current !== team.id) {
+      servicesShown.current = team.id;
+      setServicesOpen(true);
+      setSideOpen(false);
+      setDeliveryId(null);
+    }
+  }, [runningServices.count, team.id]);
+  useEffect(() => {
+    if (deliveryId || recordsOpen || sideOpen) setServicesOpen(false);
+  }, [deliveryId, recordsOpen, sideOpen]);
   const teamDeliveries = workspace.deliveries
     .filter((d) => d.teamId === team.id)
     .sort((a, b) => b.createdAt - a.createdAt);
@@ -272,8 +309,13 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     (d) => d.id === deliveryId,
   );
   const chat = workspace.chats.find(
-    (c) => c.id === route.chatId && c.teamId === team.id,
+    (c) => c.id === route.chatId && c.teamId === team.id && !c.archived,
   );
+  const sideRoot = chat?.kind === "side" ? chat.parent?.chatId : chat?.id;
+  const sideChats = workspace.chats.filter(
+    (c) => c.kind === "side" && !c.archived && c.parent?.chatId === sideRoot,
+  );
+  const sideChat = sideChats.find((c) => c.id === sideChatId);
   const pendingUpdates = teamUpdates.filter(
     (d) =>
       d.chatId === chat?.id &&
@@ -314,22 +356,117 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   const draft = workspace.drafts[draftKey] || emptyDraft;
   const skills = workspace.skills.filter((s) => s.teamId === team.id);
   const selectedSkill = skills.find((s) => s.id === draft.skillId);
+  const branchesByTeam = useMemo(
+    () => collectHostBranches(workspace),
+    [workspace],
+  );
   const teamChats = workspace.chats
-    .filter((c) => c.teamId === team.id && !c.archived)
+    .filter((c) => c.teamId === team.id && !c.archived && c.kind !== "side")
     .sort((a, b) => b.createdAt - a.createdAt);
-  const newChat = () => {
-    update((old) => ({
-      ...old,
-      teams: old.teams.map((t) =>
-        t.id === team.id
-          ? { ...t, context: undefined, lastChatId: undefined }
-          : t,
-      ),
-    }));
-    routeTo({ teamId: team.id });
-    setSidebar(false);
-    setHistory(false);
-    requestAnimationFrame(() => editor.current?.focus());
+  const newChat = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const created = await product.createIndependentChat(tr("New chat"));
+      navigate({ teamId: created.teamId, chatId: created.id });
+    } catch (error) {
+      setNotice((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const settings = workspace.executions?.[team.id]?.settings;
+  const folder = team.independent
+    ? undefined
+    : (chat?.workspace ?? settings?.workspace);
+  const folderName =
+    folder
+      ?.replace(/[\\/]+$/, "")
+      .split(/[\\/]/)
+      .at(-1) || folder;
+  const applyFolder = async (value: string) => {
+    const id = chat?.id ?? team.mainChatId;
+    if (!id || !settings || !value.trim() || busy) return;
+    setBusy(true);
+    try {
+      await product.command(
+        "/product/conversations/" + encodeURIComponent(id) + "/workspace",
+        {
+          teamId: team.id,
+          expectedVersion: settings.version,
+          workspace: value.trim(),
+        },
+        "PUT",
+      );
+      setFolderDialog(false);
+      setWorkspaceFolder("");
+      navigate({ teamId: team.id, chatId: id });
+    } catch (error) {
+      setNotice((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const chooseFolder = async () => {
+    if (window.teamswarmDesktop) {
+      try {
+        const chosen = await window.teamswarmDesktop.chooseDirectory();
+        if (chosen) await applyFolder(chosen);
+      } catch (error) {
+        setNotice((error as Error).message);
+      }
+    } else {
+      setWorkspaceFolder(folder ?? "");
+      setFolderDialog(true);
+    }
+  };
+  const forkChat = async (
+    parent: Chat,
+    kind: "branch" | "side" | "edit",
+    message?: Message,
+    text?: string,
+    request: string = crypto.randomUUID(),
+  ) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const title = (
+        text?.trim() ||
+        message?.text.trim() ||
+        (kind === "side" ? tr("Side chat") : tr("New branch chat"))
+      ).slice(0, 80);
+      const created = await product.command<{ id: string; teamId: string }>(
+        `/product/conversations/${encodeURIComponent(parent.id)}/fork`,
+        {
+          teamId: parent.teamId,
+          kind,
+          title,
+          clientRequestId: request,
+          messageId: message?.recordId,
+          content: text,
+        },
+      );
+      setEditing(null);
+      if (kind === "side") {
+        setSideChatId(created.id);
+        setSideOpen(true);
+      } else {
+        setHostBranches((old) => ({ ...old, [parent.teamId]: true }));
+        navigate({ teamId: created.teamId, chatId: created.id });
+      }
+    } catch (error) {
+      setNotice((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const copyMessage = async (message: Message) => {
+    try {
+      await navigator.clipboard.writeText(message.text);
+      setNotice(tr("Message copied"));
+    } catch {
+      setNotice(tr("Copy failed"));
+    }
   };
   const navigate = (next: Route) => {
     if (
@@ -349,6 +486,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     )
       return;
     routeTo(next);
+    setEditing(null);
     setSidebar(false);
     setHistory(false);
     setScreen(null);
@@ -734,16 +872,18 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
               <div className="menu-heading">{workspace.name}</div>
               <MenuItem
                 icon={<Settings2 size={15 * ICON_SCALE} />}
+                onSelect={() => {
+                  setExecutionTab("connections");
+                  setExecutionSettings(true);
+                }}
+              >
+                {tr("Global capabilities")}
+              </MenuItem>
+              <MenuItem
+                icon={<Settings2 size={15 * ICON_SCALE} />}
                 onSelect={() => setScreen("settings")}
               >
                 {tr("Settings")}
-              </MenuItem>
-              <Separator />
-              <MenuItem
-                icon={<Plus size={15 * ICON_SCALE} />}
-                onSelect={() => setScreen("team")}
-              >
-                {tr("Create team")}
               </MenuItem>
               <Separator />
               <MenuItem
@@ -807,16 +947,9 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                     size={11 * ICON_SCALE}
                   />
                 </button>
-                <IconButton
-                  label={tr("Create team")}
-                  className="group-add"
-                  onClick={() => setScreen("team")}
-                >
-                  <Plus size={13 * ICON_SCALE} />
-                </IconButton>
               </div>
               <Disclosure open={!collapsed}>
-                {activeTeams.map((t) => (
+                {projectTeams.map((t) => (
                   <div
                     className={`team-block ${team.id === t.id ? "is-current-team" : ""}`}
                     key={t.id}
@@ -853,6 +986,16 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                           </button>
                         }
                       >
+                        <MenuItem
+                          icon={<Settings2 size={14 * ICON_SCALE} />}
+                          onSelect={() => {
+                            setSettingsTeamId(t.id);
+                            setExecutionTab("harnesses");
+                            setExecutionSettings(true);
+                          }}
+                        >
+                          {tr("Adjust team configuration")}
+                        </MenuItem>
                         <MenuItem
                           icon={<Pencil size={14 * ICON_SCALE} />}
                           onSelect={() => setTeamRename(t)}
@@ -901,37 +1044,121 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                     >
                       {(["host", "collaboration", "history"] as const).map(
                         (section) => (
-                          <button
-                            key={section}
-                            className={`nav-row team-home ${team.id === t.id && view === section && (section !== "host" || chat?.id === t.mainChatId) ? "active" : ""}`}
-                            aria-current={
-                              team.id === t.id &&
-                              view === section &&
-                              (section !== "host" || chat?.id === t.mainChatId)
-                                ? "page"
-                                : undefined
-                            }
-                            onClick={() =>
-                              section === "host"
-                                ? openHost(t.id)
-                                : navigate({ teamId: t.id, view: section })
-                            }
-                          >
-                            {section === "host" ? (
-                              <MessageSquare size={14 * ICON_SCALE} />
-                            ) : section === "collaboration" ? (
-                              <Users size={14 * ICON_SCALE} />
-                            ) : (
-                              <GitBranch size={14 * ICON_SCALE} />
+                          <Fragment key={section}>
+                            <div className="team-view-row">
+                              <button
+                                onContextMenu={(event) => {
+                                  if (section !== "host") return;
+                                  event.preventDefault();
+                                  setHostMenu(t.id);
+                                }}
+                                className={`nav-row team-home ${team.id === t.id && view === section && (section !== "host" || chat?.id === t.mainChatId) ? "active" : ""}`}
+                                aria-current={
+                                  team.id === t.id &&
+                                  view === section &&
+                                  (section !== "host" ||
+                                    chat?.id === t.mainChatId)
+                                    ? "page"
+                                    : undefined
+                                }
+                                onClick={() =>
+                                  section === "host"
+                                    ? openHost(t.id)
+                                    : navigate({ teamId: t.id, view: section })
+                                }
+                              >
+                                {section === "host" ? (
+                                  <MessageSquare size={14 * ICON_SCALE} />
+                                ) : section === "collaboration" ? (
+                                  <Users size={14 * ICON_SCALE} />
+                                ) : (
+                                  <GitBranch size={14 * ICON_SCALE} />
+                                )}
+                                <span>
+                                  {section === "host"
+                                    ? "Host"
+                                    : section === "collaboration"
+                                      ? tr("Collaboration")
+                                      : tr("History")}
+                                </span>
+                              </button>
+                              {section === "host" && (
+                                <Menu
+                                  open={hostMenu === t.id}
+                                  onOpenChange={(open) =>
+                                    setHostMenu(open ? t.id : null)
+                                  }
+                                  trigger={
+                                    <IconButton label={tr("Host options")}>
+                                      <MoreHorizontal size={14} />
+                                    </IconButton>
+                                  }
+                                >
+                                  <MenuItem
+                                    onSelect={() => {
+                                      const parent = workspace.chats.find(
+                                        (c) => c.id === t.mainChatId,
+                                      );
+                                      if (parent)
+                                        void forkChat(parent, "branch");
+                                    }}
+                                  >
+                                    {tr("New branch chat")}
+                                  </MenuItem>
+                                </Menu>
+                              )}
+                              {section === "host" &&
+                                branchesByTeam.has(t.id) && (
+                                  <button
+                                    type="button"
+                                    className="team-collapse host-branches-toggle"
+                                    aria-label={tr("Toggle Host branches")}
+                                    aria-expanded={hostBranches[t.id] !== false}
+                                    onClick={() =>
+                                      setHostBranches((old) => ({
+                                        ...old,
+                                        [t.id]: old[t.id] === false,
+                                      }))
+                                    }
+                                  >
+                                    <ChevronDown
+                                      size={12}
+                                      className={
+                                        hostBranches[t.id] === false
+                                          ? "rotate-left"
+                                          : ""
+                                      }
+                                    />
+                                  </button>
+                                )}
+                            </div>
+                            {section === "host" && (
+                              <Disclosure open={hostBranches[t.id] !== false}>
+                                <HostBranches
+                                  branches={branchesByTeam.get(t.id) ?? []}
+                                  activeChat={
+                                    team.id === t.id && view === "host"
+                                      ? chat?.id
+                                      : undefined
+                                  }
+                                  onOpen={(id) =>
+                                    navigate({
+                                      teamId: t.id,
+                                      chatId: id,
+                                      view: "host",
+                                    })
+                                  }
+                                  onRemove={(id) =>
+                                    setRemoveChat(
+                                      workspace.chats.find(
+                                        (c) => c.id === id,
+                                      ) ?? null,
+                                    )
+                                  }
+                                />
+                              </Disclosure>
                             )}
-                            <span>
-                              {section === "host"
-                                ? "Host"
-                                : section === "collaboration"
-                                  ? tr("Collaboration")
-                                  : tr("History")}
-                            </span>
-                          </button>
+                          </Fragment>
                         ),
                       )}
                     </Disclosure>
@@ -939,6 +1166,35 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 ))}
               </Disclosure>
             </section>
+            {!!independentChats.length && (
+              <section className="nav-group">
+                <div className="group-title">{tr("Independent chats")}</div>
+                {independentChats.map((item) => (
+                  <div className="host-branch-row" key={item.id}>
+                    <button
+                      className={`nav-row ${chat?.id === item.id ? "active" : ""}`}
+                      onClick={() =>
+                        navigate({ teamId: item.teamId, chatId: item.id })
+                      }
+                    >
+                      <MessageSquare size={15} />
+                      <span>{item.title}</span>
+                    </button>
+                    <Menu
+                      trigger={
+                        <IconButton label={tr("Chat options")}>
+                          <MoreHorizontal size={14} />
+                        </IconButton>
+                      }
+                    >
+                      <MenuItem onSelect={() => setRemoveChat(item)}>
+                        {tr("Delete chat")}
+                      </MenuItem>
+                    </Menu>
+                  </div>
+                ))}
+              </section>
+            )}
             {!!archivedTeams.length && (
               <section className="nav-group archived-teams">
                 <div className="group-title">
@@ -990,29 +1246,6 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                     </Menu>
                   ))}
                 </Disclosure>
-              </section>
-            )}
-            {!!teamChats.length && (
-              <section className="recent-chats">
-                <div className="group-heading">
-                  {tr("Recent conversations")}
-                </div>
-                {teamChats
-                  .filter((c) => c.id !== team.mainChatId)
-                  .slice(0, 8)
-                  .map((c) => (
-                    <button
-                      key={c.id}
-                      className={`nav-row ${chat?.id === c.id && view === "host" ? "active" : ""}`}
-                      title={c.title}
-                      onClick={() =>
-                        navigate({ teamId: team.id, chatId: c.id })
-                      }
-                    >
-                      <MessageSquare size={13} />
-                      <span>{c.title}</span>
-                    </button>
-                  ))}
               </section>
             )}
           </nav>
@@ -1334,17 +1567,55 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                     </Menu>
                   </div>
                 )}
-                <IconButton
-                  label={tr(filesOpen ? "Close file panel" : "Open file panel")}
-                  className="files-toggle"
-                  aria-expanded={filesOpen}
-                  onClick={() => {
-                    setFilesMounted(true);
-                    setFilesOpen((value) => !value);
-                  }}
-                >
-                  <PanelRight size={16} />
-                </IconButton>
+                {chat && !team.independent && view === "host" && (
+                  <IconButton
+                    className="running-services-trigger"
+                    label={tr("Running services")}
+                    aria-expanded={servicesOpen}
+                    onClick={() => {
+                      setServicesOpen((value) => !value);
+                      setSideOpen(false);
+                      setDeliveryId(null);
+                      setRecordsOpen(false);
+                      void runningServices.refresh();
+                    }}
+                  >
+                    <Monitor size={16 * ICON_SCALE} />
+                    {runningServices.count > 0 && (
+                      <span className="running-services-count">
+                        {runningServices.count}
+                      </span>
+                    )}
+                  </IconButton>
+                )}
+                {chat && !team.independent && view === "host" && (
+                  <IconButton
+                    label={tr("Side chats")}
+                    aria-expanded={sideOpen}
+                    onClick={() => {
+                      setFilesOpen(false);
+                      setSideOpen((value) => !value);
+                    }}
+                  >
+                    <MessageSquare size={16} />
+                  </IconButton>
+                )}
+                {!team.independent && (
+                  <IconButton
+                    label={tr(
+                      filesOpen ? "Close file panel" : "Open file panel",
+                    )}
+                    className="files-toggle"
+                    aria-expanded={filesOpen}
+                    onClick={() => {
+                      setSideOpen(false);
+                      setFilesMounted(true);
+                      setFilesOpen((value) => !value);
+                    }}
+                  >
+                    <PanelRight size={16} />
+                  </IconButton>
+                )}
               </header>
               {view !== "host" ? (
                 <ViewBoundary
@@ -1541,74 +1812,14 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                               id={`message-${m.id}`}
                               tabIndex={-1}
                             >
-                              <div className="message-heading">
-                                <span className="message-avatar">
-                                  {m.role === "host" && <SwarmMark size={16} />}
-                                  {m.role === "host" ? "Host" : tr("You")}
-                                </span>
-                                <time
-                                  dateTime={new Date(m.createdAt).toISOString()}
-                                >
-                                  {new Date(m.createdAt).toLocaleTimeString(
-                                    locale,
-                                    {
-                                      hour: "2-digit",
-                                      minute: "2-digit",
-                                    },
-                                  )}
-                                </time>
-                                <Menu
-                                  align="end"
-                                  trigger={
-                                    <IconButton
-                                      label={tr("Message actions")}
-                                      className="message-save"
-                                    >
-                                      <MoreHorizontal size={16 * ICON_SCALE} />
-                                    </IconButton>
-                                  }
-                                >
-                                  <MenuItem
-                                    icon={<Copy size={14 * ICON_SCALE} />}
-                                    onSelect={async () => {
-                                      try {
-                                        await navigator.clipboard.writeText(
-                                          m.text,
-                                        );
-                                        setNotice(tr("Message copied"));
-                                      } catch {
-                                        setNotice(tr("Copy failed"));
-                                      }
-                                    }}
-                                  >
-                                    {tr("Copy message")}
-                                  </MenuItem>
-                                  <Separator />
-                                  <MenuItem
-                                    onSelect={() => {
-                                      setInsightSource(m);
-                                      setRecordsOpen(true);
-                                    }}
-                                  >
-                                    {tr("Save an idea or decision")}
-                                  </MenuItem>
-                                  {Object.entries(definitionLabels).map(
-                                    ([kind, label]) => (
-                                      <MenuItem
-                                        key={kind}
-                                        onSelect={() => {
-                                          setDefinitionKind(
-                                            kind as DefinitionKind,
-                                          );
-                                          setDefinitionSource(m);
-                                        }}
-                                      >
-                                        {tr(label)}
-                                      </MenuItem>
-                                    ),
-                                  )}
-                                </Menu>
-                              </div>
+                              {m.role === "host" && (
+                                <div className="message-heading">
+                                  <span className="message-avatar">
+                                    <SwarmMark size={16} />
+                                    Host
+                                  </span>
+                                </div>
+                              )}
                               {m.execution &&
                                 m.execution.status !== "submitted" && (
                                   <ExecutionReceipt execution={m.execution} />
@@ -1672,6 +1883,129 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                                 <div className="files-row">
                                   {attachments.map((f) => fileButton(f))}
                                 </div>
+                              )}
+                              <footer className="host-message-actions">
+                                <IconButton
+                                  label={tr("Copy message")}
+                                  onClick={() => void copyMessage(m)}
+                                >
+                                  <Copy size={14} />
+                                </IconButton>
+                                {m.role === "user" && m.recordId && (
+                                  <IconButton
+                                    label={tr("Edit message")}
+                                    onClick={() =>
+                                      setEditing({
+                                        message: m,
+                                        text: m.text,
+                                        request: crypto.randomUUID(),
+                                      })
+                                    }
+                                  >
+                                    <Pencil size={14} />
+                                  </IconButton>
+                                )}
+                                {m.role === "host" && (
+                                  <Menu
+                                    align="end"
+                                    trigger={
+                                      <IconButton
+                                        label={tr("Message actions")}
+                                        className="message-save"
+                                      >
+                                        <MoreHorizontal
+                                          size={16 * ICON_SCALE}
+                                        />
+                                      </IconButton>
+                                    }
+                                  >
+                                    <MenuItem
+                                      icon={<GitBranch size={14} />}
+                                      disabled={!m.recordId || !!m.pending}
+                                      onSelect={() =>
+                                        void forkChat(chat, "branch", m)
+                                      }
+                                    >
+                                      {tr("Branch to new chat")}
+                                    </MenuItem>
+                                    <Separator />
+                                    <MenuItem
+                                      onSelect={() => {
+                                        setInsightSource(m);
+                                        setRecordsOpen(true);
+                                      }}
+                                    >
+                                      {tr("Save an idea or decision")}
+                                    </MenuItem>
+                                    {Object.entries(definitionLabels).map(
+                                      ([kind, label]) => (
+                                        <MenuItem
+                                          key={kind}
+                                          onSelect={() => {
+                                            setDefinitionKind(
+                                              kind as DefinitionKind,
+                                            );
+                                            setDefinitionSource(m);
+                                          }}
+                                        >
+                                          {tr(label)}
+                                        </MenuItem>
+                                      ),
+                                    )}
+                                  </Menu>
+                                )}
+                                <time
+                                  dateTime={new Date(m.createdAt).toISOString()}
+                                >
+                                  {new Date(m.createdAt).toLocaleTimeString(
+                                    locale,
+                                    { hour: "2-digit", minute: "2-digit" },
+                                  )}
+                                </time>
+                              </footer>
+                              {editing?.message.id === m.id && (
+                                <form
+                                  className="host-message-edit"
+                                  onSubmit={(event) => {
+                                    event.preventDefault();
+                                    if (editing.text.trim())
+                                      void forkChat(
+                                        chat,
+                                        "edit",
+                                        m,
+                                        editing.text.trim(),
+                                        editing.request,
+                                      );
+                                  }}
+                                >
+                                  <textarea
+                                    aria-label={tr("Edit message")}
+                                    value={editing.text}
+                                    autoFocus
+                                    onChange={(event) =>
+                                      setEditing({
+                                        ...editing,
+                                        text: event.target.value,
+                                      })
+                                    }
+                                  />
+                                  <div className="form-footer">
+                                    <button
+                                      type="button"
+                                      className="secondary-button"
+                                      onClick={() => setEditing(null)}
+                                    >
+                                      {tr("Cancel")}
+                                    </button>
+                                    <button
+                                      type="submit"
+                                      className="primary-button"
+                                      disabled={busy || !editing.text.trim()}
+                                    >
+                                      {tr("Send revised message")}
+                                    </button>
+                                  </div>
+                                </form>
                               )}
                             </article>
                           );
@@ -1771,6 +2105,26 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                         setExecutionSettings(true);
                       }}
                     />
+                    <div
+                      className="composer-workspace"
+                      aria-label={tr("Workspace")}
+                    >
+                      <Monitor size={15} />
+                      <span>{tr("This computer")}</span>
+                      <button
+                        type="button"
+                        className="composer-folder"
+                        title={folder}
+                        aria-label={tr(
+                          folder ? "Change project folder" : "Choose project",
+                        )}
+                        disabled={busy || !settings}
+                        onClick={() => void chooseFolder()}
+                      >
+                        <Folder size={15} />
+                        <span>{folderName ?? tr("Choose project")}</span>
+                      </button>
+                    </div>
                     <ComposerSurface
                       className="composer"
                       onSubmit={(e) => {
@@ -1905,6 +2259,30 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                         </IconButton>
                       </ComposerChin>
                     </ComposerSurface>
+                    {!draft.text.trim() &&
+                      runningServices.listing?.suggestion?.text && (
+                        <div className="resource-suggestion">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateDraft({
+                                text: runningServices.listing!.suggestion!
+                                  .text!,
+                              });
+                              editor.current?.focus();
+                              void runningServices
+                                .dismiss()
+                                .catch((error) => setNotice(error.message));
+                            }}
+                          >
+                            <ArrowUpRight size={13} />
+                            <span>
+                              {runningServices.listing.suggestion.text}
+                            </span>
+                          </button>
+                        </div>
+                      )}
+
                     {!chat && (
                       <div className="welcome-actions">
                         {[
@@ -1940,6 +2318,17 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                     )}
                   </div>
                 </div>
+              )}
+              {servicesOpen && view === "host" && (
+                <RunningServices
+                  key={team.id}
+                  teamId={team.id}
+                  workspace={workspace}
+                  listing={runningServices.listing}
+                  error={runningServices.error}
+                  refresh={runningServices.refresh}
+                  onClose={() => setServicesOpen(false)}
+                />
               )}
               {openedDelivery && (
                 <DetailPanel
@@ -2018,7 +2407,129 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 </DetailPanel>
               )}
             </main>
+            {sideOpen && chat && !team.independent && view === "host" && (
+              <aside className="host-side-chats" aria-label={tr("Side chats")}>
+                <header>
+                  <strong>{tr("Side chats")}</strong>
+                  <IconButton
+                    label={tr("New side chat")}
+                    onClick={() => {
+                      const parent = workspace.chats.find(
+                        (c) => c.id === sideRoot,
+                      );
+                      if (parent) void forkChat(parent, "side");
+                    }}
+                  >
+                    <Plus size={16} />
+                  </IconButton>
+                  <IconButton
+                    label={tr("Close")}
+                    onClick={() => setSideOpen(false)}
+                  >
+                    <X size={16} />
+                  </IconButton>
+                </header>
+                <div className="side-chat-list">
+                  {sideChats.map((item) => (
+                    <div className="host-branch-row" key={item.id}>
+                      <button
+                        className={`nav-row ${item.id === sideChatId ? "active" : ""}`}
+                        onClick={() => setSideChatId(item.id)}
+                      >
+                        {item.title}
+                      </button>
+                      <IconButton
+                        label={tr("Delete chat")}
+                        onClick={() => setRemoveChat(item)}
+                      >
+                        <Trash2 size={14} />
+                      </IconButton>
+                    </div>
+                  ))}
+                </div>
+                {sideChat && (
+                  <>
+                    <div className="side-chat-messages" aria-live="polite">
+                      {sideChat.historyBefore && (
+                        <button
+                          className="text-button"
+                          onClick={() =>
+                            void product
+                              .loadOlder(sideChat.id)
+                              .catch((error) => setNotice(error.message))
+                          }
+                        >
+                          {tr("Load earlier messages")}
+                        </button>
+                      )}
+                      {sideChat.messages.map((message) => (
+                        <article
+                          key={message.id}
+                          className={`side-chat-message ${message.role === "user" ? "from-user" : ""}`}
+                        >
+                          {message.execution &&
+                            message.execution.status !== "submitted" && (
+                              <ExecutionReceipt execution={message.execution} />
+                            )}
+                          <MessageContent
+                            text={message.text}
+                            pending={message.pending}
+                          />
+                        </article>
+                      ))}
+                    </div>
+                    <form
+                      className="side-chat-compose"
+                      onSubmit={async (event) => {
+                        event.preventDefault();
+                        const text = sideDrafts[sideChat.id]?.trim();
+                        if (!text || busy || sendLock.current) return;
+                        sendLock.current = true;
+                        setBusy(true);
+                        try {
+                          await product.send(team.id, sideChat.id, {
+                            ...emptyDraft,
+                            text,
+                          });
+                          setSideDrafts((old) => {
+                            const next = { ...old };
+                            if (next[sideChat.id]?.trim() === text)
+                              delete next[sideChat.id];
+                            return next;
+                          });
+                        } catch (error) {
+                          setNotice((error as Error).message);
+                        } finally {
+                          sendLock.current = false;
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      <textarea
+                        aria-label={tr("Side chat")}
+                        value={sideDrafts[sideChat.id] ?? ""}
+                        onChange={(event) => {
+                          const text = event.target.value;
+                          setSideDrafts((old) => ({
+                            ...old,
+                            [sideChat.id]: text,
+                          }));
+                        }}
+                      />
+                      <button
+                        type="submit"
+                        className="primary-button"
+                        disabled={busy || !sideDrafts[sideChat.id]?.trim()}
+                      >
+                        {tr("Send message")}
+                      </button>
+                    </form>
+                  </>
+                )}
+              </aside>
+            )}
             {filesMounted &&
+              !team.independent &&
               (() => {
                 const contextChat =
                   chat ??
@@ -2223,8 +2734,12 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
       <ExecutionSettings
         open={executionSettings}
         initialTab={executionTab}
-        onClose={() => setExecutionSettings(false)}
-        teamId={team.id}
+        onClose={() => {
+          setExecutionSettings(false);
+          setSettingsTeamId(null);
+        }}
+        teamId={settingsTeamId ?? team.id}
+        scope={settingsTeamId ? "team" : "global"}
         workspace={workspace}
       />
       {serviceState.error && (
@@ -2344,41 +2859,82 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
         />
       )}
       <Modal
-        open={screen === "team"}
-        onOpenChange={(open) => !open && setScreen(null)}
-        title={tr("Create team")}
+        open={!!removeChat}
+        onOpenChange={(open) => !open && !busy && setRemoveChat(null)}
+        title={tr("Delete chat")}
+      >
+        <div className="form-body">{removeChat?.title}</div>
+        <div className="form-footer">
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => setRemoveChat(null)}
+          >
+            {tr("Cancel")}
+          </button>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={busy}
+            onClick={async () => {
+              if (!removeChat || busy) return;
+              setBusy(true);
+              try {
+                await product.command(
+                  "/product/conversations/" + encodeURIComponent(removeChat.id),
+                  undefined,
+                  "DELETE",
+                );
+                if (chat?.id === removeChat.id) {
+                  const remaining = workspace.chats.find(
+                    (c) => c.id === removeChat.parent?.chatId && !c.archived,
+                  );
+                  if (remaining)
+                    navigate({
+                      teamId: remaining.teamId,
+                      chatId: remaining.id,
+                    });
+                  else if (projectTeams.length) openHost(projectTeams[0].id);
+                  else {
+                    const next = independentChats.find(
+                      (item) => item.id !== removeChat.id,
+                    );
+                    if (next)
+                      navigate({ teamId: next.teamId, chatId: next.id });
+                    else navigate({ teamId: team.id });
+                  }
+                }
+                setRemoveChat(null);
+              } catch (error) {
+                setNotice((error as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {tr("Delete chat")}
+          </button>
+        </div>
+      </Modal>
+      <Modal
+        open={folderDialog}
+        onOpenChange={(open) => !open && !busy && setFolderDialog(false)}
+        title={tr("Project folder")}
       >
         <form
-          onSubmit={async (e: FormEvent<HTMLFormElement>) => {
-            e.preventDefault();
-            if (busy) return;
-            const name = String(
-              new FormData(e.currentTarget).get("name"),
-            ).trim();
-            if (!name) return;
-            setBusy(true);
-            try {
-              const created = await product.createTeam(name);
-              navigate({
-                teamId: created.id,
-                chatId: created.mainChatId,
-              });
-            } catch (error) {
-              setNotice((error as Error).message);
-            } finally {
-              setBusy(false);
-            }
+          onSubmit={(event) => {
+            event.preventDefault();
+            void applyFolder(workspaceFolder);
           }}
         >
           <div className="form-body">
             <label>
-              {tr("Team name")}
+              {tr("Project folder")}
               <input
-                name="name"
-                placeholder={tr("e.g. Design")}
+                autoFocus
                 required
-                maxLength={60}
-                autoComplete="off"
+                value={workspaceFolder}
+                onChange={(event) => setWorkspaceFolder(event.target.value)}
               />
             </label>
           </div>
@@ -2386,12 +2942,12 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
             <button
               type="button"
               className="secondary-button"
-              onClick={() => setScreen(null)}
+              onClick={() => setFolderDialog(false)}
             >
               {tr("Cancel")}
             </button>
-            <button className="primary-button" disabled={busy}>
-              {tr("Create team")}
+            <button type="submit" className="primary-button" disabled={busy}>
+              {tr("Save")}
             </button>
           </div>
         </form>

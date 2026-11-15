@@ -232,8 +232,11 @@ export function setHostConfiguration(deps: AllocationDeps, teamId: string, branc
       throw conflict("version_conflict", "Host configuration changed. Reload before saving.");
     if (config.access !== current.config.access)
       throw conflict("access_escalation", "Keep Host's existing file access when changing its model.");
+    const previousPreset = host.hostSelections?.[branchId]?.permissionPreset;
+    const permissionPreset = config.harness === "antigravity" && previousPreset === "auto" &&
+      !config.baseUrl && !config.chatgptAccountId ? "manual" : previousPreset;
     host.hostSelections = { ...host.hostSelections, [branchId]: {
-      revision: expectedRevision + 1, selection: null, config: { ...config }, permissionPreset:host.hostSelections?.[branchId]?.permissionPreset,
+      revision: expectedRevision + 1, selection: null, config: { ...config }, permissionPreset,
     } };
     deps.store.save("members", host);
     deps.store.event(teamId, "host.configuration", { branchId, revision: expectedRevision + 1 });

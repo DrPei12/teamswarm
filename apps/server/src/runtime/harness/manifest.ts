@@ -11,6 +11,11 @@ export const manifestSchema = z.object({
   models: z.object({ protocols: z.array(wire), preferredProtocol: wire.nullable(), nativeOnly: z.boolean().optional(), chatgptProtocol: wire.nullable().optional(), nativeLogin: z.boolean(), nativeEffort: z.object({ values: z.union([z.literal('any'), z.array(z.string())]), nativeLoginOnly: z.boolean().optional(), protocols: z.array(wire).optional() }).strict().nullable().optional(), thinkingFormats: z.record(z.string(), z.array(wire)), outputBudget: z.boolean(), contextWindow: z.boolean() }).strict(),
   permissions: z.object({ schema: object, readOnly: z.object({ set: object.optional(), exclude: z.record(z.string(), z.array(z.string())).optional() }).strict() }).strict(),
   session: z.object({ resume: z.boolean() }).strict(),
+  integration: z.object({
+    platforms: z.array(z.enum(['win32', 'linux', 'darwin'])).min(1),
+    presets: z.object({ 'read-only': object, manual: object, auto: object, 'full-access': object }).strict(),
+    automaticReviewer: z.enum(['native', 'teamswarm']),
+  }).strict().optional(),
   description: z.object({ execution: object, permissions: object, results: object, isolation: object }).strict(),
 }).strict();
 const ajv = new Ajv({ strict: true, allErrors: true, validateFormats: false });

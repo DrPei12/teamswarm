@@ -666,3 +666,48 @@ test("Model catalog reads the configured provider, filters invalid rows, and doe
     await a.close();
   }
 });
+
+test("global connections flow to new Teams while an override can opt out and rejoin", async () => {
+  const fixture = await setup();
+  const { request, team, service } = fixture;
+  try {
+    const route = "/global/capabilities";
+    const seed = (await request(route)).body;
+    const connection = {
+      id: "shared-codex", name: "Shared Codex", kind: "subscription", enabled: true,
+      subscriptionHarness: "codex", endpoints: {}, credentialEnv: null, models: ["first"],
+    };
+    const change = {
+      expectedVersion: seed.version, enabledHarnesses: ["codex"],
+      preferences: seed.preferences, connections: [connection],
+    };
+    assert.equal((await request(route, change, "PUT")).status, 200);
+    const other = (await request("/teams", { name: "Inheriting fixture" })).body;
+    const teamRoute = `/teams/${team.id}/capabilities`;
+    const overrideRoute = `/teams/${team.id}/capability-overrides`;
+    const inherited = (await request(teamRoute)).body;
+    assert.equal(inherited.inheritsDefaults, true);
+    const override = {
+      expectedVersion: inherited.version, expectedGlobalVersion: inherited.globalVersion,
+      inheritsDefaults: false, enabledHarnesses: inherited.enabledHarnesses,
+      preferences: { ...inherited.preferences, priority: "quality" },
+      connections: [{ ...connection, enabled: false }],
+    };
+    assert.equal((await request(overrideRoute, override, "PUT")).status, 200);
+    assert.equal((await request(route, { ...change, expectedVersion: 1, connections: [{ ...connection, models: ["second"] }] }, "PUT")).status, 200);
+    assert.equal((await request(overrideRoute, override, "PUT")).status, 409);
+    const actual = (await request(teamRoute)).body;
+    assert.equal(actual.preferences.priority, "quality");
+    assert.equal(actual.connections[0].enabled, false);
+    assert.deepEqual(actual.connections[0].models, ["second"]);
+    assert.equal(service.runtime.catalog.capabilities.combinations(team.id).length, 0);
+    assert.equal(service.runtime.catalog.capabilities.combinations(other.id)[0].config.model, "second");
+    assert.equal((await request(overrideRoute, {
+      ...override, expectedVersion: actual.version, expectedGlobalVersion: actual.globalVersion,
+      inheritsDefaults: true,
+    }, "PUT")).status, 200);
+    assert.equal(service.runtime.catalog.capabilities.combinations(team.id)[0].config.model, "second");
+  } finally {
+    await fixture.close();
+  }
+});

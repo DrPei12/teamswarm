@@ -25,25 +25,25 @@ TeamSwarm 面向本地单用户场景。Harness 使用你配置的账号或 API 
 
 | 平台 | 格式 | 可用范围 |
 |---|---|---|
-| Windows x64 | NSIS `.exe` | [Windows 发布版](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.0) |
+| Windows x64 | NSIS `.exe` | [Windows 发布版](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.1) |
 | Linux x64 | AppImage、DEB | 从源码构建 |
-| macOS Apple Silicon | DMG、ZIP | [macOS 预发布版](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.0-macos.1) |
+| macOS Apple Silicon | DMG、ZIP | [macOS 发布版](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.1) |
 
 Windows 安装器未签名，系统会显示未知发布者。签名安排见[代码签名策略](#code-signing-policy)。将文件哈希与同版校验文件比较：
 
 ```powershell
-Get-FileHash .\TeamSwarm-0.6.0-Windows-x64.exe -Algorithm SHA256
+Get-FileHash .\TeamSwarm-0.6.1-Windows-x64.exe -Algorithm SHA256
 ```
 
 运行安装器，从开始菜单打开 **TeamSwarm**。默认按用户安装。升级时先关闭应用、[备份服务数据](#data-and-recovery)，然后在同一系统账号和安装目录运行新版安装器。更新通过手动安装完成，卸载保留服务数据和项目文件。
 
-**macOS Apple Silicon：** 下载 [DMG](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0-macos.1/TeamSwarm-0.6.0-macOS-arm64.dmg) 或 [ZIP](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0-macos.1/TeamSwarm-0.6.0-macOS-arm64.zip)。打开 DMG，将 **TeamSwarm.app** 复制到“应用程序”；使用 ZIP 时，解压后将 App 复制到同一目录。使用 macOS Release 中的校验文件核对下载内容：
+**macOS Apple Silicon：** 下载 [DMG](https://github.com/DrPei12/teamswarm/releases/download/v0.6.1/TeamSwarm-0.6.1-macOS-arm64.dmg) 或 [ZIP](https://github.com/DrPei12/teamswarm/releases/download/v0.6.1/TeamSwarm-0.6.1-macOS-arm64.zip)。打开 DMG，将 **TeamSwarm.app** 复制到“应用程序”；使用 ZIP 时，解压后将 App 复制到同一目录。使用 macOS Release 中的校验文件核对下载内容：
 
 ```sh
-shasum -a 256 TeamSwarm-0.6.0-macOS-arm64.dmg
+shasum -a 256 TeamSwarm-0.6.1-macOS-arm64.dmg
 ```
 
-本次 macOS 预发布版未使用 Developer ID 签名，也未经过 Apple 公证。如果 macOS 阻止首次打开，可参阅 [Apple 针对单个 App 的批准操作说明](https://support.apple.com/zh-cn/102445)。
+本次 macOS 发布版未使用 Developer ID 签名，也未经过 Apple 公证。如果 macOS 阻止首次打开，可参阅 [Apple 针对单个 App 的批准操作说明](https://support.apple.com/zh-cn/102445)。
 
 <a id="first-project"></a>
 ## 第一个项目
@@ -51,7 +51,7 @@ shasum -a 256 TeamSwarm-0.6.0-macOS-arm64.dmg
 使用合成数据的[任务报告示例](https://github.com/DrPei12/teamswarm/tree/main/examples/task-report)，完成任务、检查输出，再继续同一项工作。
 
 1. 将示例中的 `tasks.json`、`verify.mjs` 和 `verify-followup.mjs` 复制到项目目录。
-2. 打开 TeamSwarm，创建团队，在执行设置中选择该项目目录。
+2. 打开 TeamSwarm，选择“新对话”，再通过输入框上方的“选择项目”选定目录；当前对话会成为该团队的 Host。未绑定目录的对话保持独立。
 3. 连接已有的受支持账号，或配置 [API 连接](#harnesses-and-models)。检查所选 Harness 与资源的可用状态。
 4. 向 Host 发送以下任务：
 
@@ -221,6 +221,9 @@ node scripts/data-tools.mjs restore --backup "/absolute/backup-directory" --data
 诊断包含构建身份、记录数量、工作状态和 SQLite 完整性，省略对话正文、项目路径与凭据值。备份包含服务数据库、附件及服务所属配置和原生会话文件，应保存在私有位置。恢复校验文件哈希且要求新目录；将 `TEAM_DATA_DIR` 指向该目录，核对恢复后的团队再继续。结果不明的原生执行仍需恢复核对。
 
 <a id="run-from-source"></a>
+
+本开发工作区使用 `.local/rework/default/` 下的独立数据，默认端口 4427。模型账号和项目与已安装桌面应用分开配置。
+
 ## 从源码运行
 
 使用 Node.js 24，在仓库根目录运行：
@@ -228,7 +231,7 @@ node scripts/data-tools.mjs restore --backup "/absolute/backup-directory" --data
 ```sh
 npm ci
 npm run build
-npm start
+npm run start:rework
 ```
 
 启动器在 `http://127.0.0.1:4317` 打开已连接的浏览器工作空间。`TEAM_API_PORT` 指定其他端口，`TEAM_DATA_DIR` 指定独立工作空间，同一数据目录由一个服务管理。`npm run dev` 在 4318 启动 API，在 4317 启动 Vite。
@@ -283,12 +286,12 @@ node tools/offline-audit/audit.mjs events.json --format markdown --team team-id
 
 通过 [Issues](https://github.com/DrPei12/teamswarm/issues) 反馈可复现问题，附上版本、系统、Harness/模型、启动方式和脱敏诊断。漏洞使用可用的 **Security → Report a vulnerability** 入口；若未开放，在 issue 中请求私下联系渠道，不公开漏洞细节。反馈中排除凭据、私有对话与个人项目文件。
 
-欢迎提交聚焦的 PR。针对行为变化运行相关检查，保留数据与执行恢复路径，维护两份 README 的一致性；界面变化检查中英文和相关窗口尺寸。提交供项目收录的贡献按 Apache-2.0 提供，并保留第三方署名。
+欢迎提交聚焦的 PR。针对行为变化运行相关检查，保留数据与执行恢复路径，维护两份 README 的一致性；界面变化检查中英文和相关窗口尺寸。请按 MIT 许可证提交贡献，并保留第三方署名。
 
 <a id="code-signing-policy"></a>
 ## 代码签名策略（Code signing policy）
 
-Windows 安装器目前未签名。macOS 预发布版未使用 Developer ID 签名，也未经过 Apple 公证。TeamSwarm 正在向 [SignPath Foundation](https://signpath.org/) 申请通过 [SignPath.io](https://about.signpath.io/) 提供的免费 Windows 代码签名，证书签发给 SignPath Foundation。
+Windows 安装器目前未签名。macOS 发布版未使用 Developer ID 签名，也未经过 Apple 公证。TeamSwarm 正在向 [SignPath Foundation](https://signpath.org/) 申请通过 [SignPath.io](https://about.signpath.io/) 提供的免费 Windows 代码签名，证书签发给 SignPath Foundation。
 
 项目维护者、贡献审查者及发布批准人为 [DrPei12](https://github.com/DrPei12)。签名访问要求多因素认证，每个签名请求均须由发布批准人手动批准。
 
@@ -297,4 +300,4 @@ Windows 安装器目前未签名。macOS 预发布版未使用 Developer ID 签�
 <a id="license"></a>
 ## 许可
 
-TeamSwarm 使用 [Apache-2.0](LICENSE)，允许商用、修改和再分发。第三方软件保留各自的许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+本仓库的 TeamSwarm 自有源码采用 [MIT 许可证](LICENSE)。各发布版本的许可见随附的许可证文件。第三方许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

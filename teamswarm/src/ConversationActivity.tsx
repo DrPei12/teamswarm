@@ -18,6 +18,7 @@ import {
   delegationRows,
   toolValue,
   canExpandActivity,
+  commandHasNonzeroExit,
   commandSummary,
   field,
   type ActivityGroup,
@@ -162,6 +163,7 @@ const ActivityItem = memo(function ActivityItem({
   const { t } = useI18n();
   const [choice, setChoice] = useState<boolean | null>(null);
   const open = choice ?? false;
+  const exited = item.kind === "command" && commandHasNonzeroExit(item);
   if (item.kind === "message")
     return (
       <MessageContent text={item.text} pending={item.status === "running"} />
@@ -187,9 +189,11 @@ const ActivityItem = memo(function ActivityItem({
           ? t(
               item.status === "running"
                 ? "Running {command}"
-                : item.status === "completed"
-                  ? "Ran {command}"
-                  : "Command did not complete: {command}",
+                : exited
+                  ? "Command exited: {command}"
+                  : item.status === "completed"
+                    ? "Ran {command}"
+                    : "Command did not complete: {command}",
               { command: commandLabel(item.title || item.text) },
             )
           : item.title
@@ -215,7 +219,7 @@ const ActivityItem = memo(function ActivityItem({
       </div>
     );
   return (
-    <div className={`activity-item ${item.status}`}>
+    <div className={`activity-item ${exited ? "exited" : item.status}`}>
       <button
         className="activity-toggle"
         aria-expanded={open}
@@ -225,7 +229,7 @@ const ActivityItem = memo(function ActivityItem({
         <span title={title}>{title}</span>
         <ChevronRight size={13} className={open ? "expanded" : ""} />
         {item.exitCode != null && item.exitCode !== 0 && (
-          <small>
+          <small className={exited ? "activity-exit-code" : undefined}>
             {t("Exit code")} {item.exitCode}
           </small>
         )}
@@ -284,9 +288,14 @@ function CommandGroup({ group }: { group: ActivityGroup }) {
           )}
         </span>
         <ChevronRight size={13} className={open ? "expanded" : ""} />
-        {summary.failed > 0 && (
+        {summary.nonzero > 0 && (
+          <small className="activity-exit-code">
+            {t("{count} with nonzero exit", { count: summary.nonzero })}
+          </small>
+        )}
+        {summary.incomplete > 0 && (
           <small>
-            {t("{count} did not succeed", { count: summary.failed })}
+            {t("{count} did not complete", { count: summary.incomplete })}
           </small>
         )}
       </button>

@@ -48,5 +48,7 @@ jobs:
       - run: node test/browser/composer-scroll.mjs
       - run: node test/browser/sent-images.mjs
       - run: node test/browser/deepseek-effort.mjs
+      - run: node test/browser/conversation-workspace.mjs
+      - run: node --import tsx test/browser/managed-services.mjs
       - run: node test/native/opencode-output-budget.mjs
       - run: node test/native/pi-model-configuration.mjs

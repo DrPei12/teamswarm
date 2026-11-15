@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { randomUUID } from 'node:crypto';
 const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const product = process.argv[2] ? path.resolve(process.argv[2]) : source;
 const directory = path.join(source, '.local/service-smoke');
@@ -13,14 +14,19 @@ const runtimeFile = path.join(product,'runtime-manifest.json');
 const node = existsSync(runtimeFile) ? path.join(product, JSON.parse(readFileSync(runtimeFile,'utf8')).nodeFile) : process.execPath;
 let checks = 0;
 let child;
+let starts = 0;
 const recoveryFile = path.join(scratch,'data/credentials.json');
 mkdirSync(path.dirname(recoveryFile),{recursive:true});
 const recoveryBytes = JSON.stringify({TEAMSWARM_KEY_SMOKE_RECOVERY:'electron-v1:AAAA'});
 writeFileSync(recoveryFile,recoveryBytes);
+const inheritedTemp = path.join(scratch, 'invalid-inherited-temp');
+writeFileSync(inheritedTemp, 'Preserve this file.');
 async function start() {
+  const temporary = starts++ === 0 ? '' : path.join(scratch, 'runtime-tmp');
   child = spawn(node, [path.join(product,'scripts/start-product.mjs'),'--no-open'], {
     cwd: product, windowsHide:true, env:{ ...process.env, TEAM_DATA_DIR:path.join(scratch,'data'), TEAM_API_PORT:'0',
-      TEAM_HARNESS_HOME:path.join(scratch,'harnesses'), TEAM_ACCOUNT_HOME:path.join(scratch,'accounts'), TEAMSWARM_DESKTOP_CREDENTIALS:'0' }, stdio:['ignore','pipe','pipe','ipc'],
+      TEAM_HARNESS_HOME:path.join(scratch,'harnesses'), TEAM_ACCOUNT_HOME:path.join(scratch,'accounts'), TEAM_CODEX_HOME:path.join(scratch,'codex'), TEAMSWARM_DESKTOP_CREDENTIALS:'0',
+      TEMP:inheritedTemp,TMP:inheritedTemp,TMPDIR:inheritedTemp,SQLITE_TMPDIR:inheritedTemp,TEAMSWARM_TEMP_DIR:temporary }, stdio:['ignore','pipe','pipe','ipc'],
   });
   let errors = '';
   child.stdout.resume(); child.stderr.on('data', data => { errors += data.toString(); });
@@ -46,6 +52,7 @@ async function stop() {
 }
 try {
   let connection = await start(); checks++;
+  assert.ok(existsSync(path.join(scratch, 'data-tmp'))); checks++;
   const call = async (route,body) => {
     const response = await fetch(connection.origin + '/api' + route, {method:body ? 'POST':'GET',
       headers:{Authorization:`Bearer ${connection.token}`,'Content-Type':'application/json'},body:body ? JSON.stringify(body):undefined});
@@ -54,6 +61,9 @@ try {
   const unauthenticated = await fetch(connection.origin + '/api/teams');
   assert.ok([401,403].includes(unauthenticated.status)); checks++;
   const created = await call('/teams',{name:'Example workspace',description:'Synthetic validation workspace'});
+  const project = path.join(scratch, 'project'); mkdirSync(project);
+  const productTeam = await call('/product/teams', { name: 'Product runtime check', workspace: project, clientRequestId: randomUUID() });
+  assert.ok(productTeam.mainChatId); checks++;
   const teams = await call('/teams');
   assert.ok(teams.teams.some(team=>team.name === 'Example workspace')); checks++;
   const web = await fetch(connection.origin + '/'); assert.equal(web.status,200); assert.match(await web.text(),/TeamSwarm/); checks++;
@@ -61,10 +71,12 @@ try {
   await stop();
   await assert.rejects(fetch(oldOrigin + '/api/teams', {signal:AbortSignal.timeout(2000)})); checks++;
   connection = await start(); checks++;
+  assert.ok(existsSync(path.join(scratch, 'runtime-tmp'))); checks++;
   const restored = await call('/teams');
   assert.equal(restored.teams.filter(team=>team.name === 'Example workspace').length,1); checks++;
   await stop();
   assert.equal(readFileSync(recoveryFile,'utf8'),recoveryBytes); checks++;
+  assert.equal(readFileSync(inheritedTemp,'utf8'),'Preserve this file.'); checks++;
   const report = {passed:true,checks,platform:process.platform,arch:process.arch,scope:'Packaged or source service: auth, create, web, stop, persistence, restart and unavailable-key recovery'};
   writeFileSync(path.join(scratch,'report.json'),JSON.stringify(report,null,2));
   console.log(JSON.stringify(report));
