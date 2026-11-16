@@ -168,25 +168,31 @@ export function delegationRows(
   return rows;
 }
 
-const unsettled = (item: TranscriptItem) =>
-  item.status === "running" ||
-  item.status === "failed" ||
-  item.status === "interrupted" ||
-  (item.exitCode != null && item.exitCode !== 0);
+export function commandHasNonzeroExit(item: TranscriptItem) {
+  return (
+    item.status !== "running" &&
+    item.status !== "interrupted" &&
+    item.exitCode != null &&
+    item.exitCode !== 0
+  );
+}
 
-/** Commands that stay visible while their group is collapsed: anything still
- * running or that did not succeed. Successful history stays behind the count. */
+/** Keep running commands, interruptions, and nonzero exits visible. */
 export function commandSummary(items: TranscriptItem[]) {
-  const failed = items.filter(
-    (i) =>
-      i.status === "failed" ||
-      i.status === "interrupted" ||
-      (i.exitCode != null && i.exitCode !== 0),
-  ).length;
+  const nonzero = items.filter(commandHasNonzeroExit).length;
+  const didNotComplete = (item: TranscriptItem) =>
+    !commandHasNonzeroExit(item) &&
+    (item.status === "failed" || item.status === "interrupted");
   return {
     total: items.length,
-    failed,
+    nonzero,
+    incomplete: items.filter(didNotComplete).length,
     running: items.some((i) => i.status === "running"),
-    visible: items.filter(unsettled),
+    visible: items.filter(
+      (item) =>
+        item.status === "running" ||
+        commandHasNonzeroExit(item) ||
+        didNotComplete(item),
+    ),
   };
 }

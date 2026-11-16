@@ -170,6 +170,13 @@ export class NativeHarness implements Harness {
     }
     return preflight(request, nativeEntry(this.id), false);
   }
+  serviceExecution(config: HarnessRequest["config"]) {
+    validateNativePermissions(config);
+    const policy = policyFor(config, "pi");
+    if (this.id !== "pi" || config.access !== "workspace-write" || !policy?.tools?.some(tool => tool === "bash" || tool === "powershell"))
+      throw new Error("This native policy has no verified project-service launcher. Use a Harness with an explicit supported shell policy.");
+    return { harness: this.id, boundary: "device-account" as const };
+  }
   async execute(request: HarnessRequest): Promise<HarnessResult> {
     request.config = withDefaultPermissions(request.config);
     const c = request.workspaceBoundary ? { ...request.config, access: "read-only" as const } : request.config;
@@ -316,6 +323,10 @@ export class NativeHarness implements Harness {
             message: { role: "user", content: conversationInput(request.input) },
           }) + "\n";
       } else if (this.id === "opencode") {
+        const windowsShell = process.platform === "win32";
+        const instructions = request.instructions + (windowsShell && nativeCommands
+          ? "\nThe OpenCode command tool runs Windows PowerShell, even when named bash. Use PowerShell syntax and native Windows paths. For file inspection prefer the native read, glob, and grep tools. In a shell search, ripgrep exit code 1 means no matches; report that result without retrying the same search."
+          : "");
         env.XDG_CONFIG_HOME = path.join(home, "config");
         env.XDG_DATA_HOME = path.join(home, "data");
         env.XDG_STATE_HOME = path.join(home, "state");
@@ -326,6 +337,7 @@ export class NativeHarness implements Harness {
         env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           share: "disabled",
+          ...(windowsShell ? { shell: "powershell.exe" } : {}),
           ...(request.contextWindow?.overrideNative ? {compaction:{auto:true,reserved:request.contextWindow.rawTokens-request.contextWindow.usableTokens}} : {}),
           model: `teamswarm/${c.model}`,
           default_agent: "teamswarm",
@@ -362,7 +374,7 @@ export class NativeHarness implements Harness {
           agent: {
             teamswarm: {
               mode: "primary",
-              prompt: request.instructions,
+              prompt: instructions,
               steps: 64,
             },
           },
@@ -809,6 +821,8 @@ export class NativeHarness implements Harness {
                   text,
                   error: `Native process exited (${code}) without a completion receipt. ${stderr}`,
                 });
+        if (this.id === "opencode" && sessionSeen && result.status === "failed" && !reclaimed)
+          result = { ...result, status: "unknown" };
         // The process ran and ended without loading the session it was asked to resume:
         // resuming the same identity again would fail the same way.
         if (request.sessionId && !sessionSeen && child.pid !== undefined && !stopping &&

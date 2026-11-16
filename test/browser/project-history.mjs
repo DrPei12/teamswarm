@@ -22,7 +22,9 @@ const service = createApp({ dataDir: path.join(root, "data"), apiPort: server.ad
 server.on("request", service.app);
 const { runtime, store: teams } = service;
 const { store, history, records } = runtime;
-let browser;
+let browser, page;
+const errors = [];
+const requestErrors = [];
 try {
   const team = teams.createTeam("Reading workspace", "");
   const settings = runtimeSettings.parse({ expectedVersion: 0, workspace, config: { harness: "codex" } });
@@ -63,11 +65,15 @@ try {
   const artifacts = store.capture(final.work, "Reading guide completed.", []);
   history.delivery(team.id, main.id, history.context(team.id, main.id).nodeId, "Reading guide", { actor: "host", workId: final.work.id, conversationId: mainChat }, artifacts.map(a => a.id), false);
   browser = await chromium.launch({ headless: true,
+    channel: process.env.TEAMSWARM_BROWSER_CHANNEL || undefined,
     ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } : {}) });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: "reduce" });
-  await context.request.post(origin + "/api/control/session", { headers: { Authorization: `Bearer ${service.controlToken}` } });
-  const page = await context.newPage();
-  const errors = []; page.on("pageerror", error => errors.push(error.message));
+  const authentication = await context.request.post(origin + "/api/control/session", { headers: { Authorization: `Bearer ${service.controlToken}` } });
+  assert.ok(authentication.ok(), `Control session returned ${authentication.status()}`);
+  page = await context.newPage();
+  page.on("pageerror", error => errors.push(error.message));
+  page.on("requestfailed", request => requestErrors.push({url:request.url(),error:request.failure()?.errorText}));
+  page.on("response", response => { if (response.status() >= 400) requestErrors.push({url:response.url(),status:response.status()}); });
   const historyUrl = `${origin}/#/team/${team.id}/history`;
   await page.goto(historyUrl);
   const findNode = async title => {
@@ -129,6 +135,14 @@ try {
   assert.deepEqual((await after.json()).teams.find(t => t.id === team.id).historyPositions[adoption.node.id], position);
   assert.deepEqual(errors, []);
   console.log("PASS: adoption documents, source navigation, progress and results, responsive details, and persisted canvas positions");
+} catch (error) {
+  const output = path.resolve('.local/browser-evidence/project-history');
+  mkdirSync(output, {recursive:true});
+  const state = {error:error.message,url:page?.url(),body:await page?.locator('body').innerText(),errors,requestErrors};
+  writeFileSync(path.join(output,'failure.json'),JSON.stringify(state,null,2));
+  await page?.screenshot({path:path.join(output,'failure.png')});
+  console.error(JSON.stringify(state));
+  throw error;
 } finally {
   await browser?.close(); await service.close(); server.closeAllConnections();
   await new Promise(resolve => server.close(resolve)); rmSync(root, { recursive: true, force: true });

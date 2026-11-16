@@ -42,9 +42,8 @@ try {
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(`${origin}/#/team/${team.id}/chat/${chat.id}`);
-  await page.getByRole("button", { name: "Team capabilities", exact: true }).first().click();
-  await page.getByRole("tab", { name: "Team preferences", exact: true }).click();
-  await page.getByRole("button", { name: /Advanced settings/ }).click();
+  await page.getByRole("button", { name: "Execution permissions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Advanced settings →", exact: true }).click();
   await page.getByRole("tab", { name: "Resources and allocation", exact: true }).click();
   const resources = ["pi", "opencode"].map(harness => ({
     id: `budget-${harness}`, version: 1, name: `${harness} resource`, description: "",

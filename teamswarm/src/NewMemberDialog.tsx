@@ -142,6 +142,9 @@ export function NewMemberDialog({
             <MemberPermissionPicker
               teamId={team.id}
               harness={config.harness}
+              sharedModel={
+                !!(execution?.baseUrl || execution?.chatgptAccountId)
+              }
               value={preset}
               includeDefault
               disabled={busy || resolving}

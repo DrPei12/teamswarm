@@ -1,3 +1,4 @@
+import { qwenTeamReview, reviewNativePermission, usesTeamSwarmReview } from "./automatic-permission.js";
 import { nativeAccess } from "./permission-options.js";
 import { randomUUID } from "node:crypto";
 import { conflict } from "../errors.js";
@@ -43,8 +44,8 @@ export class NativePermissions {
     this.settle(p, accepted ? "allow" : "deny");
     return { ...approval, status: accepted ? "accepted" : "declined" };
   }
-  async request(work: Work, attempt: Attempt, input: NativePermissionRequest, signal?: AbortSignal): Promise<"allow" | "deny"> {
-    this.store.assertActive(work.teamId, work.id, attempt.id);
+  async request(work: Work, attempt: Attempt, input: NativePermissionRequest, signal?: AbortSignal, teamFileReview = false): Promise<"allow" | "deny"> {
+    work = this.store.assertActive(work.teamId, work.id, attempt.id);
     if (signal?.aborted || !input.nativeId || !input.tool) return "deny";
     const prior = this.store.db.prepare("SELECT data FROM runtime_native_permissions WHERE attempt_id=? AND native_id=?").get(attempt.id, input.nativeId);
     // A repeated native request never reuses a one-time grant.
@@ -54,6 +55,21 @@ export class NativePermissions {
       workId: work.id, attemptId: attempt.id, memberId: member.id, harness: attempt.config.harness, createdAt: new Date().toISOString(), state: "pending" };
     const body = JSON.stringify(p.input);
     if (Buffer.byteLength(body) > 65536) return "deny";
+    if (usesTeamSwarmReview(attempt.config) || teamFileReview || qwenTeamReview(attempt.config)) {
+      const result = qwenTeamReview(attempt.config) && !teamFileReview
+        ? { decision: "deny" as const, reason: "native_operation_not_allowed" }
+        : attempt.config.access === "workspace-write" && (teamFileReview || attempt.config.baseUrl || attempt.config.chatgptAccountId)
+        ? reviewNativePermission(input, this.store.workspace(work), work.writePaths, teamFileReview)
+        : { decision: "deny" as const, reason: "shared_model_and_write_access_required" };
+      p.state = result.decision;
+      this.store.transaction(() => {
+        this.save(p);
+        this.store.event(work.teamId, "permission.resolved", {
+          id: p.id, nativeId: p.nativeId, state: p.state, policy: "teamswarm-auto", reason: result.reason,
+        }, work, attempt.id);
+      });
+      return result.decision;
+    }
     if (nativeAccess(attempt.config) === "full-access") {
       p.state = "allow"; this.save(p);
       this.store.event(work.teamId, "permission.resolved", { id: p.id, nativeId: p.nativeId, state: "allow", policy: "full-access" }, work, attempt.id);

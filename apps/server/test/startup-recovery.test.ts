@@ -38,14 +38,16 @@ test("restart recovery releases undispatched attempts, holds uncertain same-boot
     await service.close();
     service = createApp({ dataDir, harnesses: [] });
     for (const id of [prepared, preparing]) {
-      assert.equal(service.runtime.store.get<Work>("works", team.id, id).status, "recovery_required");
-      const recovered = await service.runtime.reconcile(team.id, id);
-      assert.equal(recovered.status, "interrupted");
-      assert.equal(recovered.result, null);
-      assert.equal(service.runtime.retry(team.id, id, recovered.revision).status, "queued");
+      const pending = service.runtime.store.get<Work>("works", team.id, id);
+      assert.equal(pending.status, "recovery_required");
+      const retried = await service.runtime.retryAfterRecovery(team.id, id, pending.revision);
+      assert.equal(retried.status, "queued");
+      assert.equal(retried.result, null);
+      assert.equal(retried.attemptId, null);
     }
     for (const id of [uncertain, legacy]) {
-      await assert.rejects(service.runtime.reconcile(team.id, id), (error: any) => error.code === "recovery_unknown");
+      const pending = service.runtime.store.get<Work>("works", team.id, id);
+      await assert.rejects(service.runtime.retryAfterRecovery(team.id, id, pending.revision), (error: any) => error.code === "recovery_unknown");
       assert.equal(service.runtime.store.get<Work>("works", team.id, id).status, "recovery_required");
     }
     if (preboot) assert.equal((await service.runtime.reconcile(team.id, preboot)).status, "interrupted");

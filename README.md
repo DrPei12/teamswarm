@@ -25,25 +25,25 @@ Download the package for your platform and `SHA256SUMS.txt` from the same releas
 
 | Platform | Format | Availability |
 |---|---|---|
-| Windows x64 | NSIS `.exe` | [Windows release](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.0) |
+| Windows x64 | NSIS `.exe` | [Windows release](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.1) |
 | Linux x64 | AppImage, DEB | Build from source |
-| macOS Apple Silicon | DMG, ZIP | [macOS pre-release](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.0-macos.1) |
+| macOS Apple Silicon | DMG, ZIP | [macOS release](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.1) |
 
 The Windows installer is unsigned and Windows displays an unknown publisher. See the [Code signing policy](#code-signing-policy). Compare its hash with the release checksum file:
 
 ```powershell
-Get-FileHash .\TeamSwarm-0.6.0-Windows-x64.exe -Algorithm SHA256
+Get-FileHash .\TeamSwarm-0.6.1-Windows-x64.exe -Algorithm SHA256
 ```
 
 Run the installer, then open **TeamSwarm** from the Start menu. Installation is per user. For upgrades, close the application, [back up service data](#data-and-recovery), and run the new installer using the same OS account and installation directory. Updates are installed manually. Uninstalling preserves service data and your project files.
 
-**macOS Apple Silicon:** Download the [DMG](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0-macos.1/TeamSwarm-0.6.0-macOS-arm64.dmg) or [ZIP](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0-macos.1/TeamSwarm-0.6.0-macOS-arm64.zip). Open the DMG and copy **TeamSwarm.app** to Applications, or extract the ZIP and copy the app there. Compare the downloaded file with the checksum from the macOS release:
+**macOS Apple Silicon:** Download the [DMG](https://github.com/DrPei12/teamswarm/releases/download/v0.6.1/TeamSwarm-0.6.1-macOS-arm64.dmg) or [ZIP](https://github.com/DrPei12/teamswarm/releases/download/v0.6.1/TeamSwarm-0.6.1-macOS-arm64.zip). Open the DMG and copy **TeamSwarm.app** to Applications, or extract the ZIP and copy the app there. Compare the downloaded file with the checksum from the macOS release:
 
 ```sh
-shasum -a 256 TeamSwarm-0.6.0-macOS-arm64.dmg
+shasum -a 256 TeamSwarm-0.6.1-macOS-arm64.dmg
 ```
 
-This macOS pre-release has no Developer ID signature or Apple notarization. If macOS blocks its first launch, see [Apple's instructions for approving an individual app](https://support.apple.com/en-gb/102445).
+This macOS release has no Developer ID signature or Apple notarization. If macOS blocks its first launch, see [Apple's instructions for approving an individual app](https://support.apple.com/en-gb/102445).
 
 <a id="first-project"></a>
 ## Your first project
@@ -51,7 +51,7 @@ This macOS pre-release has no Developer ID signature or Apple notarization. If m
 Use the synthetic [task report example](https://github.com/DrPei12/teamswarm/tree/main/examples/task-report) to complete a task, check its output and continue the same work.
 
 1. Copy `tasks.json`, `verify.mjs` and `verify-followup.mjs` from the example into a project folder.
-2. Open TeamSwarm, create a team and select that project folder in its execution settings.
+2. Open TeamSwarm and choose **New chat**. Use **Choose project** above the composer to select the folder; that conversation becomes the team's Host. A conversation without a folder remains independent.
 3. Connect an existing supported account or configure an [API connection](#harnesses-and-models). Check that the selected harness and resource are available.
 4. Send this task to the Host:
 
@@ -224,6 +224,9 @@ Replace the example paths with your own; quote paths containing spaces. Installe
 Diagnostics include build identity, counts, work states and SQLite integrity, omitting conversation bodies, project paths and credential values. Backups contain the service database, attachments and service-owned configuration/session files. Store them privately. Restore verifies file hashes and requires a new directory; set `TEAM_DATA_DIR` to it and inspect the restored team before continuing. Native attempts with uncertain outcomes still require recovery.
 
 <a id="run-from-source"></a>
+
+This development checkout uses an independent profile under `.local/rework/default/` on port 4427. Model accounts and projects are configured separately from the installed desktop app.
+
 ## Run from source
 
 Use Node.js 24 and run these commands in the repository root:
@@ -231,10 +234,12 @@ Use Node.js 24 and run these commands in the repository root:
 ```sh
 npm ci
 npm run build
-npm start
+npm run start:rework
 ```
 
-The launcher opens a connected browser at `http://127.0.0.1:4317`. Use `TEAM_API_PORT` for another port and `TEAM_DATA_DIR` for a separate workspace. One service owns a data directory. `npm run dev` starts the API on 4318 and Vite on 4317.
+This launcher opens a connected browser at `http://127.0.0.1:4427`. Use `TEAMSWARM_REWORK_PORT` for another port and `TEAMSWARM_REWORK_PROFILE` for another isolated profile under `.local/rework/`.
+
+For the regular product launcher, `npm start` uses `TEAM_API_PORT` (4317 by default) and `TEAM_DATA_DIR`. One service owns a data directory. `npm run dev` starts the API on 4318 and Vite on 4317.
 
 After building, install and inspect selected harnesses:
 
@@ -286,12 +291,12 @@ The report includes event count, peak occupied work, latest terminal states, exc
 
 Use [Issues](https://github.com/DrPei12/teamswarm/issues) for reproducible problems, with version, OS, harness/model, launch method and redacted diagnostics. For vulnerabilities, use **Security → Report a vulnerability** when available; otherwise, ask in an issue for a private contact channel without disclosing the details. Exclude credentials, private transcripts and personal project files from reports.
 
-Focused pull requests are welcome. Run checks appropriate to the changed behavior, preserve data and execution recovery, and keep both READMEs consistent. UI changes should be exercised in both languages and relevant window sizes. Contributions are provided under Apache-2.0; retain third-party attribution.
+Focused pull requests are welcome. Run checks appropriate to the changed behavior, preserve data and execution recovery, and keep both READMEs consistent. UI changes should be exercised in both languages and relevant window sizes. Submit contributions under the MIT License and retain third-party attribution.
 
 <a id="code-signing-policy"></a>
 ## Code signing policy
 
-Windows installers are currently unsigned. The macOS pre-release has no Developer ID signature or Apple notarization. TeamSwarm is applying to [SignPath Foundation](https://signpath.org/) for free Windows code signing through [SignPath.io](https://about.signpath.io/), using a certificate issued to SignPath Foundation.
+Windows installers are currently unsigned. The macOS release has no Developer ID signature or Apple notarization. TeamSwarm is applying to [SignPath Foundation](https://signpath.org/) for free Windows code signing through [SignPath.io](https://about.signpath.io/), using a certificate issued to SignPath Foundation.
 
 The project maintainer, contribution reviewer and release approver is [DrPei12](https://github.com/DrPei12). Signing access requires multi-factor authentication, and every signing request requires manual approval by the release approver.
 
@@ -300,4 +305,4 @@ Signing requests cover TeamSwarm's own application executable and Windows instal
 <a id="license"></a>
 ## License
 
-TeamSwarm uses [Apache-2.0](LICENSE), allowing commercial use, modification and redistribution. Third-party software retains its respective licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+TeamSwarm's own source code in this repository is available under the [MIT License](LICENSE). Each release includes its applicable license. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party licenses.

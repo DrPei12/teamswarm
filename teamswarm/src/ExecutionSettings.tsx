@@ -67,15 +67,13 @@ export function Startup({
   const { t } = useI18n();
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
-  const create = async (form: HTMLFormElement) => {
+  const create = async () => {
     if (busy) return;
     setBusy(true);
     setError("");
     try {
-      const team = await product.createTeam(
-        String(new FormData(form).get("name")).trim(),
-      );
-      location.hash = `/team/${team.id}/agent`;
+      const chat = await product.createIndependentChat(t("New chat"));
+      location.hash = `/team/${chat.teamId}/chat/${chat.id}`;
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -136,24 +134,12 @@ export function Startup({
           </>
         ) : (
           <>
-            <h1>{t("Create your first Team")}</h1>
             <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void create(e.currentTarget);
+              onSubmit={(event) => {
+                event.preventDefault();
+                void create();
               }}
             >
-              <label>
-                {t("Team name")}
-                <input
-                  autoFocus
-                  name="name"
-                  placeholder={t("e.g. Design")}
-                  required
-                  maxLength={80}
-                  autoComplete="off"
-                />
-              </label>
               {error && (
                 <p role="alert" className="form-error">
                   {t(error)}
@@ -165,7 +151,7 @@ export function Startup({
                 ) : (
                   <ArrowRight size={17} />
                 )}{" "}
-                {t("Create team")}
+                {t("New chat")}
               </button>
             </form>
             <div className="startup-language">
@@ -199,6 +185,7 @@ type ExecutionSettingsProps = {
   teamId: string;
   workspace: Workspace;
   initialTab?: "harnesses" | "connections" | "runtime";
+  scope?: "team" | "global";
 };
 export function ExecutionSettings(props: ExecutionSettingsProps) {
   return props.open ? <ExecutionSettingsContent {...props} /> : null;
@@ -772,6 +759,12 @@ function ManualExecutionSettings({
                 <MemberPermissionPicker
                   teamId={teamId}
                   harness={settings.config.harness}
+                  sharedModel={
+                    !!(
+                      settings.config.baseUrl ||
+                      settings.config.chatgptAccountId
+                    )
+                  }
                   value={currentMemberPreset(settings.config)}
                   disabled={busy}
                   onChange={async (preset) => {
@@ -957,9 +950,13 @@ export function ExecutionActivity({
   const active = works.filter((w) =>
     ["queued", "running", "stopping"].includes(w.status),
   );
-  const issue = works.find((w) =>
-    ["failed", "rejected", "recovery_required"].includes(w.status),
-  );
+  const issue =
+    works.find((w) =>
+      ["failed", "rejected", "recovery_required"].includes(w.status),
+    ) ??
+    (!active.length
+      ? works.find((w) => w.status === "interrupted")
+      : undefined);
   const action = async (path: string, body: unknown = {}) => {
     if (busy) return;
     setBusy(true);
@@ -973,8 +970,8 @@ export function ExecutionActivity({
     }
   };
   const status =
-    issue?.status === "recovery_required"
-      ? "Check interrupted execution"
+    issue?.status === "recovery_required" || issue?.status === "interrupted"
+      ? "Interrupted"
       : run?.state === "paused"
         ? "Paused"
         : active.some((w) => w.status === "stopping")
@@ -1040,20 +1037,13 @@ export function ExecutionActivity({
                 <button
                   disabled={busy}
                   onClick={() =>
-                    void action(
-                      `works/${issue.id}/${issue.status === "recovery_required" ? "reconcile" : "retry"}`,
-                      issue.status === "recovery_required"
-                        ? {}
-                        : { expectedRevision: issue.revision },
-                    )
+                    void action(`works/${issue.id}/retry`, {
+                      expectedRevision: issue.revision,
+                    })
                   }
                 >
                   <RotateCcw size={14} />
-                  {t(
-                    issue.status === "recovery_required"
-                      ? "Check status"
-                      : "Retry",
-                  )}
+                  {t("Retry")}
                 </button>
               )}
             </div>

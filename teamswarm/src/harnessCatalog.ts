@@ -91,7 +91,7 @@ export function loadHarnessCatalog() {
   return (loading ??= import("./service")
     .then(({ api }) =>
       api<{
-        harnesses: { id: string; name?: string; manifest?: HarnessManifest }[];
+        harnesses: Pick<HarnessCatalogEntry, "id" | "name" | "manifest">[];
       }>("/harnesses"),
     )
     .then((result) => {

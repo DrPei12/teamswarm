@@ -18,6 +18,7 @@ import { inspectExecution, type PreflightInput } from './preflight.js';
 import { prepareExecutionEnvironment } from './execution-environment.js';
 import { packageFor } from './device-tools.js';
 import { systemBootTime, rebootConfirmsTermination } from './native-recovery.js';
+import { declaredPermissions } from "./admission.js";
 import { NativeTranscript } from './native-transcript.js';
 
 export interface AcpPackageOptions {
@@ -28,6 +29,7 @@ export interface AcpPackageOptions {
     args: string[]; env?: NodeJS.ProcessEnv; sessionParams?: Record<string, unknown>;
   }> | { args: string[]; env?: NodeJS.ProcessEnv; sessionParams?: Record<string, unknown> };
   validateConfig?(config: ExecutionConfig): void;
+  allowsSharedWorkspace?(input: PreflightInput): boolean;
 }
 type Active = { child: ChildProcessWithoutNullStreams; rpc: AcpSession; done: Promise<HarnessResult>; finish(result: HarnessResult): Promise<void>; stopping: boolean; turnId: string };
 
@@ -41,6 +43,9 @@ export class AcpHarness implements Harness {
   constructor(readonly manifest: HarnessManifest, private options: AcpPackageOptions) {
     this.id = manifest.id;
     this.capabilities = { sessions: true, resume: manifest.session.resume, streaming: true, dynamicTools: true, interrupt: true, nativeChecks: true, dispatchTracking: true, customModel: true, customProvider: !manifest.models.nativeOnly, ...(manifest.models.preferredProtocol ? { protocol: manifest.models.preferredProtocol } : {}), isolation: String(manifest.description.isolation[process.platform] ?? manifest.description.isolation.default ?? 'Native permissions') };
+  }
+  permissionOptions() {
+    return declaredPermissions(this.manifest) ?? { defaultId: "", options: [] };
   }
   get sessionScope() { return `${sessionStoreScope(nativeHome(this.id))}:acp:${this.manifest.packageVersion}`; }
   resources() { return [...[...this.active].map(([id, a]) => [id, a.child] as const), ...this.unconfirmed].flatMap(([id, child]) => child.pid ? [{ id: `${this.id}:${id}`, pid: child.pid, sessions: 1 }] : []); }
@@ -60,7 +65,7 @@ export class AcpHarness implements Harness {
   async preflight(request: PreflightInput) {
     try {
       this.validateConfig(request.config);
-      if (!request.isolatedWorkspace) throw new Error('native_workspace_required: assign an isolated member working directory.');
+      if (!request.isolatedWorkspace && !this.options.allowsSharedWorkspace?.(request)) throw new Error('native_workspace_required: assign an isolated member working directory.');
       const identity = inspectExecution(request, nativeEntry(this.id));
       const environment = prepareExecutionEnvironment(request.scratchDirectory, request.requirements);
       return { passed: true, identity, environment, modelRequests: 0, nativeRuntime: this.id, isolation: this.capabilities.isolation };
@@ -141,7 +146,7 @@ export class AcpHarness implements Harness {
         if (event.event?.sessionUpdate === 'agent_message_chunk') emit('message.delta', { text: event.event.content?.text ?? '' });
       }, result => { void finish(result); }, { name: this.manifest.name, eventType: 'acp.event', prompt: `${request.instructions}\n\n${request.input}`, sessionParams: launch.sessionParams,
         configure: this.options.configureSession ? (call, sessionId, description) => this.options.configureSession!(request, call, sessionId, description) : undefined,
-        denyNativePermissions: this.manifest.models.nativeOnly && request.config.access === 'read-only',
+        denyNativePermissions: request.config.access === 'read-only' && !(this.id === 'antigravity' && request.modelRoute),
       });
       this.active.set(id, { child, rpc, done, finish, stopping: false, turnId });
       child.stdin.on('error', () => {});

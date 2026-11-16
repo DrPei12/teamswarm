@@ -70,6 +70,7 @@ export class RuntimeResources {
     private sampler = deviceSampler(),
     private physicalAvailable = freemem,
     private now = Date.now,
+    private releaseIdle: () => boolean = () => true,
   ) {
     store.db.exec(`CREATE TABLE IF NOT EXISTS runtime_process_groups (
       id TEXT PRIMARY KEY, harness TEXT NOT NULL, pid INTEGER NOT NULL, state TEXT NOT NULL,
@@ -404,7 +405,7 @@ export class RuntimeResources {
       }
       if (this.closed) return;
       const results = await Promise.allSettled(
-        [...this.harnesses.values()].map((h) =>
+        (this.releaseIdle() ? [...this.harnesses.values()] : []).map((h) =>
           h.maintain?.({ now: this.now(), pressure: false }),
         ),
       );
@@ -476,6 +477,33 @@ export class RuntimeResources {
       pendingCpu,
       forecasts,
       ...(this.error ? { error: this.error } : {}),
+    };
+  }
+  processMetrics(pid: number | null) {
+    if (!pid || this.sample.processCoverage === "unavailable") return {};
+    const pids = new Set([pid]);
+    for (let again = true; again;) {
+      again = false;
+      for (const process of this.sample.processes)
+        if (pids.has(process.parentPid) && !pids.has(process.pid)) {
+          pids.add(process.pid);
+          again = true;
+        }
+    }
+    const members = this.sample.processes.filter((process) =>
+      pids.has(process.pid),
+    );
+    if (!members.length) return {};
+    return {
+      workingSetBytes: members.reduce(
+        (bytes, process) => bytes + process.workingSet,
+        0,
+      ),
+      privateBytes: members.reduce(
+        (bytes, process) => bytes + process.privateBytes,
+        0,
+      ),
+      processCount: members.length,
     };
   }
   state(teamId?: string) {

@@ -35,7 +35,7 @@ test('each built-in package validates and retains its native permission vocabula
   assert.throws(() => nativePermissions.parse({ harness: 'opencode', permission: { bash: 'skip' } }));
 });
 test('an external package registers permissions, routing, Host sections and connection resolution without core branches', async () => {
-  const adapters = await loadHarnesses(JSON.stringify([fileURLToPath(new URL('../../../harness-packages/qwen-code/index.mjs', import.meta.url))]));
+  const adapters = await loadHarnesses(JSON.stringify([fileURLToPath(new URL('../../../harness-packages/qwen-code/index.mjs', import.meta.url))]), 'inspection');
   try {
     const qwen = adapters.find(h => h.id === 'qwen-code')!;
     assert.ok(qwen); assert.equal(harnessManifest(qwen.id)?.driver, 'acp');
@@ -46,7 +46,7 @@ test('an external package registers permissions, routing, Host sections and conn
     assert.equal(readOnly.permissions?.approvalMode, 'plan');
     validateNativePermissions(readOnly); assert.equal(c.permissions?.approvalMode, 'default');
     assert.throws(() => validateNativePermissions({ ...c, access: 'read-only' }));
-    assert.throws(() => nativePermissions.parse({ harness: qwen.id, approvalMode: 'yolo' }));
+    assert.throws(() => nativePermissions.parse({ harness: qwen.id, approvalMode: 'always-allow' }));
     const description = harnessDescription(qwen);
     assert.equal(description.name, 'Qwen Code');
     assert.deepEqual((description.sections.permissions as any).schema, harnessManifest(qwen.id)!.permissions.schema);
@@ -112,4 +112,33 @@ test('UHP malformed streams preserve their response identity for reconciliation'
   await assert.rejects(wrongVersion.discover(), /version/);
   assert.throws(() => new UhpClient('http://remote.example.test'), /HTTPS/);
   assert.throws(() => new UhpClient('https://user:key@example.test'), /credentials/);
+});
+
+test("full integration requires observed shared model and four-mode results for the exact artifact", async () => {
+  const { completeChecks, contractIssues, evaluatePackage } = await import("../src/runtime/harness/admission.js");
+  const modulePath = fileURLToPath(new URL("../../../harness-packages/qwen-code/index.mjs", import.meta.url));
+  const adapters = await loadHarnesses(JSON.stringify([modulePath]), "inspection");
+  try {
+    const qwen = adapters.find(adapter => adapter.id === "qwen-code")!;
+    const manifest = harnessManifest("qwen-code")!;
+    const actual = { adapterSha256: "a".repeat(64), runtimeSha256: "b".repeat(64), runtimeVersion: "0.26.4" };
+    const report = { schemaVersion: 1, contractVersion: 1, harness: manifest.id, packageVersion: manifest.packageVersion,
+      platform: process.platform, arch: process.arch, ...actual,
+      checks: Object.fromEntries(completeChecks.map(check => [check, { passed: true, source: "native", observation: "Test evidence" }])),
+    };
+    assert.deepEqual(contractIssues(manifest), []);
+    assert.equal(evaluatePackage(manifest, qwen, undefined, actual).status, "unverified");
+    assert.deepEqual(evaluatePackage(manifest, qwen, { ...report,
+      checks: { ...report.checks, autoDeny: { passed: true, source: "fixture" } },
+    }, actual), { status: "unverified", issues: ["autoDeny"] });
+    assert.equal(evaluatePackage(manifest, qwen, report, { ...actual, runtimeSha256: "c".repeat(64) }).status, "unverified");
+    assert.equal(evaluatePackage(manifest, qwen, report, actual).status, "complete");
+    const antigravity = adapters.find(adapter => adapter.id === "antigravity")!;
+    assert.equal(evaluatePackage(harnessManifest("antigravity")!, antigravity, report, actual).status, "limited");
+    const duplicated = structuredClone(manifest);
+    duplicated.integration!.presets.auto = duplicated.integration!.presets.manual;
+    assert.match(contractIssues(duplicated).join(" "), /distinct/);
+  } finally {
+    await Promise.all(adapters.map(adapter => adapter.close()));
+  }
 });

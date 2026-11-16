@@ -30,8 +30,11 @@ export function validateNativePermissions(config: ExecutionConfig) {
 
 /** Temporary dialogue/review roles narrow the chosen native policy, never the saved member policy. */
 export function readOnlyPermissions(config: ExecutionConfig): ExecutionConfig {
+  const manifest = harnessManifest(config.harness);
+  const preset = manifest?.integration?.presets["read-only"];
+  if (preset) return { ...config, access: "read-only", permissions: { ...preset, harness: config.harness } };
   if (!config.permissions) return { ...config, access: "read-only" };
-  const rules = harnessManifest(config.harness)?.permissions.readOnly;
+  const rules = manifest?.permissions.readOnly;
   const permissions = { ...config.permissions, ...rules?.set };
   for (const [key, excluded] of Object.entries(rules?.exclude ?? {})) {
     const values = permissions[key];

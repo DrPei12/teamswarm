@@ -3,8 +3,8 @@ import type { AttemptExecutionSnapshot, ResourceSelection } from "./allocation.j
 
 export type Access = "read-only" | "workspace-write";
 export type BuiltinNativePermissions =
-  | { harness: "antigravity"; mode: "plan" | "default" | "bypassPermissions" }
-  | { harness: "codex"; approvalPolicy: "untrusted" | "never" | "on-request"; sandbox?: Access | "danger-full-access" }
+  | { harness: "antigravity"; mode: "plan" | "default" | "teamswarmAuto" | "bypassPermissions" }
+  | { harness: "codex"; approvalPolicy: "untrusted" | "never" | "on-request"; approvalsReviewer?: "auto_review"; sandbox?: Access | "danger-full-access" }
   | { harness: "claude-code"; mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions"; allow?: string[]; deny?: string[] }
   | { harness: "grok"; mode: "default" | "acceptEdits" | "plan" | "dontAsk" | "auto" | "bypassPermissions"; allow?: string[]; deny?: string[] }
   | { harness: "pi"; tools: ("read" | "grep" | "find" | "ls" | "write" | "edit" | "bash" | "powershell")[] }
@@ -106,7 +106,7 @@ export interface Member {
   allocationVersion?: number;
   /** Host defaults are branch-scoped and affect future Attempts only.
    * A null selection with config is a composer override; without config it follows Team settings. */
-    hostSelections?: Record<string, { revision: number; selection: ResourceSelection | null; selectionSource?: "runtime" | "resource-panel"; config?: ExecutionConfig; permissionPreset?: "read-only" | "full-access" }>;
+    hostSelections?: Record<string, { revision: number; selection: ResourceSelection | null; selectionSource?: "runtime" | "resource-panel"; config?: ExecutionConfig; permissionPreset?: "read-only" | "manual" | "auto" | "full-access" }>;
 }
 export interface Requirement {
   id: string;
@@ -234,6 +234,8 @@ export interface ExecutionRequirements {
   fileLinks?: boolean;
 }
 export interface MemberMessage {
+  sourceEventId?: string;
+  passive?: boolean;
   /** Notices and replies do not require an acknowledgement loop. Missing is legacy request behavior. */
   replyExpected?: boolean;
   sourceWorkId?: string;
@@ -499,6 +501,7 @@ export interface HarnessResult {
 }
 
 export interface Harness {
+  serviceExecution?(config: ExecutionConfig): import("./services.js").ServiceExecutionPolicy;
   id: string;
   permissionOptions?(): PermissionOptions;
   readonly sessionScope?: string;
@@ -508,6 +511,7 @@ export interface Harness {
   preflight?(request: {
     isolatedWorkspace?: boolean;
     modelCredentialPresent?: boolean;
+    hostWorkspaceWrite?: boolean;
     workspace: string;
     config: ExecutionConfig;
     writePaths?: string[];

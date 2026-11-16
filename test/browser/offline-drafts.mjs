@@ -51,6 +51,7 @@ try {
   );
   browser = await chromium.launch({
     headless: true,
+    channel: process.env.TEAMSWARM_BROWSER_CHANNEL || undefined,
     ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH
       ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH }
       : {}),

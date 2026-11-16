@@ -29,7 +29,7 @@ export async function inspectHarnesses(harnesses, requested = []) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const { loadHarnesses } = await import("../apps/server/dist/runtime/harness/registry.js");
-    const results = await inspectHarnesses(await loadHarnesses(), process.argv.slice(2));
+    const results = await inspectHarnesses(await loadHarnesses(undefined, "inspection"), process.argv.slice(2));
     console.log(JSON.stringify(results, null, 2));
     if (results.some((result) => result.available === false || result.error))
       process.exitCode = 1;

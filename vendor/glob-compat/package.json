@@ -12,7 +12,7 @@
     },
     "./package.json": "./package.json"
   },
-  "license": "Apache-2.0",
+  "license": "MIT",
   "dependencies": {
     "glob-upstream": "npm:glob@14.0.2"
   }

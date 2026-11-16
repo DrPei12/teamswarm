@@ -5,6 +5,7 @@ import { z } from "zod";
 import { badRequest, conflict, notFound, ServiceError } from "../errors.js";
 import { activeStates, hash, overlaps, type RuntimeStore } from "./store.js";
 import { ProjectSnapshots } from "./project-snapshots.js";
+import { conversationMessageSql } from "./resource-notifications.js";
 import type {
   Attempt,
   Member,
@@ -778,6 +779,59 @@ export class ProjectHistory {
       branch = this.branch(run.teamId, branch.id);
     }
     run.contextNodeId = branch.headNodeId;
+  }
+  forkConversation(teamId: string, parentId: string, name: string, messageId?: string, before = false) {
+    const parent = this.forConversation(teamId, parentId);
+    const cutoff = messageId ? this.store.db.prepare(
+      `SELECT *, rowid AS seq FROM messages WHERE id=? AND conversation_id=? AND ${conversationMessageSql}`,
+    ).get(messageId, parentId) : undefined;
+    if (messageId && (!cutoff || cutoff.role !== (before ? "user" : "assistant"))) throw notFound();
+    const sourceRun = cutoff && before ? this.store.list<Run>("runs", teamId).find(run =>
+      run.conversationId === parentId && run.sourceMessageId === messageId) : undefined;
+    const attempt = cutoff && !before ? this.store.list<Attempt>("attempts", teamId)
+      .find(a => cutoff.client_request_id === "runtime:" + a.id) : undefined;
+    let base = this.node(teamId, attempt?.contextNodeId ?? sourceRun?.contextNodeId ?? parent.headNodeId);
+    // Imported messages do not carry an Attempt. Walk the parent lineage to the
+    // definition that existed at the selected message.
+    if (cutoff && !attempt?.contextNodeId && !sourceRun?.contextNodeId)
+      while (base.parentNodeId && base.createdAt > String(cutoff.created_at))
+        base = this.node(teamId, base.parentNodeId);
+    const conversation = this.store.teams.createConversation(teamId, name, null)!;
+    const branchId = randomUUID();
+    const node: ProjectNode = {
+      id: randomUUID(), teamId, branchId, parentNodeId: base.id, kind: "fork", title: name,
+      documents: base.documents, contextVersion: base.contextVersion, workspaceSnapshotId: null,
+      artifactIds: [], source: { actor: "user", conversationId: parentId, messageIds: messageId ? [messageId] : [] },
+      createdAt: now(),
+    };
+    const branch: ProjectBranch = {
+      id: branchId, teamId, name, headNodeId: node.id, baseNodeId: base.id,
+      workspace: parent.workspace, createdAt: now(),
+    };
+    this.insert("branches", branch);
+    this.insert("nodes", node);
+    this.store.db.prepare("INSERT INTO project_conversations VALUES(?,?,?)").run(conversation.id, teamId, branchId);
+    const history = this.store.db.prepare(`
+        SELECT * FROM messages WHERE conversation_id=? AND ${conversationMessageSql}
+        ${cutoff ? `AND (created_at < ? OR (created_at=? AND rowid ${before ? "<" : "<="} ?))` : ""}
+        ORDER BY created_at,rowid`).all(parentId, ...(cutoff ? [String(cutoff.created_at), String(cutoff.created_at), Number(cutoff.seq)] : []));
+    const add = this.store.db.prepare(
+      "INSERT INTO messages(id,conversation_id,role,content,created_at,delivery) VALUES(?,?,?,?,?,?)",
+    );
+    const metadata = this.store.db.prepare("SELECT data FROM product_message_details WHERE message_id=?");
+    const copyMetadata = this.store.db.prepare("INSERT INTO product_message_details VALUES(?,?)");
+    for (const message of history) {
+      const id = randomUUID();
+      add.run(id, conversation.id, String(message.role), String(message.content), String(message.created_at), String(message.delivery));
+      const details = metadata.get(String(message.id));
+      if (details) {
+        const value = JSON.parse(String(details.data));
+        delete value.legacyId;
+        copyMetadata.run(id, JSON.stringify(value));
+      }
+    }
+    this.store.event(teamId, "project.branch_created", { branchId, nodeId: node.id, fromNodeId: base.id, conversationId: conversation.id });
+    return { branch, conversation };
   }
   fork(
     teamId: string,

@@ -157,7 +157,8 @@
               "workspace-write",
               "danger-full-access"
             ]
-          }
+          },
+          "approvalsReviewer": { "const": "auto_review" }
         },
         "required": [
           "harness",
@@ -527,6 +528,7 @@
               "danger-full-access"
             ]
           },
+          "approvalsReviewer": { "const": "auto_review" },
           "approval": {
             "type": "string",
             "enum": [
@@ -722,9 +724,8 @@
     "packageVersion": "1.0.0",
     "driver": "acp",
     "models": {
-      "protocols": [],
-      "preferredProtocol": null,
-      "nativeOnly": true,
+      "protocols": ["chat-completions"],
+      "preferredProtocol": "chat-completions",
       "nativeLogin": true,
       "nativeEffort": {
         "values": [
@@ -754,6 +755,7 @@
             "enum": [
               "plan",
               "default",
+              "teamswarmAuto",
               "bypassPermissions"
             ]
           }
@@ -776,7 +778,7 @@
     "description": {
       "execution": {
         "runtime": "Antigravity CLI ACP",
-        "strategy": "The official Antigravity CLI owns its native account, model calls, tools and session history.",
+        "strategy": "The official Antigravity CLI owns its tools and sessions. Model requests use native sign-in or the configured TeamSwarm model connection.",
         "installUrl": "https://antigravity.google/docs/cli/acp/"
       },
       "permissions": {

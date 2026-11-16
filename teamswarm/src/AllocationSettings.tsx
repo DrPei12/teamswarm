@@ -637,7 +637,9 @@ function ResourceForm({
           };
           if (
             permissionPreset === "read-only" ||
-            permissionPreset === "full-access"
+            permissionPreset === "full-access" ||
+            permissionPreset === "manual" ||
+            permissionPreset === "auto"
           )
             submitted.config = await product.resolvePermissionConfiguration(
               teamId,
@@ -918,6 +920,7 @@ function ResourceForm({
           <MemberPermissionPicker
             teamId={teamId}
             harness={harness}
+            sharedModel={subscriptionMode || !!baseUrl.trim()}
             value={permissionPreset}
             disabled={saving}
             onChange={(preset) => {

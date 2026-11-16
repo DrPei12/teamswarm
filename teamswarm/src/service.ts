@@ -67,8 +67,11 @@ export async function api<T>(
   if (url === "/product" && response.headers.get("etag"))
     snapshotCache = { tag: response.headers.get("etag")!, value: payload };
   const changedCapabilities =
-    method === "PUT" && url.match(/^\/teams\/([^/]+)\/capabilities$/);
-  if (changedCapabilities)
+    method === "PUT" &&
+    url.match(/^\/teams\/([^/]+)\/(?:capabilities|capability-overrides)$/);
+  if (method === "PUT" && url === "/global/capabilities")
+    invalidateModelCatalog();
+  else if (changedCapabilities)
     invalidateModelCatalog(decodeURIComponent(changedCapabilities[1]));
   if (
     (method !== "GET" &&
@@ -544,13 +547,19 @@ class ProductClient {
     await this.refresh();
     return result;
   }
-  async createTeam(name: string) {
+  async createIndependentChat(title: string) {
+    return this.command<{ id: string; teamId: string }>(
+      "/product/independent-conversations",
+      { title, clientRequestId: crypto.randomUUID() },
+    );
+  }
+  async createTeam(name: string, workspace?: string) {
     const key = "teamswarm.create-team.pending";
     const previous = JSON.parse(inputStorage.getItem(key) ?? "null");
     const input =
-      previous?.name === name
+      previous?.name === name && previous?.workspace === workspace
         ? previous
-        : { name, clientRequestId: crypto.randomUUID() };
+        : { name, workspace, clientRequestId: crypto.randomUUID() };
     inputStorage.setItem(key, JSON.stringify(input));
     const result = await this.command<{ id: string; mainChatId?: string }>(
       "/product/teams",

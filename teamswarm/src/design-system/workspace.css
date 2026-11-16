@@ -127,15 +127,56 @@
 .team-views .nav-row {
   padding-left: 8px;
 }
-.recent-chats {
-  padding-top: var(--cds-gap-sm);
+.team-view-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
 }
-.recent-chats .nav-row {
-  padding-left: 10px;
-  font-size: calc(14px * var(--font-scale));
+.team-view-row > .nav-row {
+  flex: 1;
+  min-width: 0;
+}
+.host-branches-toggle {
+  flex: none;
+}
+.host-branches {
+  list-style: none;
+  margin: 0 0 0 14px;
+  padding: 0 0 0 12px;
+}
+.host-branches > li {
+  position: relative;
+  min-width: 0;
+}
+.host-branches > li::before {
+  position: absolute;
+  content: "";
+  left: -12px;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--line);
+}
+.host-branches > li:last-child::before {
+  bottom: auto;
+  height: 14px;
+}
+.host-branches > li::after {
+  position: absolute;
+  content: "";
+  left: -12px;
+  top: 14px;
+  width: 10px;
+  border-top: 1px solid var(--line);
+}
+.host-branch-link {
+  width: 100%;
+  min-width: 0;
   color: var(--secondary);
 }
-.recent-chats .nav-row > span {
+.host-branch-link > svg {
+  flex: none;
+}
+.host-branch-link > span {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1766,5 +1807,144 @@ html[data-pane-dragging] * {
   .nav-row,
   .team-heading .nav-row .team-mark {
     transition: none;
+  }
+}
+
+.host-branch-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.host-branch-row > .nav-row {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+.host-branch-row > .icon-button {
+  flex: none;
+}
+.host-side-chats {
+  flex: 0 1 280px;
+  width: min(280px, 40vw);
+  padding: 12px;
+  border-inline-start: 1px solid var(--border);
+  overflow: auto;
+}
+.host-side-chats > header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.host-side-chats > header strong {
+  flex: 1;
+}
+.composer-workspace {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.composer-workspace > svg,
+.composer-folder > svg {
+  flex: none;
+}
+.composer-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  border-radius: 8px;
+}
+.composer-folder:hover {
+  background: var(--surface-muted, #8881);
+}
+.composer-folder > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.host-message-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 5px;
+  opacity: 0.68;
+}
+.host-message-actions:hover,
+.host-message-actions:focus-within {
+  opacity: 1;
+}
+.host-message-actions time {
+  font-size: 12px;
+  margin-inline: 4px;
+}
+.message-user > .host-message-actions {
+  justify-content: flex-end;
+}
+.host-message-edit textarea {
+  display: block;
+  width: 100%;
+  min-height: 100px;
+  resize: vertical;
+  color: inherit;
+  font: inherit;
+  padding: 10px;
+}
+
+.host-side-chats {
+  display: flex;
+  flex-direction: column;
+}
+.side-chat-list {
+  overflow: auto;
+  max-height: 30%;
+}
+.side-chat-messages {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin-block: 8px;
+}
+.side-chat-message {
+  padding: 7px 4px;
+  overflow-wrap: anywhere;
+}
+.side-chat-message.from-user {
+  background: var(--surface-muted, #8881);
+  padding-inline: 8px;
+  border-radius: 10px;
+}
+.side-chat-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.side-chat-compose textarea {
+  min-height: 64px;
+  width: 100%;
+  resize: vertical;
+  color: inherit;
+  background: inherit;
+  font: inherit;
+}
+.side-chat-compose button {
+  align-self: flex-end;
+}
+@media (max-width: 760px) {
+  .host-side-chats {
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: min(360px, 93vw);
+    background: var(--surface, white);
+    z-index: 8;
   }
 }

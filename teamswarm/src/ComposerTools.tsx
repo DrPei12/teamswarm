@@ -98,7 +98,20 @@ export function RuntimeControls({
         : supportedEfforts(catalog.inspection, config.model);
   const [saveError, setSaveError] = useState("");
   const [saving, setSaving] = useState(false);
-  const harnesses = useHarnessCatalog((error) => setSaveError(error.message));
+  const harnessCatalog = useHarnessCatalog((error) =>
+    setSaveError(error.message),
+  );
+  const { capabilities } = catalog;
+  const savedHarnesses = capabilities?.version
+    ? capabilities.enabledHarnesses
+    : null;
+  const harnesses = !capabilities
+    ? []
+    : savedHarnesses
+      ? harnessCatalog.filter(({ id }) => savedHarnesses.includes(id))
+      : harnessCatalog;
+  const currentHarnessDisabled =
+    savedHarnesses && !savedHarnesses.includes(harnessId(config.harness));
   async function select(next: RuntimeConfig, choice?: ModelChoice) {
     if (saving) return;
     setSaving(true);
@@ -205,6 +218,30 @@ export function RuntimeControls({
                     {tr(saveError)}
                   </div>
                 )}
+                {key === "harness" && !capabilities && (
+                  <div
+                    className="menu-note"
+                    role={catalog.error ? "alert" : "status"}
+                  >
+                    {catalog.error
+                      ? tr(catalog.error)
+                      : tr("Loading harness options…")}
+                    {catalog.error && (
+                      <button
+                        type="button"
+                        className="model-picker-link"
+                        onClick={catalog.retry}
+                      >
+                        {tr("Retry")}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {key === "harness" && currentHarnessDisabled && (
+                  <div className="menu-note" role="status">
+                    {tr("The current Harness is disabled for this team.")}
+                  </div>
+                )}
                 {(key === "harness"
                   ? harnesses.map((h) => h.name)
                   : ["Default", ...efforts.map((e) => e.reasoningEffort)]
@@ -290,6 +327,9 @@ export function RuntimeControls({
           compact
           teamId={team.id}
           harness={executionConfig.harness}
+          sharedModel={
+            !!(executionConfig.baseUrl || executionConfig.chatgptAccountId)
+          }
           value={currentMemberPreset(executionConfig)}
           disabled={disabled || saving}
           onChange={(preset) =>

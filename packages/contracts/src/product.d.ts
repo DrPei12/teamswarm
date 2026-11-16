@@ -67,6 +67,8 @@ export type Chat = {
   starred: boolean;
   archived?: boolean;
   branchId?: string;
+  workspace?: string;
+  kind?: "branch" | "side" | "independent";
   parent?: { chatId: string; messageId: string };
   inheritedDefinitions?: Definition[];
 };
@@ -236,6 +238,7 @@ export type ContextWindowUsage = {
   nextLimit?: number;
 };
 export type Team = {
+  independent?: boolean;
   id: string;
   name: string;
   color: string;

@@ -159,8 +159,8 @@ test("consecutive commands fold into one row that keeps running and unsuccessful
   assert.equal(groups.flatMap((g) => g.items).length, items.length);
   const summary = commandSummary(groups[0].items);
   assert.deepEqual(
-    [summary.total, summary.failed, summary.running],
-    [4, 2, true],
+    [summary.total, summary.nonzero, summary.incomplete, summary.running],
+    [4, 1, 1, true],
   );
   assert.deepEqual(summary.visible.map((i) => i.id), ["b", "c", "d"]);
   assert.deepEqual(commandSummary(groups[3].items).visible, []);

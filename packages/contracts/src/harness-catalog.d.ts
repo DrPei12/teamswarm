@@ -22,6 +22,12 @@ export interface HarnessManifest {
     readOnly: { set?: Record<string, unknown>; exclude?: Record<string, string[]> };
   };
   session: { resume: boolean };
+  /** Complete packages declare the platform boundary and each supported permission preset. */
+  integration?: {
+    platforms: string[];
+    presets: Record<'read-only' | 'manual' | 'auto' | 'full-access', Record<string, unknown>>;
+    automaticReviewer: 'native' | 'teamswarm';
+  };
   description: Record<'execution' | 'permissions' | 'results' | 'isolation', Record<string, unknown>>;
 }
 export function harnessManifest(id: string): HarnessManifest | undefined;

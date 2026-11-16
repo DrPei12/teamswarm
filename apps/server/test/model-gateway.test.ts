@@ -502,3 +502,127 @@ for (const id of ["deepseek-harness", "pi", "grok", "claude-code", "opencode", "
     } finally {await native.close();if(old===undefined)delete process.env.TEAM_HARNESS_HOME;else process.env.TEAM_HARNESS_HOME=old;await f.close();}
   });
 }
+
+test("Antigravity streams shared model tools only after the matching user approval", async () => {
+  const fixture = await setup((body, res) => {
+    const output = body.input.find((item: any) => item.type === "function_call_output");
+    respond(res, body.model, output ? "Recorded native output" : { name: "write_file", arguments: { Path: "example.txt", Content: "fixture" } });
+  });
+  try {
+    const lease = await fixture.gateway.lease({ ...fixture.config, harness: "antigravity", permissions: { harness: "antigravity", mode: "default" } });
+    const uri = (model: string) => lease.config.baseUrl + "/v1beta/models/" + model + ":streamGenerateContent";
+    const post = async (model = "gemini-3.8-flash", extra: object = {}) =>
+      fetch(uri(model), {
+        method: "POST", headers: { "x-goog-api-key": lease.token, "content-type": "application/json" },
+        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "Write the test file" }] }], ...extra }),
+      });
+    let approved = false;
+    let checked = 0;
+    lease.permission(async request => {
+      checked++;
+      assert.equal(request.tool, "write_file");
+      assert.deepEqual(request.input, { Path: "example.txt", Content: "fixture" });
+      return approved ? "allow" : "deny";
+    });
+    assert.equal((await post("gemini-helper")).status, 404);
+    assert.equal(fixture.requests.length, 0);
+    const refused = await (await post()).text();
+    assert.match(refused, /permission_denied/);
+    assert.doesNotMatch(refused, /functionCall/);
+    assert.equal(checked, 1);
+    approved = true;
+    const frames = (await (await post()).text()).split("\n").filter(line => line.startsWith("data: "))
+      .map(line => JSON.parse(line.slice(6)));
+    const call = frames.flatMap(frame => frame.candidates[0]?.content?.parts ?? []).find(part => part.functionCall).functionCall;
+    assert.equal(call.name, "write_file");
+    assert.equal(lease.approved(call.id, call.name, { ...call.args, Path: "different.txt" }), false);
+    assert.equal(lease.approved(call.id, call.name, call.args), true);
+    assert.equal(lease.approved(call.id, call.name, call.args), false);
+    const continued = await (await post(undefined, { contents: [
+      { role: "user", parts: [{ text: "Write the test file" }] },
+      { role: "model", parts: [{ functionCall: call }] },
+      { role: "user", parts: [{ functionResponse: { name: call.name, id: call.id, response: { success: true } } }] },
+    ] })).text();
+    assert.match(continued, /Recorded native output/);
+    assert.match(JSON.stringify(fixture.requests.at(-1)), /function_call_output/);
+    lease.release();
+    assert.equal((await post()).status, 403);
+  } finally { await fixture.close(); }
+});
+
+
+test("Antigravity shares existing Team reads without approving Team mutations or native writes", async () => {
+  const fixture = await setup((body, res) => {
+    const name = body.input.find((item: any) => item.role === "user").content[0].text;
+    respond(res, body.model, { name, arguments: {} });
+  });
+  try {
+    for (const access of ["read-only", "workspace-write"] as const) {
+      const lease = await fixture.gateway.lease({
+        ...fixture.config, harness: "antigravity", access,
+        permissions: access === "read-only" ? { harness: "antigravity", mode: "plan" } : { harness: "antigravity", mode: "teamswarmAuto" },
+      });
+      const decisions: string[] = [];
+      lease.permission(async request => { decisions.push(request.tool); return "deny"; }, [
+        { name: "team_state", description: "Inspect current state", inputSchema: { type: "object" } },
+        { name: "team_write_file", description: "Write a file", inputSchema: { type: "object" } },
+      ]);
+      const ask = async (name: string) => {
+        const response = await fetch(lease.config.baseUrl + "/v1beta/models/gemini-3.8-flash:streamGenerateContent", {
+          method: "POST", headers: { "x-goog-api-key": lease.token, "content-type": "application/json" },
+          body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: name }] }] }),
+        });
+        return response.text();
+      };
+      const allowed = await ask("mcp_teamswarm_team_state");
+      assert.match(allowed, /functionCall/);
+      assert.deepEqual(decisions, []);
+      for (const name of ["mcp_teamswarm_team_read_file", "mcp_teamswarm_team_write_file", "write_file"]) {
+        const blocked = await ask(name);
+        assert.match(blocked, /permission_denied/);
+        assert.doesNotMatch(blocked, /functionCall/);
+      }
+      assert.deepEqual(decisions, access === "read-only" ? [] : ["mcp_teamswarm_team_read_file", "mcp_teamswarm_team_write_file", "write_file"]);
+      lease.release();
+    }
+  } finally { await fixture.close(); }
+});
+
+
+test("Qwen automatic review withholds native commands and only forwards its registered Team tools", async () => {
+  const f = await setup((body, res) => {
+    const command = JSON.parse(body.input.find((item: any) => item.role === "user").content[0].text);
+    respond(res, body.model, command);
+  });
+  try {
+    const lease = await f.gateway.lease({ ...f.config, harness: "qwen-code",
+      access: "workspace-write", permissions: { harness: "qwen-code", approvalMode: "teamswarm-auto" } });
+    const denied: unknown[] = [];
+    lease.permission(async request => { denied.push(request.input); return "deny"; }, [
+      { name: "team_write_file", description: "Create a file", inputSchema: { type: "object" } },
+    ]);
+    const ask = async (name: string, args: object) => {
+      const response = await fetch(lease.config.baseUrl + "/chat/completions", {
+        method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + lease.token },
+        body: JSON.stringify({ model: f.config.model, stream: true,
+          messages: [{ role: "user", content: JSON.stringify({ name, arguments: args }) }] }),
+      });
+      return response.text();
+    };
+    const ownWrite = await ask("tool_call", { name: "mcp__teamswarm__team_write_file", arguments: { path: "a.txt" } });
+    assert.match(ownWrite, /tool_calls/);
+    assert.match(ownWrite, /mcp__teamswarm__team_write_file/);
+    const shell = await ask("run_shell_command", { command: "echo fixture" });
+    assert.match(shell, /permission_denied/);
+    assert.doesNotMatch(shell, /tool_calls/);
+    const indirect = await ask("tool_call", { name: "mcp__teamswarm__team_delegate", arguments: {} });
+    assert.match(indirect, /permission_denied/);
+    assert.doesNotMatch(indirect, /tool_calls/);
+    const outside = await ask("write_file", { file_path: "../other.txt", content: "fixture" });
+    assert.match(outside, /permission_denied/);
+    assert.doesNotMatch(outside, /tool_calls/);
+    assert.deepEqual(denied, [{ name: "run_shell_command" }, { name: "mcp__teamswarm__team_delegate" },
+      { name: "write_file" }]);
+    lease.release();
+  } finally { await f.close(); }
+});

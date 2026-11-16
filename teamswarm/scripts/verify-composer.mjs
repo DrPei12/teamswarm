@@ -201,13 +201,24 @@ try {
     name: "Execution permissions",
     exact: true,
   });
-  const permissionLabels = () =>
+  const permissionLabels = (availableOnly = false) =>
     page
-      .getByRole("menuitemradio")
+      .locator(
+        availableOnly
+          ? '[role="menuitemradio"]:not([aria-disabled="true"])'
+          : '[role="menuitemradio"]',
+      )
       .locator(".item-label > span")
       .allTextContents();
+  const allPermissions = [
+    "Read-only",
+    "Request approval",
+    "Automatic review",
+    "Full access",
+  ];
   await hostPermissions.click();
-  assert.deepEqual(await permissionLabels(), ["Read-only"]);
+  assert.deepEqual(await permissionLabels(), allPermissions);
+  assert.deepEqual(await permissionLabels(true), ["Read-only"]);
   await page.keyboard.press("Escape");
   const modelMenu = () =>
     page.getByRole("button", { name: "Choose model", exact: true }).click();
@@ -248,7 +259,8 @@ try {
   assert.equal(selectedConfig.protocol, "anthropic-messages");
   assert.equal(selectedConfig.baseUrl, "https://secondary.example/anthropic");
   await hostPermissions.click();
-  assert.deepEqual(await permissionLabels(), ["Read-only", "Full access"]);
+  assert.deepEqual(await permissionLabels(), allPermissions);
+  assert.deepEqual(await permissionLabels(true), allPermissions);
   assert.equal(
     await page
       .getByText("Uses this Harness's native settings", { exact: true })
@@ -308,7 +320,7 @@ try {
     await page.waitForTimeout(100);
     await page.mouse.up();
     await page.locator(selector).waitFor();
-    await page.waitForTimeout(450);
+    await page.waitForFunction(() => window.menuFrames.length >= 10);
     const samples = await page.evaluate(() => {
       window.menuSampling = false;
       return window.menuFrames;
@@ -586,7 +598,10 @@ try {
     .getByRole("log", { name: "Conversation" })
     .locator(".message-user")
     .last();
-  const actions = sentMessage.getByRole("button", { name: "Message actions" });
+  const copyMessage = sentMessage.getByRole("button", {
+    name: "Copy message",
+    exact: true,
+  });
   // Exercise clipboard feedback without altering the user's Windows clipboard.
   await page.evaluate(() => {
     Object.defineProperty(navigator, "clipboard", {
@@ -600,8 +615,7 @@ try {
   });
   try {
     await sentMessage.hover();
-    await actions.click();
-    await page.getByRole("menuitem", { name: "Copy message" }).click();
+    await copyMessage.click();
     await page.getByText("Message copied", { exact: true }).waitFor();
     assert.equal(await page.evaluate(() => window.copiedMessage), sentText);
     await page.evaluate(() => {
@@ -609,9 +623,8 @@ try {
         throw new DOMException("Denied", "NotAllowedError");
       };
     });
-    await actions.focus();
-    await actions.press("Enter");
-    await page.getByRole("menuitem", { name: "Copy message" }).click();
+    await copyMessage.focus();
+    await copyMessage.press("Enter");
     await page.getByText("Copy failed", { exact: true }).waitFor();
   } finally {
     await page.evaluate(() => {
@@ -629,6 +642,66 @@ try {
     .locator(".context-details")
     .screenshot({ path: path.join(root, "context-window-zh.png") });
   await request("/product/preferences", { language: "en" }, "PATCH");
+  await page.reload();
+  const chooseHarness = page.getByRole("button", {
+    name: "Choose harness",
+    exact: true,
+  });
+  const harnessMenu = page.getByRole("dialog", {
+    name: "Harness",
+    exact: true,
+  });
+  await chooseHarness.click();
+  await harnessMenu.getByRole("button", { name: "Claude Code" }).waitFor();
+  assert.equal(
+    await harnessMenu.getByRole("button", { name: "Pi" }).count(),
+    0,
+  );
+  await harnessMenu.getByRole("button", { name: "Team capabilities" }).click();
+  await page
+    .getByRole("dialog", { name: "Global capabilities", exact: true })
+    .waitFor();
+  await page.keyboard.press("Escape");
+  await page
+    .getByRole("button", {
+      name: "Team options for Composer regression",
+      exact: true,
+    })
+    .click();
+  await page
+    .getByRole("menuitem", { name: "Adjust team configuration", exact: true })
+    .click();
+  const teamCapabilities = page.getByRole("dialog", {
+    name: "Team capabilities for Composer regression",
+    exact: true,
+  });
+  await teamCapabilities
+    .getByRole("checkbox", { name: "Inherit global defaults", exact: true })
+    .uncheck();
+  await teamCapabilities
+    .getByRole("button", { name: "Allow Claude Code", pressed: true })
+    .click();
+  await teamCapabilities.getByRole("button", { name: "Save settings" }).click();
+  await teamCapabilities.getByText("Saved", { exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  await teamCapabilities.waitFor({ state: "hidden" });
+  await chooseHarness.click();
+  await harnessMenu
+    .getByText("The current Harness is disabled for this team.")
+    .waitFor();
+  await harnessMenu.getByRole("button", { name: "Codex" }).waitFor();
+  assert.equal(
+    await harnessMenu.getByRole("button", { name: "Claude Code" }).count(),
+    0,
+  );
+  assert.equal((await hostConfig()).harness, "claude-code");
+  await page.reload();
+  await chooseHarness.click();
+  await harnessMenu.getByRole("button", { name: "Codex" }).waitFor();
+  assert.equal(
+    await harnessMenu.getByRole("button", { name: "Claude Code" }).count(),
+    0,
+  );
   const legacyTeam = await request("/product/teams", {
     name: "Legacy catalog regression",
     clientRequestId: randomUUID(),

@@ -14,7 +14,7 @@ import {
   configureAntigravity,
 } from "../src/runtime/harness/antigravity.js";
 
-test("Antigravity catalogs native model choices and rejects foreign credentials", async () => {
+test("Antigravity accepts native models and routes shared credentials via TeamSwarm", async () => {
   validateManifest(harnessManifest("antigravity"));
   const config = executionConfig.parse({
     harness: "antigravity",
@@ -22,20 +22,20 @@ test("Antigravity catalogs native model choices and rejects foreign credentials"
     effort: "high",
   });
   assert.deepEqual(executionCompatibility(config), []);
-  assert(
+  assert.deepEqual(
     executionCompatibility({
       ...config,
       baseUrl: "https://api.invalid",
       credentialEnv: "TEST_KEY",
       protocol: "chat-completions",
-    }).includes("incompatible_protocol"),
+    }), [],
   );
-  assert(
+  assert.deepEqual(
     executionCompatibility({
       ...config,
       chatgptAccountId: "local-fixture",
       protocol: "responses",
-    }).includes("incompatible_protocol"),
+    }), [],
   );
   const session = {
     models: {
@@ -180,6 +180,12 @@ test(
       },
     });
     try {
+      const sharedWorkspace = { workspace: root, config: base, scratchDirectory: path.join(root, "scratch"), requirements: {} };
+      assert.equal((await harness.preflight({ ...sharedWorkspace, hostWorkspaceWrite: true })).passed, true);
+      assert.equal((await harness.preflight(sharedWorkspace)).passed, false);
+      assert.equal((await harness.preflight({
+        ...sharedWorkspace, hostWorkspaceWrite: true, requirements: { nativeCommands: true },
+      })).passed, false);
       const first = await harness.execute(make());
       assert.equal(first.status, "completed");
       assert.equal(first.text, "NATIVE_FIXTURE_OK");

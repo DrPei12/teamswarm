@@ -58,7 +58,7 @@ globalThis.fetch = async (input, init) => {
   return response;
 };
 const gateway = new ModelGateway(path.resolve(spec.dataDirectory));
-const adapters = await loadHarnesses(spec.modules ? JSON.stringify(spec.modules.map(p => path.resolve(p))) : undefined);
+const adapters = await loadHarnesses(spec.modules ? JSON.stringify(spec.modules.map(p => path.resolve(p))) : undefined, "inspection");
 const native = adapters.find(h => h.id === harness);
 assert.ok(native, 'Harness package must be registered.');
 const result = { harness, phase, attempt, accountId, model, runnerPid: process.pid, startedAt: new Date().toISOString(), passed: false,

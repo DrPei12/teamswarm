@@ -222,7 +222,7 @@ export function memberConversation(
   const member = runtime.correspondence.member(teamId, memberId);
   const members = runtime.store.list<Member>("members", teamId);
   const name = (id: string) =>
-    id === "user" ? "You" : (members.find((m) => m.id === id)?.name ?? "Host");
+    id === "user" ? "You" : id === "system" ? "TeamSwarm" : (members.find((m) => m.id === id)?.name ?? "Host");
   const selected = options.workId
     ? runtime.store.get<Work>("works", teamId, options.workId)
     : undefined;

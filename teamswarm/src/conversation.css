@@ -407,6 +407,9 @@
   font-size: calc(10px * var(--font-scale));
   color: var(--danger);
 }
+.activity-toggle small.activity-exit-code {
+  color: var(--secondary);
+}
 .activity-item.running .activity-toggle {
   color: var(--secondary);
 }

@@ -13,14 +13,14 @@ function fixture(t) {
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, text);
   };
-  write('package.json', JSON.stringify({ version: '1.0.0', devDependencies: { electron: '1.2.3' } }));
+  write('package.json', JSON.stringify({ version: '1.0.0', license: 'MIT', devDependencies: { electron: '1.2.3' } }));
   write('package-lock.json', JSON.stringify({ packages: { 'node_modules/electron': { version: '1.2.3' } } }));
   write('electron-builder.json', JSON.stringify({ electronVersion: '1.2.3' }));
-  for (const name of ['apps/desktop', 'apps/server', 'teamswarm', 'packages/contracts']) write(name + '/package.json', JSON.stringify({ version: '1.0.0', license: 'Apache-2.0' }));
+  for (const name of ['apps/desktop', 'apps/server', 'teamswarm', 'packages/contracts']) write(name + '/package.json', JSON.stringify({ version: '1.0.0', license: 'MIT' }));
   const readme = ['install', 'first-project', 'harnesses-and-models', 'work-and-results', 'data-and-recovery', 'run-from-source', 'offline-audit', 'troubleshooting', 'license'].map(id => '<a id="' + id + '"></a>\n## ' + id).join('\n');
   write('README.md', readme + '\n[Recovery](#data-and-recovery)\n[Chinese](README.zh-CN.md#install)\n[License](LICENSE)\n');
   write('README.zh-CN.md', readme);
-  write('LICENSE', 'Version 2.0, January 2004');
+  for (const name of ['LICENSE', 'packages/contracts/LICENSE']) write(name, 'MIT License\n');
   write('NOTICE', 'TeamSwarm');
   write('THIRD_PARTY_NOTICES.md', 'Third-party licenses');
   return { root, write };
@@ -47,4 +47,24 @@ test('both languages retain recovery instructions and link targets', t => {
   assert.equal(result.passed, false);
   assert.ok(result.errors.some(error => error.includes('README.zh-CN.md: missing user section data-and-recovery')));
   for (const target of ['docs/en/data-and-privacy.md', '#gone', '../private.md', 'README.zh-CN.md#data-and-recovery']) assert.ok(result.errors.some(error => error.includes(target)), target);
+});
+
+
+test('workspace documentation scope permits selected rules and rejects old methods and indexes', t => {
+  const { root, write } = fixture(t);
+  for (const name of ['AGENTS.md', 'DOCS.md', 'docs/baseline/PRODUCT.md', 'docs/ARCHITECTURE-REWORK.md']) write(name, 'Selected workspace document');
+  assert.deepEqual(checkDocumentation(root, { workspace: true }).errors, []);
+  assert.equal(checkDocumentation(root).passed, false);
+  for (const name of ['research/synthesis/README.md', 'docs/baseline/STATUS.md', 'docs/baseline.lock.json', 'accidental-private.md']) write(name, 'Old material');
+  const errors = checkDocumentation(root, { workspace: true }).errors;
+  for (const name of ['research', 'docs/baseline/STATUS.md', 'docs/baseline.lock.json', 'accidental-private.md'])
+    assert.ok(errors.some(error => error.includes(name)), name);
+});
+
+test('selected workspace guidance has real links and cannot omit its product boundary', t => {
+  const { root, write } = fixture(t);
+  for (const name of ['AGENTS.md', 'DOCS.md', 'docs/ARCHITECTURE-REWORK.md']) write(name, '[Old method](research/method.md)');
+  const errors = checkDocumentation(root, { workspace: true }).errors;
+  assert.ok(errors.some(error => error.includes('Missing workspace document docs/baseline/PRODUCT.md')));
+  assert.ok(errors.some(error => error.includes('broken link research/method.md')));
 });

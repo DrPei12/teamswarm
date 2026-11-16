@@ -14,7 +14,7 @@ import { recoverOpenCodeTruncation } from "../src/runtime/harness/opencode-recov
 import { NativeHarness } from "../src/runtime/harness/native.js";
 import type { HarnessRequest, HarnessResult } from "../src/runtime/types.js";
 
-test("OpenCode length is a durable failure; tool-calls alone retain uncertain ownership", async () => {
+test("OpenCode terminal length and prompt RPC errors are failures; dropped transport retains uncertain ownership", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "teamswarm-opencode-terminal-"));
   const names = ["TEAM_OPENCODE_BIN", "TEAM_HARNESS_HOME", "TEST_MODEL_KEY"];
   const saved = names.map((n) => process.env[n]);
@@ -25,12 +25,13 @@ test("OpenCode length is a durable failure; tool-calls alone retain uncertain ow
   try {
     for (const [reason, expected] of [
       ["length", "failed"],
+      ["rpc-error", "failed"],
       ["tool-calls", "unknown"],
       ["stop", "completed"],
     ]) {
       writeFileSync(
         entry,
-        `import{createInterface}from'node:readline';const emit=v=>console.log(JSON.stringify(v));createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.method==='initialize')emit({jsonrpc:'2.0',id:m.id,result:{protocolVersion:1,agentCapabilities:{}}});else if(m.method==='session/new')emit({jsonrpc:'2.0',id:m.id,result:{sessionId:'ses_fixture'}});else if(m.method==='session/prompt'){const reason=${JSON.stringify(reason)};if(reason==='tool-calls'){emit({jsonrpc:'2.0',method:'session/update',params:{sessionId:'ses_fixture',update:{sessionUpdate:'tool_call',toolCallId:'call',title:'pending',kind:'execute',status:'in_progress'}}});setTimeout(()=>process.exit(0),20);}else emit({jsonrpc:'2.0',id:m.id,result:{stopReason:reason==='length'?'max_tokens':'end_turn'}});}});`,
+        `import{createInterface}from'node:readline';const emit=v=>console.log(JSON.stringify(v));createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);if(m.method==='initialize')emit({jsonrpc:'2.0',id:m.id,result:{protocolVersion:1,agentCapabilities:{}}});else if(m.method==='session/new')emit({jsonrpc:'2.0',id:m.id,result:{sessionId:'ses_fixture'}});else if(m.method==='session/prompt'){const reason=${JSON.stringify(reason)};if(reason==='tool-calls'){emit({jsonrpc:'2.0',method:'session/update',params:{sessionId:'ses_fixture',update:{sessionUpdate:'tool_call',toolCallId:'call',title:'pending',kind:'execute',status:'in_progress'}}});setTimeout(()=>process.exit(0),20);}else if(reason==='rpc-error')emit({jsonrpc:'2.0',id:m.id,error:{code:-32603,message:'Internal error: fetch failed'}});else emit({jsonrpc:'2.0',id:m.id,result:{stopReason:reason==='length'?'max_tokens':'end_turn'}});}});`,
       );
       let session = "",
         turn = "";
@@ -61,6 +62,7 @@ test("OpenCode length is a durable failure; tool-calls alone retain uncertain ow
       const result = await harness.execute(request);
       assert.equal(result.status, expected);
       if (reason === "length") assert.match(result.error!, /output limit/);
+      if (reason === "rpc-error") assert.match(result.error!, /Internal error: fetch failed/);
       await harness.close();
       const replacement = new NativeHarness("opencode");
       assert.equal(
