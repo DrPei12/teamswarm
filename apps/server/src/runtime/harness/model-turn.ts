@@ -44,4 +44,3 @@ export function consumeModelTurn(input: unknown, turnId: string, protocol: Nativ
   }
   return latest === turnId ? boundaries : undefined;
 }
-

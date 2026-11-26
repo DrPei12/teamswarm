@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 /**
  * End-to-end allocation verification over the real TeamSwarm HTTP surface.
  *
@@ -1957,5 +1957,3 @@ main()
       );
     }
   });
-
-

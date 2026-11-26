@@ -3,6 +3,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { Agent, request } from "node:http";
 import { Readable } from "node:stream";
 import { badRequest, conflict } from "../errors.js";
+import { productVersion } from "../version.js";
 import { hash } from "./store.js";
 
 export type McpToolContract = {
@@ -95,7 +96,7 @@ export async function withMcpClient<T>(url: string, action: (client: Client, sig
   const deadline = AbortSignal.timeout(20000);
   const live = signal ? AbortSignal.any([signal, deadline]) : deadline;
   live.throwIfAborted();
-  const client = new Client({ name: "TeamSwarm", version: "0.6.1" });
+  const client = new Client({ name: "TeamSwarm", version: productVersion });
   const transport = new StreamableHTTPClientTransport(endpoint, {
     fetch: async (target, init) => {
       if (String(target) !== endpoint.href) throw conflict("mcp_endpoint", "The service endpoint changed.");

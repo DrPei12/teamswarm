@@ -6,11 +6,17 @@ on:
         type: string
         required: false
         default: ''
+      candidate_run_id:
+        description: 'Successful Windows Desktop packages run for this commit'
+        type: string
+        required: false
+        default: ''
       previous_tag:
         type: string
         required: true
 permissions:
   contents: read
+  actions: read
 jobs:
   install:
     runs-on: windows-2025
@@ -19,6 +25,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
       PREVIOUS_TAG: ${{ inputs.previous_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -33,14 +40,23 @@ jobs:
           python-version: '3.12'
       - run: npm ci --no-audit --no-fund
       - name: Build installer
-        if: inputs.candidate_tag == ''
+        if: inputs.candidate_tag == '' && inputs.candidate_run_id == ''
         run: npm run desktop:build
       - name: Prepare installers
         shell: pwsh
         run: |
           $candidate = Join-Path $env:RUNNER_TEMP 'candidate'
           $previous = Join-Path $env:RUNNER_TEMP 'previous'
-          if ($env:CANDIDATE_TAG) {
+          if ($env:CANDIDATE_TAG -and $env:CANDIDATE_RUN_ID) { throw 'Choose one candidate source' }
+          if ($env:CANDIDATE_RUN_ID) {
+            if ($env:CANDIDATE_RUN_ID -notmatch '^\d+$') { throw 'Expected a numeric run ID' }
+            $run = gh api "repos/$env:GH_REPO/actions/runs/$env:CANDIDATE_RUN_ID" | ConvertFrom-Json
+            if ($LASTEXITCODE -or $run.conclusion -ne 'success' -or $run.head_sha -ne $env:GITHUB_SHA -or $run.path -ne '.github/workflows/desktop.yml') {
+              throw 'Expected a successful Desktop packages run for this commit'
+            }
+            gh run download $env:CANDIDATE_RUN_ID --name TeamSwarm-windows-2025 --dir $candidate
+            if ($LASTEXITCODE) { throw 'Candidate artifact download failed' }
+          } elseif ($env:CANDIDATE_TAG) {
             gh release download $env:CANDIDATE_TAG --pattern '*Windows-x64.exe' --pattern 'release-manifest.json' --dir $candidate
             if ($LASTEXITCODE) { throw 'Candidate download failed' }
           } else {
@@ -53,9 +69,10 @@ jobs:
       - name: Install, upgrade and uninstall
         shell: pwsh
         run: |
-          $candidate = Get-Item (Join-Path $env:RUNNER_TEMP 'candidate/*Windows-x64.exe')
-          $previous = Get-Item (Join-Path $env:RUNNER_TEMP 'previous/*Windows-x64.exe')
-          node scripts/verify-windows-install.mjs --installer $candidate.FullName --previous-installer $previous.FullName --manifest (Join-Path $env:RUNNER_TEMP 'candidate/release-manifest.json') --root (Join-Path $env:RUNNER_TEMP 'TeamSwarm Installer')
+          $candidate = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'candidate') -Filter '*Windows-x64.exe' -Recurse -File)
+          $previous = @(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP 'previous') -Filter '*Windows-x64.exe' -File)
+          if ($candidate.Count -ne 1 -or $previous.Count -ne 1) { throw 'Expected one installer for each version' }
+          node scripts/verify-windows-install.mjs --installer $candidate[0].FullName --previous-installer $previous[0].FullName --previous-tag $env:PREVIOUS_TAG --manifest (Join-Path $candidate[0].DirectoryName 'release-manifest.json') --root (Join-Path $env:RUNNER_TEMP 'TeamSwarm Installer')
           if ($LASTEXITCODE) { throw 'Installer checks failed' }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
@@ -65,7 +82,7 @@ jobs:
           if-no-files-found: warn
           path: ${{ runner.temp }}/TeamSwarm Installer/report.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: success() && inputs.candidate_tag == ''
+        if: success() && inputs.candidate_tag == '' && inputs.candidate_run_id == ''
         with:
           name: windows-installer-package
           retention-days: 7
