@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
+import { spawnSync } from "node:child_process";
 import { chromium } from "../../teamswarm/node_modules/playwright/index.mjs";
 import { createApp } from "../../apps/server/dist/app.js";
 import { BranchAdoption } from "../../apps/server/dist/runtime/branch-adoption.js";
@@ -51,7 +52,78 @@ try {
       title: "Adopt paragraph grouping", reason: "Group related paragraphs while preserving the original wording.", documents: [{ key: "reading", kind: "requirement", title: "Reading requirements", content: "Preserve the original text and order. Group related paragraphs by topic." }] }),
   });
   const mainTurn = send(mainChat, "Prepare the reading guide.");
+  const outcomeSpec = {
+    valueGoal: "A readable guide to the original text.",
+    invariants: ["Keep the original paragraph order."],
+    criteria: [{ key: "original-text", text: "Every original sentence is present." }],
+    nonGoals: ["Rewrite source sentences."],
+  };
+  const oldOutcome = store.publishRequirement(mainTurn.work, "Keep the original sentences.", [],
+    { expectedRequirementId: null, specification: outcomeSpec });
+  const revisionTurn = send(mainChat, "Also keep all source footnotes in the guide.");
+  store.publishRequirement(revisionTurn.work, "Keep sentences and footnotes.", [], {
+    expectedRequirementId: oldOutcome.id,
+    specification: { ...outcomeSpec, criteria: [...outcomeSpec.criteria,
+      { key: "footnotes", text: "Footnotes remain linked to their sentences." }] },
+  });
   const host = store.get("members", team.id, mainTurn.work.memberId);
+  const writer = store.createMember(team.id, "Source reader", "Read the original guide", host.config, main.id);
+  const planHost = store.createWork(revisionTurn.run, host.id, "Plan the reading guide", "Plan the source work", [], [], []);
+  const planAttempt = store.start(planHost, host.config);
+  const sourceNode = { key: "source", title: "Read source sentences", dependsOn: [], outcomeCriteria: ["original-text"], assigneeMemberId: writer.id };
+  const planRun = { ...revisionTurn.run, state: "active" };
+  runtime.workflows.revise(planRun, planHost, planAttempt.id, { expectedRevision: 0, upsert: [sourceNode], remove: [] });
+  runtime.workflows.revise(planRun, planHost, planAttempt.id, { expectedRevision: 1, upsert: [
+    { key: "footnotes", title: "Verify footnotes", dependsOn: ["source"], outcomeCriteria: ["footnotes"] },
+  ], remove: [] });
+  store.finishAttempt(team.id, planAttempt.id, { status: "completed", text: "Workflow defined." });
+  store.setStatus(planHost, "submitted");
+  const assignment = store.createWork(revisionTurn.run, writer.id, sourceNode.title, "Read the original guide", [], [], []);
+  Object.assign(assignment, { workflowNodeKey: "source", workflowGeneration: 1, workflowRevision: 2 });
+  store.save("works", assignment);
+  const sourceArtifact = (file, text) => {
+    writeFileSync(path.join(workspace, file), text);
+    const work = store.createWork(mainTurn.run, writer.id, file, "Provide the archive interface", [], [], []);
+    const attempt = store.start(work, writer.config);
+    const artifacts = store.capture(work, file, [file]);
+    work.artifactIds = artifacts.map(artifact => artifact.id);
+    store.finishAttempt(team.id, attempt.id, { status: "completed", text: file });
+    store.setStatus(work, "self_checked");
+    const artifact = artifacts.find(item => item.path === file);
+    return { workId: work.id, artifactId: artifact.id, sha256: artifact.sha256 };
+  };
+  const provider = sourceArtifact("provider.mjs", "export const report = total => ({ amount: total });\n");
+  const consumer = sourceArtifact("consumer.mjs", "export const render = record => String(record.total);\n");
+  const criterion = "The renderer returns the input total.";
+  const integration = store.createWork(mainTurn.run, writer.id, "Integrate the archive report", "Verify the interface", [criterion],
+    [provider.artifactId, consumer.artifactId], [provider.workId, consumer.workId]);
+  const integrationAttempt = store.start(integration, writer.config);
+  store.finishAttempt(team.id, integrationAttempt.id, { status: "completed", text: "Archive candidates submitted." });
+  store.setStatus(integration, "rejected");
+  const reviewer = store.createMember(team.id, "Archive reviewer", "Check the archive interface", host.config, main.id);
+  const review = store.createWork(mainTurn.run, reviewer.id, "Review archive integration", "Check both modules", [criterion], [], [integration.id], integration.id);
+  const reviewAttempt = store.start(review, reviewer.config);
+  const program = "import {report} from './provider.mjs';import {render} from './consumer.mjs';if(render(report(4))!=='4')process.exit(9)";
+  const executed = spawnSync(process.execPath, ["--input-type=module", "-e", program], {cwd: workspace, windowsHide: true});
+  assert.equal(executed.status, 9);
+  const check = store.event(team.id, "execution.item", {type: "commandExecution", id: "archive-review-command", command: program,
+    exitCode: executed.status, status: "failed"}, review, reviewAttempt.id);
+  store.finishAttempt(team.id, reviewAttempt.id, {status: "completed", text: "The provider uses the amount field."});
+  store.setStatus(review, "submitted");
+  const issue = {id: randomUUID(), contractKey: "contracts/archive-total", integrationAttemptId: integrationAttempt.id, provider, consumer,
+    criterion, evidenceEventId: check, expected: "A numeric total property.", observed: "The provider returns amount."};
+  store.save("acceptances", {id: randomUUID(), teamId: team.id, workId: integration.id, requirementId: integration.requirementId,
+    reviewerMemberId: reviewer.id, reviewerAttemptId: reviewAttempt.id, artifactIds: [], verdict: "rejected",
+    criteria: [{criterion, passed: false, evidence: issue.observed, evidenceType: "native_check", evidenceEventIds: [check]}],
+    semanticConflicts: [issue], createdAt: new Date().toISOString()});
+  const memoryWork = store.createWork(mainTurn.run, host.id, "Record reading constraints", "Preserve project memory", [], [], []);
+  const noteAttempt = store.start(memoryWork, host.config);
+  const memory = { key: "reading-order", content: "Keep the paragraphs in their original order.", status: "open",
+    title: "Reading order", kind: "decision", sourceMessageIds: [mainTurn.message.id] };
+  runtime.hostContext.saveNote(memoryWork, noteAttempt, { ...memory, expectedVersion: 0 });
+  runtime.hostContext.saveNote(memoryWork, noteAttempt, { ...memory, content: "Keep original paragraph and sentence order.", expectedVersion: 1 });
+  store.finishAttempt(team.id, noteAttempt.id, { status: "completed", text: "Reading constraints recorded." });
+  store.setStatus(memoryWork, "submitted");
   const deliver = content => {
     const work = store.createWork(mainTurn.run, host.id, "Host follow-up", "Summarize results", [], [], []);
     work.kind = "host-followup"; store.save("works", work);
@@ -76,6 +148,30 @@ try {
   page.on("response", response => { if (response.status() >= 400) requestErrors.push({url:response.url(),status:response.status()}); });
   const historyUrl = `${origin}/#/team/${team.id}/history`;
   await page.goto(historyUrl);
+  const memoryPanel = page.locator(".history-memory");
+  const openMemory = async () => {
+    await page.getByRole("button", { name: "Project memory", exact: true }).click();
+    await memoryPanel.getByRole("button", { name: /^Reading order/ }).click();
+  };
+  await openMemory();
+  await memoryPanel.getByText("Memory revision 1", { exact: true }).click();
+  await memoryPanel.getByText(memory.content, { exact: true }).waitFor();
+  await memoryPanel.getByRole("button", { name: "Archive memory" }).click();
+  await memoryPanel.getByText("Archived memory", { exact: true }).waitFor();
+  let memoryState = runtime.memory.entries(team.id, main.id).find(entry => entry.key === memory.key);
+  assert.equal(memoryState.active, false);
+  assert.equal(memoryState.revision, 2);
+  assert(!runtime.hostContext.materials.all(mainTurn.run).some(item => item.ref === "note:" + memory.key));
+  if (process.env.TEAMSWARM_UI_SCREENSHOT) await page.screenshot({ path: process.env.TEAMSWARM_UI_SCREENSHOT.replace(/\.png$/, "-memory.png") });
+  await page.reload();
+  await openMemory();
+  await memoryPanel.getByRole("button", { name: "Restore memory" }).click();
+  await memoryPanel.getByRole("button", { name: "Archive memory" }).waitFor();
+  memoryState = runtime.memory.entries(team.id, main.id).find(entry => entry.key === memory.key);
+  assert.equal(memoryState.active, true);
+  assert.equal(memoryState.version, 2);
+  assert(runtime.hostContext.materials.all(mainTurn.run).some(item => item.ref === "note:" + memory.key));
+  await page.getByRole("button", { name: "Close details", exact: true }).click();
   const findNode = async title => {
     await page.getByRole("button", { name: "Find node", exact: true }).click();
     await page.getByRole("textbox", { name: "Find a node", exact: true }).fill(title);
@@ -133,8 +229,54 @@ try {
   await page.locator(`.react-flow__node[data-id="${adoption.node.id}"]`).waitFor();
   const after = await context.request.get(origin + "/api/product");
   assert.deepEqual((await after.json()).teams.find(t => t.id === team.id).historyPositions[adoption.node.id], position);
+  await findNode("Reading guide");
+  const contract = detail.locator("details").filter({ hasText: "Result contract" });
+  await contract.locator("summary").click();
+  await contract.getByText("Footnotes remain linked to their sentences.", { exact: true }).waitFor();
+  await contract.getByRole("button", { name: "Previous outcome revision" }).click();
+  await contract.locator("summary").filter({ hasText: /Outcome revision 1/ }).waitFor();
+  assert.equal(await contract.getByText("Footnotes remain linked to their sentences.", { exact: true }).count(), 0);
+  await contract.getByRole("button", { name: "Current outcome revision" }).click();
+  await contract.locator("summary").filter({ hasText: /Outcome revision 2/ }).waitFor();
+  const workflow = contract.getByRole("region", { name: "Execution workflow" });
+  await workflow.getByText("Workflow revision 2", { exact: true }).waitFor();
+  await workflow.getByText("Awaiting predecessors", { exact: true }).waitFor();
+  await workflow.getByRole("button", { name: "Previous workflow revision" }).click();
+  await workflow.getByText("Ready to assign", { exact: true }).waitFor();
+  await workflow.getByText("Planned member: Source reader", { exact: true }).waitFor();
+  assert.equal(await workflow.getByRole("button", { name: sourceNode.title }).count(), 0);
+  await page.setViewportSize({ width: 900, height: 900 });
+  await workflow.getByText("Workflow revision 1", { exact: true }).waitFor();
+  await workflow.getByRole("button", { name: "Current workflow revision" }).click();
+  await workflow.getByRole("button", { name: sourceNode.title }).waitFor();
+  store.setStatus(assignment, "waiting");
+  await workflow.getByText("Waiting", { exact: true }).waitFor();
+  if (process.env.TEAMSWARM_UI_SCREENSHOT) await page.screenshot({ path: process.env.TEAMSWARM_UI_SCREENSHOT.replace(/\.png$/, "-workflow.png") });
+  await workflow.getByRole("button", { name: sourceNode.title }).click();
+  await page.locator(`[data-entry-id="assignment:${assignment.id}"]`).waitFor();
+  assert.ok(page.url().includes(assignment.id));
+  await page.goto(historyUrl);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await findNode("Reading guide");
+  const conflicts = detail.getByRole("region", {name: "Integration conflicts"});
+  await conflicts.getByText("Awaiting contract decision", {exact: true}).waitFor();
+  const contractTitle = "Archive total interface";
+  const resolved = await context.request.post(`${origin}/api/teams/${team.id}/branches/${main.id}/definitions`, {
+    data: {clientRequestId: randomUUID(), definition: {expectedHeadId: history.context(team.id, main.id).nodeId, title: contractTitle,
+      documents: [{key: issue.contractKey, kind: "design", title: contractTitle, content: "The provider returns a numeric total property."}],
+      affectedWorkIds: [provider.workId, integration.id], resolvesConflictIds: [issue.id]}},
+  });
+  assert.ok(resolved.ok(), await resolved.text());
+  await conflicts.getByText("Contract decision published", {exact: true}).waitFor();
+  await conflicts.getByRole("button", {name: "Inspect contract decision"}).click();
+  await detail.getByRole("heading", {name: contractTitle, exact: true}).waitFor();
+  if (process.env.TEAMSWARM_UI_SCREENSHOT)
+    await page.screenshot({path: process.env.TEAMSWARM_UI_SCREENSHOT.replace(/\.png$/, "-semantic-conflict.png")});
+  await conflicts.getByRole("button", {name: "Inspect review evidence"}).click();
+  await page.locator(`[data-entry-id="attempt:${reviewAttempt.id}"]`).waitFor();
+  assert.ok(page.url().includes(review.id));
   assert.deepEqual(errors, []);
-  console.log("PASS: adoption documents, source navigation, progress and results, responsive details, and persisted canvas positions");
+  console.log("PASS: workflow revisions, live status, conflict decision and review navigation, versioned outcomes and memory, adoption, and responsive details");
 } catch (error) {
   const output = path.resolve('.local/browser-evidence/project-history');
   mkdirSync(output, {recursive:true});

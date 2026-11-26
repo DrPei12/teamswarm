@@ -213,6 +213,15 @@ export function resolveContextWindow(
   };
 }
 
+// The in-process execution budget is not a capacity measurement from a native CLI.
+export function teamHostContextWindow(config: ExecutionConfig, preset: ContextWindowPreset): ContextWindowPlan {
+  const source = { ...config, harness: "teamswarm-host" };
+  const known = resolveContextWindow(source, "auto");
+  if (known) return resolveContextWindow(source, preset)!;
+  const fallback = resolveContextWindow({ ...source, contextWindowTokens: 128000 }, preset)!;
+  return { ...fallback, source: "estimate" };
+}
+
 /** An earlier, smaller preset is not a model limit. Only clamp a known model
  * when the driver actually reported less than a window it was asked to use. */
 export function memberContextWindow(

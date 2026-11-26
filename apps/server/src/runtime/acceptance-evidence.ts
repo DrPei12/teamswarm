@@ -51,6 +51,8 @@ export function reviewRequirements(target: Work, requested?: ExecutionRequiremen
 export function reviewEvidenceContext(review: Work, target: Work): string {
   return createHash("sha256").update(JSON.stringify({
     reviewId: review.id, targetId: target.id, targetAttemptId: target.attemptId,
+    ...(target.candidateSnapshotId ? { candidateSnapshotId: target.candidateSnapshotId } : {}),
+    ...(target.definitionScope ? { definitionScope: target.definitionScope } : {}),
     artifactIds: target.artifactIds, acceptanceEvidence: evidenceFor(target),
     instructionsRevision: review.reviewInstructionsRevision ?? 1,
   })).digest("hex");

@@ -4,15 +4,16 @@
 
 TeamSwarm is for AI builders working on code and text projects across multiple agents, sessions and revisions. Discuss a goal with the Host, let members work in independent harnesses, and keep the current decisions, work and deliverables together.
 
-[简体中文](README.zh-CN.md) · [Install](#install) · [First project](#first-project) · [Harnesses and models](#harnesses-and-models) · [Data and recovery](#data-and-recovery) · [Privacy](#privacy) · [Code signing policy](#code-signing-policy)
+[简体中文](README.zh-CN.md) · [Install](#install) · [First project](#first-project) · [Harnesses and models](#harnesses-and-models) · [Work and results](#work-and-results) · [Data and recovery](#data-and-recovery) · [Run from source](#run-from-source) · [Troubleshooting](#troubleshooting)
 
 [![Watch the TeamSwarm product film — 36 seconds, 4K at 120 fps](.github/media/teamswarm-film-cover-en.jpg)](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-EN.mp4)
 
 [▶ Watch the product film](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-EN.mp4) · 36 seconds · 4K / 120 fps · [中文版](README.zh-CN.md)
 
+- **Use one Host model picker.** Choose a connected model in the composer or settings. The conversation and background coordination use separate sessions and exchange relevant facts and evidence.
 - **Keep project decisions aligned.** Maintain current project definitions with their sources. Adopt a discussion branch into the mainline after an explicit decision, with document changes visible in project history.
 - **Continue the same work.** Revise a deliverable in its original work thread, keeping requirements, file ownership and earlier versions available across sessions.
-- **Coordinate independent agents.** Use Codex, Claude Code, Grok, Pi, DeepSeek Harness or OpenCode. Members exchange messages; duplicate responsibilities reuse existing work, and waiting members resume when new information arrives.
+- **Coordinate independent agents.** Use Codex, Claude Code, Grok, Pi, DeepSeek Harness, OpenCode or Antigravity. Members exchange messages; duplicate responsibilities reuse existing work, and waiting members resume when new information arrives.
 - **Inspect what was delivered.** View and download saved file versions, distinguish progress from completed results, and read the self-check or independent review associated with a submission.
 - **Follow the project in two canvases.** The collaboration canvas shows members and recorded communication. The history canvas connects discussion, decisions, work, document changes and deliverables.
 
@@ -21,26 +22,27 @@ TeamSwarm runs locally for a single user. Harnesses use the accounts or API conn
 <a id="install"></a>
 ## Install
 
-Download the package for your platform and `SHA256SUMS.txt` from the same release below. Desktop packages include Electron, Node.js, npm and Codex. Additional harnesses are installed separately on your device.
+[TeamSwarm 0.7.0](https://github.com/DrPei12/teamswarm/releases/tag/v0.7.0) includes Electron, Node.js, npm and Codex. Install additional harnesses separately.
 
-| Platform | Format | Availability |
-|---|---|---|
-| Windows x64 | NSIS `.exe` | [Windows release](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.1) |
-| Linux x64 | AppImage, DEB | Build from source |
-| macOS Apple Silicon | DMG, ZIP | [macOS release](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.1) |
+- **Windows x64:** [TeamSwarm-0.7.0-Windows-x64.exe](https://github.com/DrPei12/teamswarm/releases/download/v0.7.0/TeamSwarm-0.7.0-Windows-x64.exe)
+- **macOS Apple Silicon:** [TeamSwarm-0.7.0-macOS-arm64.dmg](https://github.com/DrPei12/teamswarm/releases/download/v0.7.0/TeamSwarm-0.7.0-macOS-arm64.dmg) or [TeamSwarm-0.7.0-macOS-arm64.zip](https://github.com/DrPei12/teamswarm/releases/download/v0.7.0/TeamSwarm-0.7.0-macOS-arm64.zip)
+- **Linux x64:** [Build from source](#run-from-source) for AppImage or DEB.
 
-The Windows installer is unsigned and Windows displays an unknown publisher. See the [Code signing policy](#code-signing-policy). Compare its hash with the release checksum file:
+Compare the downloaded file's SHA-256 with the matching entry in [SHA256SUMS.txt](https://github.com/DrPei12/teamswarm/releases/download/v0.7.0/SHA256SUMS.txt). The [release manifest](https://github.com/DrPei12/teamswarm/releases/download/v0.7.0/release-manifest.json) also records the source commit and build fingerprint.
+
+**Windows:** The installer is unsigned; Windows displays an unknown publisher. See the [Code signing policy](#code-signing-policy).
 
 ```powershell
-Get-FileHash .\TeamSwarm-0.6.1-Windows-x64.exe -Algorithm SHA256
+Get-FileHash .\TeamSwarm-0.7.0-Windows-x64.exe -Algorithm SHA256
 ```
 
 Run the installer, then open **TeamSwarm** from the Start menu. Installation is per user. For upgrades, close the application, [back up service data](#data-and-recovery), and run the new installer using the same OS account and installation directory. Updates are installed manually. Uninstalling preserves service data and your project files.
 
-**macOS Apple Silicon:** Download the [DMG](https://github.com/DrPei12/teamswarm/releases/download/v0.6.1/TeamSwarm-0.6.1-macOS-arm64.dmg) or [ZIP](https://github.com/DrPei12/teamswarm/releases/download/v0.6.1/TeamSwarm-0.6.1-macOS-arm64.zip). Open the DMG and copy **TeamSwarm.app** to Applications, or extract the ZIP and copy the app there. Compare the downloaded file with the checksum from the macOS release:
+**macOS:** Open the DMG and copy **TeamSwarm.app** to Applications, or extract the ZIP and copy the app there. Run the command for the file you downloaded:
 
 ```sh
-shasum -a 256 TeamSwarm-0.6.1-macOS-arm64.dmg
+shasum -a 256 TeamSwarm-0.7.0-macOS-arm64.dmg
+shasum -a 256 TeamSwarm-0.7.0-macOS-arm64.zip
 ```
 
 This macOS release has no Developer ID signature or Apple notarization. If macOS blocks its first launch, see [Apple's instructions for approving an individual app](https://support.apple.com/en-gb/102445).
@@ -52,7 +54,7 @@ Use the synthetic [task report example](https://github.com/DrPei12/teamswarm/tre
 
 1. Copy `tasks.json`, `verify.mjs` and `verify-followup.mjs` from the example into a project folder.
 2. Open TeamSwarm and choose **New chat**. Use **Choose project** above the composer to select the folder; that conversation becomes the team's Host. A conversation without a folder remains independent.
-3. Connect an existing supported account or configure an [API connection](#harnesses-and-models). Check that the selected harness and resource are available.
+3. Connect an existing supported account or configure an [API connection](#harnesses-and-models). Choose a Host model and check that a Worker resource is available for the example below.
 4. Send this task to the Host:
 
 This example's command checks require an available Codex resource. Other harnesses can create and revise the files, with a Codex member running the checks.
@@ -107,12 +109,16 @@ Settings → General → Context window offers Automatic, 128K, 256K, 512K and 1
 
 The runtime measures available memory, Windows commit, CPU load and process usage. Memory figures help the Host inspect device usage. The scheduler uses CPU measurements and pending starts to decide when to dispatch more native work. A queued task can start when CPU capacity becomes available. Queue transitions are recorded as runtime events. Actual execution failures appear in the task status.
 
-Windows provides process-level sampling and owned process-group totals. Other platforms use the measurements supported by their sampler.
+Under **Advanced settings → Device resources**, leave the profile on **Automatic** or choose **Compact**, **Standard** or **Workstation**. Automatic uses installed memory to select the profile; live CPU and memory readings inform dispatch and idle-process reuse. During memory pressure the service trims idle executors and queues new work as needed. Active work and managed previews retain their own lifecycles.
+
+On Windows, Job Objects tie owned executors and their children to the service. On macOS, the desktop package includes a supervisor that checks for owned descendants even if they leave the original process group. Linux uses process groups. The runtime retains an unresolved recovery state when it has not confirmed a process group’s exit.
 
 <a id="harnesses-and-models"></a>
 ## Harnesses and models
 
-A harness runs an agent's tools and execution loop. A model connection supplies its model API. An execution resource combines a harness, model, connection, permissions and supported reasoning settings.
+Select the **Host model** in the composer or in **Host models** under advanced settings. Supported API connections and direct ChatGPT authorization run the Host inside the local service, without a separate CLI process. Models that require a CLI login still use the corresponding official harness. Background coordination has its own session, so review and dispatch updates enter the conversation as relevant facts and evidence rather than the full background transcript. An optional read-only probe can use a separate model and returns a finding with file references.
+
+Workers still choose their harness and model independently. A harness runs the tools and execution loop; a Worker resource combines it with a model connection, permissions and supported reasoning settings.
 
 | Harness | Installation | Native session continuation |
 |---|---|---|
@@ -142,7 +148,7 @@ For an API connection:
 
 For example, a DeepSeek connection uses `https://api.deepseek.com` and Chat Completions. Pi can consume it natively, while Claude Code can use protocol translation. Use a model from the provider's current account model list.
 
-Translation supports text, embedded images, function tools, tool results, streaming and JSON Schema output. Each execution receives a separate route and temporary credential, revoked when execution ends. One service shares one loopback listener, admitting up to 32 simultaneous model requests and 8 per execution route; excess requests receive a busy response. Input is limited to 8 MiB and output to 16 MiB. Native-session model metadata is retained up to 16 MiB; reaching that limit requires a new session and preserves existing records. Unsupported requests return specific errors.
+Translation supports text, embedded images, function tools, tool results, streaming and JSON Schema output. Each execution receives a separate route and temporary credential, revoked when execution ends. One service shares one loopback listener. The device profile allows 20, 32 or 64 simultaneous model requests, with up to 8 per execution route; excess requests receive a busy response. Input is limited to 8 MiB and output to 16 MiB. Native-session model metadata is retained up to 16 MiB; reaching that limit requires a new session and preserves existing records. Unsupported requests return specific errors.
 
 For environment credentials, set a variable such as `DEEPSEEK_API_KEY` before starting the service and enter only its name in the resource. `TEAM_CREDENTIAL_FILES` accepts a JSON map of environment-variable names to absolute, one-line secret files.
 
@@ -163,19 +169,21 @@ The Host and members start with a project overview, current responsibilities and
 
 Context selection uses the model's configured or observed capacity, recent native token usage and task relevance. It reserves space for replies and tools, preserves native compaction, and rebuilds a session from saved project material when necessary. Unknown capacity and usage use explicit estimates.
 
+**Session mode** in the team’s execution settings controls how long eligible native sessions are kept. **Standard mode** keeps the session longer; **High-efficiency mode** refreshes it earlier. Members can inherit the team setting or override it. When context use or verified compaction reaches a rotation threshold, TeamSwarm starts a new native session at a safe boundary and carries forward the work state, available handoff notes and file excerpts whose versions still match. The work thread, workspace and earlier messages remain in place.
+
 Select a work thread before asking a member a question. Read-only questions inspect existing work; **Continue modifying** creates a subsequent execution with the original verification requirements. Pause or stop conflicting work and wait for its actual state to settle before editing the same files.
 
-Small reversible changes can use a producer self-check. For independent acceptance, specify a separate reviewer and checks against the submitted version. File reviews can compare submitted content directly. Command-based acceptance currently requires a Codex reviewer with native check support. When review instructions change, the reviewer must read them and rerun the required commands before accepting the result.
+Small reversible changes can use a producer self-check. For independent acceptance, specify a separate reviewer and checks against the submitted version. File reviews can compare submitted content directly. Use a compatible resource for command checks. Codex supports native checks; on Windows, supported Pi, Claude Code and OpenCode configurations can also run checks against an isolated candidate. When review instructions change, the reviewer must read them and rerun the required commands before accepting the result.
 
 Each acceptance criterion records whether it needs semantic inspection or observed command execution. Required command checks stay attached to the work across continuations and resource changes. Every execution criterion must cite successful events from the current review attempt against the submitted artifact versions and current instructions. Unclassified criteria remain pending until the Host sets their evidence requirements; previous acceptance records remain in history.
 
 To adopt a discussion branch, state the decision and scope to the Host in that branch. The Host compares the source, branch base and current mainline, then updates the selected project documents. Open the adoption node in history to inspect the decision, sources, ideas and document differences. Request code implementation separately when needed.
 
-Progress updates and completed deliverables have separate entries. Saved artifact versions can be downloaded. Restoring a file version creates a new current version; active writers, unsaved local edits or a changed current version must be resolved first. Creating a workspace branch from history requires a saved file snapshot.
+Progress updates and completed deliverables have separate entries. In **Independent review**, select a submission to inspect its files and evidence. A review can request a repair on that same work without changing its acceptance criteria. If a partially applied publication conflicts with newer local edits, compare the recorded versions before resuming or choosing **Keep current files**. Keeping current files resolves the interrupted publication without publishing the old candidate. Saved artifact versions can be downloaded. Restoring a file version creates a new current version; active writers, unsaved local edits or a changed current version must be resolved first. Creating a workspace branch from history requires a saved file snapshot.
 
 The right file panel browses project files and opens multiple tabs for Markdown, images, PDF, Word, Excel and PowerPoint. Edit code, text, and text or cells in modern Office files; fit previews to the panel or adjust zoom. Unsaved edits remain in local drafts, and saving checks the original file version. Finish or stop active member writes in that workspace before saving.
 
-Manually created history checkpoints have a context menu for deletion while the original history and existing branches remain traceable. Member conversations share the Host composer's Harness, model and effort controls; changes apply to subsequent executions.
+Manually created history checkpoints have a context menu for deletion while the original history and existing branches remain traceable. Member conversations retain separate harness, model and effort controls; changes apply to subsequent executions.
 
 Delete an idle member from its card's context menu or conversation header, or ask Host to use `team_remove_member`. Conversations, work and results remain in history. Finish pending work, review, exchanges and messages first. Removed members no longer receive work or messages.
 
@@ -184,7 +192,7 @@ Delete an idle member from its card's context menu or conversation header, or as
 
 Teams, conversations, work, artifact versions and project history are stored locally. Project files remain in the folders you select.
 
-Members save their continuation and end the current turn while waiting for messages. New messages or dependency results resume execution. Idle Codex executors release their processes, and later tasks resume the saved native session. TeamSwarm Codex sessions load the assigned Team tools and native capabilities. On Windows, each executor and its descendants belong to an owned process group that is reclaimed when the executor or service exits.
+Members save their continuation and end the current turn while waiting for messages. New messages or dependency results resume execution. Idle Codex executors release their processes, and later tasks resume the saved native session. TeamSwarm Codex sessions load the assigned Team tools and native capabilities. Owned executor cleanup and queued work are visible in runtime records.
 
 Concurrency follows both Team settings and available memory. New tasks queue under memory pressure while active tasks continue, then dispatch when capacity returns. Member identities, history and results remain stored locally.
 
@@ -224,9 +232,6 @@ Replace the example paths with your own; quote paths containing spaces. Installe
 Diagnostics include build identity, counts, work states and SQLite integrity, omitting conversation bodies, project paths and credential values. Backups contain the service database, attachments and service-owned configuration/session files. Store them privately. Restore verifies file hashes and requires a new directory; set `TEAM_DATA_DIR` to it and inspect the restored team before continuing. Native attempts with uncertain outcomes still require recovery.
 
 <a id="run-from-source"></a>
-
-This development checkout uses an independent profile under `.local/rework/default/` on port 4427. Model accounts and projects are configured separately from the installed desktop app.
-
 ## Run from source
 
 Use Node.js 24 and run these commands in the repository root:
@@ -234,12 +239,10 @@ Use Node.js 24 and run these commands in the repository root:
 ```sh
 npm ci
 npm run build
-npm run start:rework
+npm start
 ```
 
-This launcher opens a connected browser at `http://127.0.0.1:4427`. Use `TEAMSWARM_REWORK_PORT` for another port and `TEAMSWARM_REWORK_PROFILE` for another isolated profile under `.local/rework/`.
-
-For the regular product launcher, `npm start` uses `TEAM_API_PORT` (4317 by default) and `TEAM_DATA_DIR`. One service owns a data directory. `npm run dev` starts the API on 4318 and Vite on 4317.
+The launcher opens a connected browser at `http://127.0.0.1:4317` by default. To run alongside an installed copy, set `TEAM_API_PORT` to an unused port and `TEAM_DATA_DIR` to a separate absolute directory before starting. One service owns a data directory. `npm run dev` starts the API on 4318 and Vite on 4317.
 
 After building, install and inspect selected harnesses:
 

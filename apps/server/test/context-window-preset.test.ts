@@ -12,10 +12,29 @@ import {
 import { ClaudeTurnUsage } from "../src/runtime/claude-turn-usage.js";
 import {
   planContext,
+  PI_COMPACTION_KEEP_RECENT,
   pressureRequiresRebuild,
 } from "../src/runtime/context-budget.js";
 import { contextWindowUsage } from "../src/product-context.js";
 import type { Attempt } from "../src/runtime/types.js";
+
+test("Pi leaves room for new input only when measured usage calls for pre-turn compaction", () => {
+  const config = executionConfig.parse({ harness: "pi", model: "deepseek-flash", contextWindowTokens: 48000, maxOutputTokens: 4096 });
+  const windowPlan = resolveContextWindow(config, "auto")!;
+  const options = { windowPlan, nativeCompaction: true, preTurnCompaction: true, overheadTokens: 16000, requiredInputTokens: 24000 };
+  const atThreshold = planContext(config, { ...options, observation: { inputTokens: windowPlan.usableTokens } });
+  assert.equal(atThreshold.nativeCompactionDue, undefined);
+  assert.equal(pressureRequiresRebuild(atThreshold), true);
+  const over = planContext(config, { ...options, observation: { inputTokens: windowPlan.usableTokens, outputTokens: 1 } });
+  assert.equal(over.nativeCompactionDue, true);
+  assert.equal(pressureRequiresRebuild(over), false);
+  assert.equal(over.inputTokens, windowPlan.usableTokens - options.overheadTokens - PI_COMPACTION_KEEP_RECENT);
+  for (const budget of [
+    planContext(config, { ...options, estimatedSessionTokens: windowPlan.usableTokens + 1 }),
+    planContext(config, { ...options, preTurnCompaction: false, observation: { inputTokens: windowPlan.usableTokens + 1 } }),
+    planContext(config, { ...options, overheadTokens: windowPlan.usableTokens, observation: { inputTokens: windowPlan.usableTokens + 1 } }),
+  ]) assert.equal(pressureRequiresRebuild(budget), true);
+});
 
 test("window presets bound actual inputs and reconstruction; Codex's reported effective capacity is counted once", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "teamswarm-codex-window-")),

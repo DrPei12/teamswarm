@@ -47,7 +47,7 @@ import type { TeamRuntime } from "./runtime/engine.js";
 import { definitionInput } from "./runtime/project-history.js";
 import { insightInput } from "./runtime/collaboration-records.js";
 import { overlaps } from "./runtime/store.js";
-import { parse, key, executionConfig } from "./runtime/validation.js";
+import { parse, key, executionConfig, globalSkillPin } from "./runtime/validation.js";
 import { badRequest, conflict, notFound } from "./errors.js";
 import {
   communicationExchanges,
@@ -102,9 +102,12 @@ const fileInput = z
     type: z.string().max(200),
   })
   .strict();
-const referenceInput = z
-  .object({ id: key, kind: z.string().max(40), label: z.string().max(200) })
-  .strict();
+const referenceLabel = z.string().max(200);
+const referenceInput = z.union([
+  z.object({ kind: z.literal("global-skill"), id: globalSkillPin.shape.skillId, label: referenceLabel,
+    revision: globalSkillPin.shape.revision, generation: globalSkillPin.shape.generation }).strict(),
+  z.object({ id: key, kind: z.string().max(40).refine(value => value !== "global-skill"), label: referenceLabel }).strict(),
+]);
 const draftInput = z
   .object({
     text: z.string().max(100000),
@@ -185,8 +188,10 @@ export class ProductStore {
   update(change: (prefs: Preferences) => void) {
     return this.runtime.store.transaction(() => {
       const { preferences } = this.read();
+      const previousSkills = [...preferences.skills];
       change(preferences);
       this.write(preferences);
+      this.runtime.skillMounts.sync(previousSkills, preferences.skills);
       return this.read().revision;
     });
   }
@@ -377,6 +382,7 @@ export class ProductStore {
         memberId: hostMember.id, branchId: activeBranch,
         selection: hostAllocation?.selection ?? null,
         selectionCurrent: hostAllocation?.selectionCurrent,
+        hostProbeConfig: hostMember.hostSelections?.[activeBranch]?.hostProbeConfig,
       };
       const currentChat = prefs.lastChatId ?? mainChatId;
       const dialogueRunIds = new Set(state.runs.filter(r => r.conversationId === currentChat).map(r => r.id));
@@ -384,7 +390,11 @@ export class ProductStore {
         w.kind !== "host-followup" && w.kind !== "collaboration").map(w => w.id));
       const contextAttempt = attempts.filter(a => a.memberId === hostId && dialogueWorks.has(a.workId)).at(-1);
       const contextConfig = contextAttempt && ["running", "stopping"].includes(contextAttempt.status) ? contextAttempt.config : hostConfig;
-      const context = contextWindowUsage(this.db, contextConfig, contextAttempt, nextContextWindow);
+      const health = contextAttempt && this.runtime.store.vitality.inspect(contextAttempt);
+      const context = contextWindowUsage(this.db, contextConfig, contextAttempt, nextContextWindow, {
+        mode: settings?.sessionLongevityMode ?? "standard",
+        ...(health?.complete && health.compactionCount > 0 ? { compactionCount: health.compactionCount } : {}),
+      });
       workspace.teams.push({
         ...prefs,
         mainChatId,
@@ -466,7 +476,7 @@ export class ProductStore {
             artifacts,
             activity: attempt
               ? transcriptItems(this.runtime, attempt).filter(
-                  (i) => i.kind !== "message" || i.phase === "commentary",
+                  (i) => !!i.nativeThreadId || i.kind !== "message" || i.phase === "commentary",
                 )
               : undefined,
           };
@@ -777,6 +787,7 @@ export class ProductStore {
           executionConfig: nextExecution?.config,
           runningExecutionConfig: attempts.find(a => a.memberId === member.id && ["running", "stopping"].includes(a.status))?.config,
           configurationVersion: nextExecution?.allocationRevision,
+          ...(member.sessionLongevityMode ? { sessionLongevityMode: member.sessionLongevityMode } : {}),
           resourceSelection: nextExecution?.selection ?? null,
           sessionId: latestAttempt?.sessionId ?? undefined,
           workId: work?.id,
@@ -894,18 +905,20 @@ export function productRoutes(runtime: TeamRuntime): Router {
   router.post("/product/teams/:teamId/works/:workId/messages", (req, res) => {
     const teamId = parse(key, req.params.teamId),
       workId = parse(key, req.params.workId);
-    const input = parse(
-      z
-        .object({
-          clientRequestId: z.string().uuid(),
-          content: z.string().trim().min(1).max(20000),
-          mode: z.enum(["discuss", "revise"]),
-          expectedRevision: z.number().int().positive(),
-        })
-        .strict(),
-      req.body,
-    );
+    const message = z.object({
+      clientRequestId: z.string().uuid(),
+      content: z.string().trim().min(1).max(20000),
+      expectedRevision: z.number().int().positive(),
+    });
+    const input = parse(z.discriminatedUnion("mode", [
+      message.extend({ mode: z.literal("discuss") }).strict(),
+      message.extend({ mode: z.literal("revise") }).strict(),
+      message.extend({ mode: z.literal("repair"), acceptanceId: key }).strict(),
+    ]), req.body);
     const work = runtime.store.get<Work>("works", teamId, workId);
+    if (input.mode === "repair") return res.json(runtime.repairRejectedWork(
+      teamId, workId, input.content, input.clientRequestId, input.expectedRevision, input.acceptanceId,
+    ));
     res.json(
       input.mode === "revise"
         ? runtime.continueWork(
@@ -1054,10 +1067,17 @@ export function productRoutes(runtime: TeamRuntime): Router {
     const teamId = parse(key, req.params.teamId);
     const branchId = parse(key, req.params.branchId);
     const input = parse(z.object({
-      expectedVersion: z.number().int().positive(), config: executionConfig,
-    }).strict(), req.body);
-    runtime.validateConfig(input.config);
-    res.json(setHostConfiguration(runtime, teamId, branchId, input.expectedVersion, input.config));
+      expectedVersion: z.number().int().positive(), config: executionConfig.optional(),
+      hostProbeConfig: executionConfig.nullable().optional(),
+    }).strict().refine(value => value.config !== undefined || value.hostProbeConfig !== undefined), req.body);
+    if (input.config) runtime.validateConfig(input.config);
+    if (input.hostProbeConfig) {
+      const probe = input.hostProbeConfig;
+      if (probe.access !== "read-only" || !probe.model || !(probe.chatgptAccountId || probe.baseUrl && probe.credentialEnv))
+        throw badRequest("host_probe_connection", "Choose a direct read-only model for the Host probe.");
+      runtime.validateConfig(probe);
+    }
+    res.json(setHostConfiguration(runtime, teamId, branchId, input.expectedVersion, input.config, input.hostProbeConfig));
   });
   router.put("/product/teams/:teamId/members/:memberId/runtime", (req, res) => {
     const teamId = parse(key, req.params.teamId);
@@ -1808,6 +1828,11 @@ export function productRoutes(runtime: TeamRuntime): Router {
           input.teamId,
           input.conversationId,
         );
+        // Validate selections inside the message receipt transaction, before staging any attachments.
+        const selectedGlobal = input.references.flatMap(ref => "generation" in ref ? [runtime.skillMounts.global.verify(input.teamId,
+          { source: "global", skillId: ref.id, revision: ref.revision, generation: ref.generation })] : []);
+        if (new Set(selectedGlobal.map(ref => ref.skillId)).size !== selectedGlobal.length)
+          throw badRequest("skill_duplicate_mount", "Select each global skill once.");
         const attachmentPaths = input.files.map((f) => {
           const stored = product.file(f.id);
           if (
@@ -1855,16 +1880,17 @@ export function productRoutes(runtime: TeamRuntime): Router {
                 message.id,
                 JSON.stringify({
                   files: input.files,
-                  references: input.references,
+                  references: input.references.map(ref => "generation" in ref ? { ...ref,
+                    label: runtime.skillMounts.global.revision(ref.id, ref.revision).name } : ref),
                   skill: skill?.name,
                   executionInput: {
                     attachments: attachmentPaths,
-                    instructions: [skill, ...selectedSkills, ...explicitNative]
-                      .filter(Boolean)
-                      .map((s) => ({
-                        name: s!.name,
-                        instructions: s!.instructions,
-                      })),
+                    ...(selectedGlobal.length ? { globalSkills: selectedGlobal } : {}),
+                    instructions: [
+                      ...[...new Map([skill, ...selectedSkills].filter((value): value is Skill => !!value)
+                        .map(value => [value.id, value])).values()].map(value => runtime.skillMounts.compile(value)),
+                      ...explicitNative.map(value => ({ name: value.name, instructions: value.instructions })),
+                    ],
                     commands: selectedCommands.map((c) => ({
                       name: c!.name,
                       instructions: c!.description,
@@ -1945,6 +1971,7 @@ export function productRoutes(runtime: TeamRuntime): Router {
           maxConcurrent: z.number().int().positive().optional(),
           // Same bounds as the runtime schema; omitted keeps the saved limit.
           timeoutSeconds: z.number().int().min(10).max(3600).optional(),
+          sessionLongevityMode: z.enum(["standard", "high-efficiency"]).optional(),
         })
         .strict(),
       req.body,
@@ -1966,6 +1993,9 @@ export function productRoutes(runtime: TeamRuntime): Router {
           config: input.config,
           ...(input.timeoutSeconds !== undefined
             ? { timeoutSeconds: input.timeoutSeconds }
+            : {}),
+          ...(input.sessionLongevityMode !== undefined
+            ? { sessionLongevityMode: input.sessionLongevityMode }
             : {}),
         },
         input.expectedVersion,

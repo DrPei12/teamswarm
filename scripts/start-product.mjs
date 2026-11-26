@@ -44,6 +44,7 @@ const service = createApp({
   apiPort: port,
   webDistDir: path.join(root, "teamswarm/dist"),
   harnesses: await loadHarnesses(),
+  enableNativeHost: true,
 });
 const server = service.app.listen(port, "127.0.0.1", () => {
   const address = server.address();

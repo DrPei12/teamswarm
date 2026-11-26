@@ -11,7 +11,8 @@ const catalog = JSON.parse(
   readFileSync(path.join(repository, "config/harnesses.json"), "utf8"),
 );
 const requested = process.argv.slice(2);
-const selected = requested.length ? requested : Object.keys(catalog);
+const probeSdk = requested[0] === "--opencode-probe-sdk";
+const selected = probeSdk ? [] : requested.length ? requested : Object.keys(catalog);
 for (const id of selected)
   if (!Object.hasOwn(catalog, id)) throw new Error(`Unknown harness: ${id}`);
 const manager = new HarnessManagement(
@@ -22,6 +23,18 @@ const manager = new HarnessManagement(
   ),
   () => [repository],
 );
+if (probeSdk) {
+  if (requested.length !== 1 && !(requested.length === 3 && requested[1] === "--offline-cache" && requested[2]))
+    throw new Error("Usage: Install-Harnesses --opencode-probe-sdk [--offline-cache <absolute path>]");
+  const { installOpenCodeProbeSdk } = await import("./opencode-probe-sdk-install.mjs");
+  const { assertOpenCodeProbeHost, openCodeProbeSdkVersion } = await import("../apps/server/dist/runtime/harness/opencode-probe-sdk.js");
+  assertOpenCodeProbeHost();
+  const status = await manager.status("opencode", false);
+  if (!status.installed || status.version !== openCodeProbeSdkVersion)
+    throw new Error(`OpenCode ${openCodeProbeSdkVersion} is required for the probe SDK. Current version · ${status.version ?? "unavailable"}`);
+  const prepared = installOpenCodeProbeSdk(requested[2]);
+  console.log(`OpenCode probe SDK ${openCodeProbeSdkVersion} ready · ${prepared}`);
+}
 for (const id of selected) {
   let status = await manager.status(id, false);
   while (status.job?.state === "installing") {

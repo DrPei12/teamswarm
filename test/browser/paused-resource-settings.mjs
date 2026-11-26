@@ -48,8 +48,8 @@ try {
   await page.getByRole("button",{name:"Execution permissions",exact:true}).click();
   await page.getByRole("menuitem",{name:"Advanced settings →",exact:true}).click();
   const dialog=page.getByRole("dialog",{name:"Advanced settings",exact:true});
-  await dialog.getByRole("combobox",{name:"Harness",exact:true}).waitFor();
-  await dialog.getByRole("button",{name:"Choose model",exact:true}).waitFor();
+  await dialog.getByRole("button",{name:"Choose primary model",exact:true}).waitFor();
+  assert.equal(await dialog.getByRole("combobox",{name:"Harness",exact:true}).count(),0);
   assert.equal(await dialog.getByRole("tab",{name:"Resources and allocation"}).count(),0);
   assert.equal(await dialog.locator(".allocation-settings").count(),0);
   await dialog.getByRole("button",{name:"Cancel",exact:true}).click();

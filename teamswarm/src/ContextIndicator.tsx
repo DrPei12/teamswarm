@@ -150,6 +150,31 @@ export function ContextIndicator({ usage }: { usage?: ContextWindowUsage }) {
           <strong>{summary}</strong>
           <span>{detail}</span>
           {source && <small>{source}</small>}
+          {usage?.sessionLongevityMode && (
+            <small>
+              {t("Mode: {mode}", {
+                mode: t(
+                  usage.sessionLongevityMode === "high-efficiency"
+                    ? "High-efficiency mode"
+                    : "Standard mode",
+                ),
+              })}
+            </small>
+          )}
+          {!!usage?.sessionGeneration && (
+            <small>
+              {t("Session generation {count}", {
+                count: usage.sessionGeneration,
+              })}
+            </small>
+          )}
+          {usage?.compactionCount !== undefined && (
+            <small>
+              {t("Compactions in this session: {count}", {
+                count: usage.compactionCount,
+              })}
+            </small>
+          )}
           {usage?.nextLimit != null && (
             <small>
               {t("Next turn: {count} tokens available", {

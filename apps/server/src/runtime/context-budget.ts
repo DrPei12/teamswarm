@@ -3,10 +3,13 @@ import {effectiveWindow} from "./context-window.js";
 import type { ExecutionConfig } from "./types.js";
 
 export const DEEPSEEK_NATIVE_WINDOW = 131072;
+export const PI_COMPACTION_KEEP_RECENT = 20000;
 
 export interface ContextObservation {
   inputTokens?: number;
   outputTokens?: number;
+  reasoningOutputTokens?: number;
+  cachedInputTokens?: number;
   contextWindowTokens?: number;
   compacted?: boolean;
   estimatedGrowthTokens?: number;
@@ -22,6 +25,7 @@ export interface ContextBudget {
   toolReserve: number;
   inputTokens: number;
   nativeCompaction: boolean;
+  nativeCompactionDue?: true;
 }
 
 const positive = (n: unknown): number | undefined =>
@@ -51,10 +55,14 @@ export function contextObservation(
   if (harness === "codex") {
     const last = raw.last;
     const input = count(last?.inputTokens);
+    const reasoning = count(last?.reasoningOutputTokens);
+    const cached = count(last?.cachedInputTokens);
     return input !== undefined || window
       ? {
           inputTokens: input,
           outputTokens: count(last?.outputTokens),
+          ...(reasoning === undefined ? {} : { reasoningOutputTokens: reasoning }),
+          ...(cached === undefined ? {} : { cachedInputTokens: cached }),
           contextWindowTokens: window,
         }
       : null;
@@ -63,15 +71,15 @@ export function contextObservation(
   if (input === undefined)
     return window ? { contextWindowTokens: window } : null;
   // Claude, Pi and OpenCode report cached input separately for each completed step.
-  const cached =
-    count(raw.cacheRead ?? raw.cache_read_input_tokens ?? raw.cache?.read) ?? 0;
-  const written =
-    count(
-      raw.cacheWrite ?? raw.cache_creation_input_tokens ?? raw.cache?.write,
-    ) ?? 0;
+  const cached = count(raw.cacheRead ?? raw.cache_read_input_tokens ?? raw.cache?.read);
+  const written = count(raw.cacheWrite ?? raw.cache_creation_input_tokens ?? raw.cache?.write) ?? 0;
+  const reportedCache = count(raw.cachedInputTokens ?? raw.input_tokens_details?.cached_tokens) ?? cached;
+  const reasoning = count(raw.reasoningOutputTokens ?? raw.reasoning_tokens ?? raw.output_tokens_details?.reasoning_tokens);
   return {
-    inputTokens: input + cached + written,
+    inputTokens: input + (cached ?? 0) + written,
     outputTokens: count(raw.outputTokens ?? raw.output_tokens ?? raw.output),
+    ...(reasoning === undefined ? {} : { reasoningOutputTokens: reasoning }),
+    ...(reportedCache === undefined ? {} : { cachedInputTokens: reportedCache }),
     contextWindowTokens: window,
   };
 }
@@ -84,6 +92,7 @@ export function planContext(
     overheadTokens?: number;
     windowPlan?: ContextWindowPlan;
     nativeCompaction?: boolean;
+    preTurnCompaction?: boolean;
     requiredInputTokens?: number;
   } = {},
 ): ContextBudget {
@@ -115,6 +124,11 @@ export function planContext(
   const remaining = occupiedTokens
     ? Math.min(compactAt ?? Infinity,windowTokens - outputReserve - toolReserve) - occupiedTokens
     : fresh;
+  const nativeTailBudget = fresh - PI_COMPACTION_KEEP_RECENT;
+  const nativeCompactionDue = config.harness === "pi" && nativeCompaction && options.preTurnCompaction &&
+    plan?.overrideNative && compactAt !== undefined && nativeTailBudget > 0 &&
+    options.observation?.inputTokens !== undefined &&
+    options.observation.inputTokens + (options.observation.outputTokens ?? 0) > compactAt;
   return {
     windowTokens,
     ...(compactAt ? {compactAtTokens:compactAt}:{}),
@@ -133,13 +147,14 @@ export function planContext(
     outputReserve,
     toolReserve,
     nativeCompaction,
+    ...(nativeCompactionDue ? { nativeCompactionDue: true } : {}),
     // Native compaction owns full-session pressure. New material is still bounded.
     inputTokens: Math.max(
       0,
       Math.floor(
         Math.min(
           Math.min(fresh, Math.max(fresh * 0.6, options.requiredInputTokens ?? 0)),
-          !plan && nativeCompaction && remaining < fresh * 0.15
+          nativeCompactionDue ? nativeTailBudget : !plan && nativeCompaction && remaining < fresh * 0.15
             ? fresh
             : remaining,
         ),
@@ -149,7 +164,7 @@ export function planContext(
 }
 
 export function pressureRequiresRebuild(budget: ContextBudget): boolean {
-  if (budget.compactAtTokens) return budget.occupiedTokens >= budget.compactAtTokens;
+  if (budget.compactAtTokens) return !budget.nativeCompactionDue && budget.occupiedTokens >= budget.compactAtTokens;
   return (
     !budget.nativeCompaction &&
     budget.occupiedTokens + budget.outputReserve + budget.toolReserve >=

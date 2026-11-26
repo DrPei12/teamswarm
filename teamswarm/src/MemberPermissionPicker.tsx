@@ -29,6 +29,7 @@ export function MemberPermissionPicker({
   disabled,
   compact,
   includeDefault,
+  hostInlineOnly,
   sharedModel,
   refreshKey = 0,
   onOptions,
@@ -43,6 +44,7 @@ export function MemberPermissionPicker({
   disabled?: boolean;
   compact?: boolean;
   includeDefault?: boolean;
+  hostInlineOnly?: boolean;
   sharedModel?: boolean;
   refreshKey?: number;
   onOptions?: (options: MemberPermissionOptions) => void;
@@ -95,36 +97,51 @@ export function MemberPermissionPicker({
           },
         ]
       : []),
-    ...(options?.options ?? []).map((option) => {
-      const needsSharedModel =
-        id === "antigravity" && option.id === "auto" && sharedModel === false;
-      return {
-        ...option,
-        available: option.available !== false && !needsSharedModel,
-        label: t(option.label),
-        help: t(
-          needsSharedModel
-            ? "Choose a shared model to use automatic approval."
-            : option.available === false
-              ? "Unavailable for this Harness."
-              : (
-                  {
-                    "full-access":
-                      "Read and write files across the device and run system commands.",
-                    manual: "You approve operations when the Harness asks.",
-                    auto:
-                      id === "antigravity"
-                        ? "Automatically review file operations within the workspace."
-                        : "The Harness reviews approval requests for you.",
-                    "read-only": "Read files without changing them.",
-                    "workspace-write": "Read and write in the workspace.",
-                  } as const
-                )[option.id],
-        ),
-      };
-    }),
+    ...(options?.options ?? [])
+      .filter(
+        (option) =>
+          !hostInlineOnly ||
+          option.id === "read-only" ||
+          option.id === "full-access",
+      )
+      .map((option) => {
+        if (hostInlineOnly && option.id === "full-access")
+          return {
+            ...option,
+            label: t("Approve inline edits"),
+            help: t("Approve changes to one or two existing text files."),
+          };
+        const needsSharedModel =
+          id === "antigravity" && option.id === "auto" && sharedModel === false;
+        return {
+          ...option,
+          available: option.available !== false && !needsSharedModel,
+          label: t(option.label),
+          help: t(
+            needsSharedModel
+              ? "Choose a shared model to use automatic approval."
+              : option.available === false
+                ? "Unavailable for this Harness."
+                : (
+                    {
+                      "full-access":
+                        "Read and write files across the device and run system commands.",
+                      manual: "You approve operations when the Harness asks.",
+                      auto:
+                        id === "antigravity"
+                          ? "Automatically review file operations within the workspace."
+                          : "The Harness reviews approval requests for you.",
+                      "read-only": "Read files without changing them.",
+                      "workspace-write": "Read and write in the workspace.",
+                    } as const
+                  )[option.id],
+          ),
+        };
+      }),
   ];
-  const selected = choices.find((option) => option.id === value);
+  const currentValue =
+    hostInlineOnly && value !== "read-only" ? "full-access" : value;
+  const selected = choices.find((option) => option.id === currentValue);
   const save = async (next: MemberPermissionPreset | "team-default") => {
     if (lock.current) return;
     lock.current = true;
@@ -167,11 +184,13 @@ export function MemberPermissionPicker({
             <span>
               {selected?.label ??
                 t(
-                  value === "read-only"
+                  currentValue === "read-only"
                     ? "Read-only"
-                    : value === "full-access"
-                      ? "Full access"
-                      : value === "team-default"
+                    : currentValue === "full-access"
+                      ? hostInlineOnly
+                        ? "Approve inline edits"
+                        : "Full access"
+                      : currentValue === "team-default"
                         ? "Team default"
                         : "Custom permissions",
                 )}
@@ -192,7 +211,7 @@ export function MemberPermissionPicker({
             </DropdownMenu.Label>
             <DropdownMenu.Separator className="separator" />
             <DropdownMenu.RadioGroup
-              value={value}
+              value={currentValue}
               onValueChange={(next) =>
                 void save(next as MemberPermissionPreset | "team-default")
               }

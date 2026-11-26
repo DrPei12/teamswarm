@@ -1,6 +1,7 @@
 import type { TranscriptItem } from "@team/contracts/product";
 
 const text = (content: any): string => typeof content === "string" ? content
+  : content?.type === "text" && typeof content.text === "string" ? content.text
   : Array.isArray(content) ? content.filter(b => b?.type === "text").map(b => b.text ?? "").join("\n") : "";
 const name = (value: string) => value.replace(/^mcp__teamswarm__|^teamswarm__/, "");
 const command = (value: string) => ["bash", "pwsh", "powershell", "run_terminal_command", "run_terminal_cmd"].includes(value.toLowerCase());
@@ -51,12 +52,12 @@ export class NativeTranscript {
     this.message = "";
   }
   observe(event: any) {
-    if (event.type === "acp.event" || this.harness === "opencode") {
+    if (event.type === "acp.event" || this.harness === "opencode" || this.harness === "grok") {
       this.acp = true;
-      if (event.type !== "opencode.event" && event.type !== "acp.event") return;
+      if (event.type !== "opencode.event" && event.type !== "acp.event" && event.type !== "grok.event") return;
       const e = event.event;
       if (e?.sessionUpdate === "agent_message_chunk" && e.content?.type === "text") {
-        this.message ||= `${this.turn}:opencode:${this.sequence++}`;
+        this.message ||= `${this.turn}:${this.harness}:${this.sequence++}`;
         this.delta(this.message, e.content.text);
       }
       if (e?.sessionUpdate === "tool_call") {

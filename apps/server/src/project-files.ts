@@ -4,7 +4,7 @@ import { z } from "zod";
 import { badRequest, conflict } from "./errors.js";
 import type { TeamRuntime } from "./runtime/engine.js";
 import { activeStates, overlaps } from "./runtime/store.js";
-import type { Work, Member } from "./runtime/types.js";
+import type { Attempt, Work, Member } from "./runtime/types.js";
 import { WorkspaceAccess } from "./runtime/workspace-access.js";
 import { parse } from "./runtime/validation.js";
 
@@ -46,8 +46,9 @@ export function projectFileRoutes(runtime: TeamRuntime) {
               (work) =>
                 activeStates.has(work.status) &&
                 !work.interaction &&
-                runtime.store.get<Member>("members", team.id, work.memberId)
-                  .config.access === "workspace-write" &&
+                (work.attemptId ?
+                  runtime.store.get<Attempt>("attempts", team.id, work.attemptId).config :
+                  runtime.store.get<Member>("members", team.id, work.memberId).config).access === "workspace-write" &&
                 overlaps(runtime.store.workspace(work), root),
             ),
         );

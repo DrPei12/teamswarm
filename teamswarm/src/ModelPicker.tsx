@@ -34,6 +34,8 @@ export function ModelPicker({
   disabled = false,
   onOpenChange,
   label,
+  ariaLabel,
+  showSource = false,
   selectedKey,
   open: controlledOpen,
   onConfigure,
@@ -49,6 +51,8 @@ export function ModelPicker({
   disabled?: boolean;
   onOpenChange?: (open: boolean) => void;
   label?: string;
+  ariaLabel?: string;
+  showSource?: boolean;
   selectedKey?: string;
   open?: boolean;
   onConfigure?: () => void;
@@ -113,7 +117,7 @@ export function ModelPicker({
               ? "runtime-choice model-picker-trigger compact"
               : "field-select model-picker-trigger"
           }
-          aria-label={label || t("Choose model")}
+          aria-label={ariaLabel || label || t("Choose model")}
         >
           <span>
             {label ||
@@ -205,7 +209,9 @@ export function ModelPicker({
                 ? t("Custom model")
                 : provider
                   ? t(provider)
-                  : t("Model providers")}
+                  : showSource
+                    ? t("Available models")
+                    : t("Model providers")}
             </strong>
           </div>
           {custom ? (
@@ -252,7 +258,7 @@ export function ModelPicker({
                 />
               </div>
               <div className="model-picker-list" ref={list}>
-                {!provider && !query
+                {!provider && !query && !showSource
                   ? groups.map((group) => (
                       <button
                         type="button"
@@ -300,6 +306,9 @@ export function ModelPicker({
                           ) ?? 0) > 1 && model.detail
                             ? `${model.name || model.model} · ${model.detail}`
                             : model.name || model.model}
+                          {showSource && model.detail && (
+                            <small>{t(model.detail)}</small>
+                          )}
                           {model.unavailable && (
                             <small>{t(model.unavailable)}</small>
                           )}

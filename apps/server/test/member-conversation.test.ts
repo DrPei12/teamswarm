@@ -1,7 +1,7 @@
 import { autonomousWorkers } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
@@ -11,6 +11,7 @@ import {
   memberConversation,
 } from "../src/member-conversation.js";
 import { codexDisplayItem } from "../src/runtime/harness/codex-items.js";
+import { toolBridge } from "../src/runtime/harness/native-support.js";
 import { runtimeSettings } from "../src/runtime/validation.js";
 import type {
   Harness,
@@ -72,11 +73,12 @@ async function until(check: () => boolean) {
     await new Promise((r) => setTimeout(r, 10));
   }
 }
-async function fixture(includeAlternate = false) {
+async function fixture(includeAlternate = false, harnessId = "mail-fixture") {
   const root = mkdtempSync(path.join(process.cwd(), ".test-member-mail-"));
   const workspace = path.join(root, "project");
   mkdirSync(workspace);
   const harness = new MailHarness();
+  harness.id = harnessId;
   const alternate = new MailHarness();
   alternate.id = "mail-alternate";
   const service = createApp({
@@ -996,6 +998,47 @@ test("approval decisions are scoped to a live attempt, idempotent, and cancelled
     assert.equal(await second, false);
     assert.equal((await f.api(`/teams/${f.team.id}/approvals/${waiting.id}`, { accepted: true })).status, 409);
   } finally { await f.close(); }
+});
+
+test("tool bridge drain cancels only its approval and closes the accepted-before-abort write race", { timeout: 15000 }, async () => {
+  const f = await fixture(false, "codex");
+  const bridges: Awaited<ReturnType<typeof toolBridge>>[] = [];
+  try {
+    f.a.config = { ...f.a.config, access: "workspace-write", permissions: { harness: "codex", approvalPolicy: "untrusted" } };
+    f.store.save("members", f.a);
+    f.run.state = "active"; f.store.save("runs", f.run);
+    f.wa.writePaths = ["draft.md"]; f.store.setStatus(f.wa, "queued");
+    f.service.runtime.pump();
+    await until(() => f.harness.requests.length === 1);
+    const request = f.harness.requests[0];
+    assert(request.tools.some(t => t.name === "team_write_file"));
+    const attemptId = f.store.get<Work>("works", f.team.id, f.wa.id).attemptId!;
+    const unrelated = f.service.runtime.approvals.request(f.wa, attemptId, { tool: "separate", details: "same attempt, different operation" });
+    for (const approveFirst of [false, true]) {
+      const bridge = await toolBridge(request); bridges.push(bridge);
+      const call = fetch(bridge.url, { method: "POST", body: JSON.stringify({ id: "write", method: "tools/call", params: {
+        name: "team_write_file", arguments: { path: "draft.md", text: "must not be written", expectedSha256: null },
+      } }) }).then(r => r.json());
+      await until(() => f.service.runtime.approvals.list(f.team.id, true).some(p => p.tool === "team_write_file"));
+      const approval = f.service.runtime.approvals.list(f.team.id, true).find(p => p.tool === "team_write_file")!;
+      const before = f.store.changes.stamp(f.team.id, ["approvals"]);
+      if (approveFirst) f.service.runtime.approvals.answer(f.team.id, approval.id, true);
+      await bridge.close();
+      assert.equal((await call).result.isError, true);
+      assert.equal(existsSync(path.join(request.workspace, "draft.md")), false);
+      assert.notEqual(f.store.changes.stamp(f.team.id, ["approvals"]), before);
+      if (!approveFirst) {
+        assert.equal(f.service.runtime.approvals.list(f.team.id).find(p => p.id === approval.id)?.status, "cancelled");
+        assert.equal((await f.api(`/teams/${f.team.id}/approvals/${approval.id}`, { accepted: true })).status, 409);
+      }
+    }
+    const remaining = f.service.runtime.approvals.list(f.team.id, true);
+    assert.deepEqual(remaining.map(p => p.tool), ["separate"]);
+    f.service.runtime.approvals.answer(f.team.id, remaining[0].id, false);
+    assert.equal(await unrelated, false);
+    f.harness.finish();
+    await until(() => f.store.get<Work>("works", f.team.id, f.wa.id).status !== "running");
+  } finally { await Promise.all(bridges.map(b => b.close())); await f.close(); }
 });
 
 test("member composer changes future execution without changing the running attempt or shared resource", async () => {

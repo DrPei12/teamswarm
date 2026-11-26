@@ -29,7 +29,7 @@ export class CommandObservations {
     writeFileSync(outputPath, value.output, { mode: 0o600 });
     writeFileSync(nativeResultPath, native, { mode: 0o600 });
     const exitCode = integer(value.exitCode);
-    const outcome = exitCode !== null && exitCode !== 0 ? "failed" : value.outcome;
+    const outcome = value.outcome === "succeeded" && exitCode !== null && exitCode !== 0 ? "failed" : value.outcome;
     this.emit("execution.item", {
       type: "commandExecution", ...call, harness: this.harness, nativeItemId: id,
       completedAt: new Date().toISOString(), exitCode, nativeOutcome: outcome,
@@ -56,7 +56,7 @@ export class CommandObservations {
         if (event.type === "user" && b.type === "tool_result") {
           const r = event.tool_use_result ?? {};
           this.finish(b.tool_use_id, { output: [r.stdout, r.stderr].some(v => typeof v === "string") ? [r.stdout, r.stderr].filter(Boolean).join("\n") : textOf(b.content),
-            exitCode: integer(r.exitCode ?? r.exit_code), outcome: r.interrupted ? "cancelled" : r.backgroundTaskId ? "unknown" : b.is_error ? "failed" : "succeeded", raw: event });
+            exitCode: integer(r.exitCode ?? r.exit_code), outcome: r.interrupted ? "cancelled" : r.backgroundTaskId || r.timedOut ? "unknown" : b.is_error ? "failed" : "succeeded", raw: event });
         }
       }
     } else if (this.harness === "deepseek-harness") {
@@ -68,7 +68,8 @@ export class CommandObservations {
       if (event.method === "teamswarm.command.result") {
         const p = event.params, r = p.result, v = r.value ?? {}, code = integer(v.exitCode);
         this.finish(p.callId, { output: [v.stdout?.text, v.stderr?.text].some(v => typeof v === "string") ? [v.stdout?.text, v.stderr?.text].filter(Boolean).join("\n") : textOf(r.content),
-          exitCode: code, outcome: v.aborted ? "cancelled" : r.isError || v.timedOut || v.sandbox?.denied || v.sandbox?.runnerFailed || code !== null && code !== 0 ? "failed" : code === 0 ? "succeeded" : "unknown", raw: p });
+          exitCode: code, outcome: v.aborted ? "cancelled" : v.timedOut || v.sandbox?.denied || v.sandbox?.runnerFailed ? "unknown" :
+            code !== null ? code === 0 && !r.isError ? "succeeded" : "failed" : "unknown", raw: p });
       }
     } else if (this.protocol === "acp" || ["grok", "opencode"].includes(this.harness)) {
       const e = ["acp.event", "grok.event", "opencode.event"].includes(event.type) ? event.event : null;
@@ -85,7 +86,8 @@ export class CommandObservations {
       if (["completed", "failed"].includes(e.status)) {
         const r = e.rawOutput ?? {}, code = integer(r.exitCode ?? r.exit_code ?? r.metadata?.exit ?? r.exit);
         this.finish(e.toolCallId, { output: textOf(e.content) || textOf(r.output) || (typeof r === "string" ? r : ""), exitCode: code,
-          outcome: e.status === "failed" || r.isError || r.timed_out || r.signal || code !== null && code !== 0 ? "failed" : code === 0 ? "succeeded" : "unknown", raw: e });
+          outcome: r.aborted ? "cancelled" : r.timed_out || r.signal ? "unknown" :
+            e.status === "failed" || r.isError || code !== null && code !== 0 ? "failed" : code === 0 ? "succeeded" : "unknown", raw: e });
       }
     }
   }
@@ -100,6 +102,7 @@ export function successfulCommand(event: any) {
     !["failed", "cancelled", "unknown"].includes(event.nativeOutcome);
 }
 export function finishedCommand(event: any) {
-  return event?.type === "commandExecution" && event.status === "completed" &&
-    (Number.isInteger(event.exitCode) || ["succeeded", "failed"].includes(event.nativeOutcome));
+  return event?.type === "commandExecution" && !["cancelled", "unknown"].includes(event.nativeOutcome) &&
+    (event.status === "completed" && (Number.isInteger(event.exitCode) || ["succeeded", "failed"].includes(event.nativeOutcome)) ||
+      event.status === "failed" && Number.isInteger(event.exitCode) && event.exitCode !== 0);
 }

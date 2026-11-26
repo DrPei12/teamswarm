@@ -21,6 +21,7 @@ import type {
   TeamCapabilities,
 } from "@team/contracts/allocation";
 import { chooseModel, switchHarness, type ModelChoice } from "./modelCatalog";
+import { resolveHostModel } from "./hostModelCatalog";
 import type { ServerPackagePreview } from "./allocation";
 import { invalidateModelCatalog } from "./modelCatalogCache";
 const inputStorage = window.teamswarmDesktop?.storage ?? localStorage;
@@ -786,16 +787,42 @@ class ProductClient {
   async configure(teamId: string, config: RuntimeConfig, choice?: ModelChoice) {
     const host = this.state.workspace?.executions?.[teamId]?.host;
     if (!host) throw new Error("Team settings are not available.");
-    const next = await this.resolveRuntimeChoice(
-      teamId,
-      host.config,
-      config,
-      choice,
-    );
+    const next =
+      choice?.connection && config.model
+        ? await resolveHostModel(
+            host.config,
+            config.model,
+            choice,
+            resolveModelConnection,
+          )
+        : await this.resolveRuntimeChoice(teamId, host.config, config, choice);
     try {
       return await this.command(
         `/product/teams/${encodeURIComponent(teamId)}/branches/${encodeURIComponent(host.branchId)}/host/runtime`,
         { config: next, expectedVersion: host.configurationVersion },
+        "PUT",
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "version_conflict")
+        await this.refresh();
+      throw error;
+    }
+  }
+  async saveHostSettings(
+    teamId: string,
+    branchId: string,
+    expectedVersion: number,
+    config: ExecutionConfig | undefined,
+    hostProbeConfig?: ExecutionConfig | null,
+  ) {
+    try {
+      return await this.command(
+        `/product/teams/${encodeURIComponent(teamId)}/branches/${encodeURIComponent(branchId)}/host/runtime`,
+        {
+          config,
+          expectedVersion,
+          ...(hostProbeConfig !== undefined ? { hostProbeConfig } : {}),
+        },
         "PUT",
       );
     } catch (error) {
@@ -1122,6 +1149,7 @@ class ProductClient {
         workspace: settings.workspace,
         config: settings.config,
         timeoutSeconds: settings.timeoutSeconds,
+        sessionLongevityMode: settings.sessionLongevityMode,
       },
       "PUT",
     );

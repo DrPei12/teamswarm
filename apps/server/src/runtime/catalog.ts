@@ -56,9 +56,12 @@ const matches = (value: unknown, query: string) =>
   JSON.stringify(value).toLowerCase().includes(query.toLowerCase());
 
 // Hosts/reviewers may narrow access without selecting a different model connection.
-const matchesConfiguration = (actual: ExecutionConfig, configured: ExecutionConfig) =>
-  (actual.access === configured.access || actual.access === "read-only") &&
-  hash(JSON.stringify({ ...actual, access: configured.access })) === hash(JSON.stringify(configured));
+function matchesConfiguration(actual: ExecutionConfig, configured: ExecutionConfig) {
+  const { permissions: _actualPolicy, ...effective } = actual;
+  const { permissions: _configuredPolicy, ...resource } = configured;
+  return (actual.access === configured.access || actual.access === "read-only") &&
+    hash(JSON.stringify({ ...effective, access: configured.access })) === hash(JSON.stringify(resource));
+}
 
 /** A configured execution option, not an assertion about task quality or remaining credit. */
 export class TeamCatalog {

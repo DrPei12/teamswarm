@@ -1,17 +1,11 @@
-import { apiEffortPolicy } from "@team/contracts/model-effort";
-import {
-  MemberPermissionPicker,
-  currentMemberPreset,
-} from "./MemberPermissionPicker";
-import type { MemberPermissionPreset } from "@team/contracts/allocation";
 import { FieldSelect } from "./FieldSelect";
-import { Disclosure } from "./Disclosure";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useId, useState } from "react";
+import { DeviceResourceSettings } from "./DeviceResourceSettings";
+import { HostModelSettings } from "./HostModelSettings";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   AlertCircle,
   ArrowRight,
-  Check,
   ChevronDown,
   LoaderCircle,
   Pause,
@@ -22,31 +16,10 @@ import {
 import type { RuntimeSettings } from "@team/contracts/runtime";
 import type { Workspace } from "./store";
 import { CapabilitySettings } from "./CapabilitySettings";
-import { ModelPicker } from "./ModelPicker";
 import { SwarmMark } from "./SwarmMark";
-import {
-  chooseModel,
-  selectedModelChoice,
-  switchHarness,
-} from "./modelCatalog";
-import { useModelCatalog } from "./useModelCatalog";
-import { cachedCatalog, invalidateModelCatalog } from "./modelCatalogCache";
-import type { TeamCapabilities } from "@team/contracts/allocation";
-import { HarnessInstallation } from "./HarnessInstallation";
-import { HarnessAccount, hasSubscription } from "./HarnessAccount";
-import { harnessManifest } from "@team/contracts/harness-catalog";
-import { api, product, resolveModelConnection } from "./service";
+import { product } from "./service";
 import { useI18n } from "./i18n";
 import { Modal } from "./ui";
-import { isCustomProvider } from "./allocation";
-import { readSubscriptionCatalog } from "./subscriptionCatalog";
-import {
-  useHarnessCatalog,
-  supportedEfforts,
-  effortLabel,
-  effortChoiceLabel,
-  type HarnessInspection,
-} from "./harnessCatalog.ts";
 
 const AllocationSettings = lazy(() =>
   import("./AllocationSettings").then(({ AllocationSettings }) => ({
@@ -178,7 +151,6 @@ export function Startup({
   );
 }
 
-type Inspection = HarnessInspection;
 type ExecutionSettingsProps = {
   open: boolean;
   onClose: () => void;
@@ -228,26 +200,29 @@ function ManualExecutionSettings({
   onConfigureModels: () => void;
 }) {
   const { t } = useI18n();
+  const tabId = useId();
   const [settings, setSettings] = useState<RuntimeSettings | null>(null),
-    [tab, setTab] = useState<"settings" | "resources">("settings"),
+    [tab, setTab] = useState<"settings" | "device" | "resources">("settings"),
     [busy, setBusy] = useState(false),
-    [checking, setChecking] = useState(false),
-    [error, setError] = useState(""),
-    [inspection, setInspection] = useState<Inspection | null>(null);
-  const [inspectionRevision, refreshInspection] = useState(0);
+    [error, setError] = useState("");
   const [timeLimit, setTimeLimit] = useState("");
-  const [sharedInspection, setSharedInspection] = useState<Inspection | null>(
-    null,
-  );
-  const [advanced, setAdvanced] = useState(false);
-  const modelCatalog = useModelCatalog(
-    teamId,
-    settings?.config.harness ?? "codex",
-    open,
-  );
+  const host = workspace.executions?.[teamId]?.host;
   const manualResources =
     workspace.service?.manualResourceConfiguration === true;
-  const showResources = manualResources && tab === "resources";
+  const tabs = [
+    { value: "settings", label: "Runtime" },
+    { value: "device", label: "Device resources" },
+    ...(manualResources
+      ? [{ value: "resources", label: "Resources and allocation" } as const]
+      : []),
+  ] as const;
+  const selectedTab =
+    !manualResources && tab === "resources" ? "settings" : tab;
+  const tabProps = (value: typeof selectedTab) => ({
+    id: `${tabId}-${value}-panel`,
+    "aria-labelledby": `${tabId}-${value}-tab`,
+    role: "tabpanel" as const,
+  });
   useEffect(() => {
     if (open) {
       setSettings(workspace.executions?.[teamId]?.settings ?? null);
@@ -255,139 +230,8 @@ function ManualExecutionSettings({
       setTimeLimit(seconds == null ? "" : String(seconds / 60));
       setTab("settings");
       setError("");
-      setInspection(null);
     }
   }, [open, teamId]);
-  useEffect(() => {
-    if (!open || !settings) return;
-    let current = true;
-    setChecking(true);
-    setError("");
-    setSharedInspection(null);
-    void Promise.all([
-      cachedCatalog(`harness:${settings.config.harness}`, () =>
-        api<Inspection>(
-          `/harnesses/${encodeURIComponent(settings.config.harness)}/check`,
-          {},
-        ),
-      ),
-      settings.config.chatgptAccountId
-        ? readSubscriptionCatalog(`chatgpt:${settings.config.chatgptAccountId}`)
-        : Promise.resolve(null),
-    ])
-      .then(([value, account]) => {
-        if (current) {
-          setInspection(value);
-          setSharedInspection(account);
-        }
-      })
-      .catch((e) => {
-        if (current) setError(e.message);
-      })
-      .finally(() => {
-        if (current) setChecking(false);
-      });
-    return () => {
-      current = false;
-    };
-  }, [
-    open,
-    settings?.config.harness,
-    settings?.config.chatgptAccountId,
-    inspectionRevision,
-  ]);
-  // A connection with its own endpoint or credential reference is not the native
-  // ChatGPT account the harness check probes. Its credential and reasoning-offer
-  // facts must come from that configuration, never from an empty native catalog.
-  const configuredProvider = isCustomProvider(settings?.config);
-  const sharedAccount = !!settings?.config.chatgptAccountId;
-  const subscriptionHarness =
-    settings?.config.harness === "codex" ||
-    hasSubscription(settings?.config.harness ?? "");
-  const [apiMode, setApiMode] = useState(false);
-  useEffect(() => {
-    setApiMode(configuredProvider);
-  }, [open, settings?.config.harness, configuredProvider]);
-  const customProvider =
-    !sharedAccount && (configuredProvider || apiMode || !subscriptionHarness);
-  const subscriptionMode =
-    !sharedAccount && subscriptionHarness && !customProvider && !apiMode;
-  const efforts = supportedEfforts(
-    sharedAccount ? sharedInspection : inspection,
-    settings?.config.model,
-  );
-  const configuredEffort = settings?.config.effort ?? "";
-  const providerEffort = apiEffortPolicy(settings?.config);
-  const effortChoices = providerEffort
-    ? providerEffort.supported
-    : customProvider
-      ? configuredEffort
-        ? [configuredEffort]
-        : []
-      : efforts.map((option) => option.reasoningEffort);
-  const savedEffortMissing =
-    !!configuredEffort && !effortChoices.includes(configuredEffort);
-  const effortCatalogReady =
-    !checking && !error && !!(sharedAccount ? sharedInspection : inspection);
-  const customCredential = customProvider && !!settings?.config.credentialEnv;
-  const connectionNeedsAction = Boolean(
-    inspection &&
-    (inspection.available === false ||
-      (sharedAccount
-        ? sharedInspection?.authenticated === false
-        : !customProvider && inspection.authenticated === false) ||
-      (customProvider && !settings?.config.credentialEnv)),
-  );
-  const inspect = () => {
-    invalidateModelCatalog();
-    refreshInspection((value) => value + 1);
-  };
-  const [secret, setSecret] = useState("");
-  useEffect(() => {
-    if (!open) setSecret("");
-  }, [open]);
-  const [login, setLogin] = useState<{ loginId: string; url: string } | null>(
-    null,
-  );
-  const catalog = useHarnessCatalog((error) => setError(error.message));
-  useEffect(() => {
-    if (!open || !login || settings?.config.harness !== "codex") return;
-    let current = true;
-    const timer = setInterval(() => {
-      void api<Inspection>("/harnesses/codex/check", {})
-        .then((result) => {
-          if (current && result.authenticated) {
-            setInspection(result);
-            setLogin(null);
-          }
-        })
-        .catch((e) => current && setError(e.message));
-    }, 3000);
-    return () => {
-      current = false;
-      clearInterval(timer);
-    };
-  }, [open, login, settings?.config.harness]);
-  const signIn = async () => {
-    setChecking(true);
-    setError("");
-    try {
-      setLogin(
-        await api<{ loginId: string; url: string }>(
-          "/product/harnesses/codex/login",
-          {},
-        ),
-      );
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setChecking(false);
-    }
-  };
-  const config = (patch: Partial<RuntimeSettings["config"]>) =>
-    setSettings((old) =>
-      old ? { ...old, config: { ...old.config, ...patch } } : old,
-    );
   return (
     <Modal
       open={open}
@@ -395,528 +239,209 @@ function ManualExecutionSettings({
       title={t("Advanced settings")}
       className="execution-modal"
     >
-      {manualResources && (
-        <div
-          className="modal-tabs"
-          role="tablist"
-          aria-label={t("Advanced settings")}
-        >
+      <div
+        className="modal-tabs execution-modal-tabs"
+        role="tablist"
+        aria-label={t("Advanced settings")}
+        onKeyDown={(event) => {
+          const index = tabs.findIndex(({ value }) => value === selectedTab);
+          const next =
+            event.key === "ArrowRight"
+              ? (index + 1) % tabs.length
+              : event.key === "ArrowLeft"
+                ? (index + tabs.length - 1) % tabs.length
+                : event.key === "Home"
+                  ? 0
+                  : event.key === "End"
+                    ? tabs.length - 1
+                    : -1;
+          if (next < 0) return;
+          event.preventDefault();
+          setTab(tabs[next].value);
+          event.currentTarget
+            .querySelectorAll<HTMLButtonElement>("[role=tab]")
+            [next]?.focus();
+        }}
+      >
+        {tabs.map(({ value, label }) => (
           <button
+            key={value}
+            id={`${tabId}-${value}-tab`}
             type="button"
             role="tab"
-            aria-selected={tab === "settings"}
-            className={tab === "settings" ? "active" : ""}
-            onClick={() => setTab("settings")}
+            aria-selected={selectedTab === value}
+            aria-controls={`${tabId}-${value}-panel`}
+            tabIndex={selectedTab === value ? 0 : -1}
+            className={selectedTab === value ? "active" : ""}
+            onClick={() => setTab(value)}
           >
-            {t("Runtime")}
+            {t(label)}
           </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "resources"}
-            className={tab === "resources" ? "active" : ""}
-            onClick={() => setTab("resources")}
-          >
-            {t("Resources and allocation")}
-          </button>
+        ))}
+      </div>
+      {selectedTab === "resources" && (
+        <div {...tabProps("resources")} className="execution-allocation-pane">
+          <Suspense fallback={<p role="status">{t("Loading…")}</p>}>
+            <AllocationSettings teamId={teamId} workspace={workspace} />
+          </Suspense>
         </div>
       )}
-      {showResources && (
-        <Suspense fallback={<p role="status">{t("Loading…")}</p>}>
-          <AllocationSettings teamId={teamId} workspace={workspace} />
-        </Suspense>
+      {selectedTab === "device" && (
+        <div {...tabProps("device")} className="device-profile-pane">
+          <DeviceResourceSettings />
+        </div>
       )}
-      {!showResources && settings && (
-        <form
-          className="execution-form"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (busy) return;
-            const seconds = Math.round(Number(timeLimit) * 60);
-            if (
-              !timeLimit.trim() ||
-              !Number.isFinite(seconds) ||
-              seconds < 10 ||
-              seconds > 3600
-            ) {
-              setError(t("Enter a duration from 10 seconds to 60 minutes."));
-              return;
-            }
-            setBusy(true);
-            setError("");
-            try {
-              let next = { ...settings, timeoutSeconds: seconds };
-              if (secret.trim()) {
-                const result = await api<{ reference: string }>(
-                  `/product/teams/${teamId}/credential`,
-                  { secret: secret.trim(), purpose: "runtime" },
-                  "PUT",
-                );
-                next = {
-                  ...next,
-                  config: {
-                    ...settings.config,
-                    credentialEnv: result.reference,
-                  },
-                };
-                setSettings(next);
-                setSecret("");
-              }
-              await product.saveSettings(teamId, next);
-              onClose();
-            } catch (e) {
-              setError((e as Error).message);
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          <div className="form-body">
-            <div className="form-pair">
-              <label>
-                {t("Harness")}
-                <FieldSelect
-                  value={settings.config.harness}
-                  disabled={busy}
-                  onValueChange={async (value) => {
-                    const harness = value;
-                    setBusy(true);
-                    setError("");
-                    try {
-                      const capabilities = await api<TeamCapabilities>(
-                        `/teams/${encodeURIComponent(teamId)}/capabilities`,
-                      );
-                      const next = await switchHarness(
-                        settings.config,
-                        harness,
-                        capabilities.connections,
-                        resolveModelConnection,
-                      );
-                      setInspection(null);
-                      setLogin(null);
-                      config(next);
-                      setSecret("");
-                      setApiMode(isCustomProvider(next));
-                    } catch (e) {
-                      setError((e as Error).message);
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                >
-                  {catalog.map(({ id, name }) => (
-                    <option key={id} value={id}>
-                      {name}
-                    </option>
-                  ))}
-                </FieldSelect>
-              </label>
-              <div className="model-field">
-                {t("Model")}
-                <ModelPicker
-                  value={settings.config.model}
-                  models={modelCatalog.models}
-                  selectedKey={
-                    selectedModelChoice(modelCatalog.models, settings.config)
-                      ?.key
-                  }
-                  onConfigure={onConfigureModels}
-                  onRetry={modelCatalog.retry}
-                  onChange={async (model, choice) => {
-                    setBusy(true);
-                    setError("");
-                    try {
-                      const next = await chooseModel(
-                        settings.config,
-                        model,
-                        choice,
-                        resolveModelConnection,
-                      );
-                      config(next);
-                      setSecret("");
-                      setApiMode(isCustomProvider(next));
-                    } catch (e) {
-                      setError((e as Error).message);
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                  loading={modelCatalog.loading}
-                  error={modelCatalog.error}
-                />
-              </div>
-            </div>
-            <HarnessInstallation
-              key={settings.config.harness}
-              harness={settings.config.harness}
-              onInstalled={inspect}
+      {selectedTab === "settings" && (
+        <div {...tabProps("settings")} className="execution-settings-pane">
+          {host && (
+            <HostModelSettings
+              key={host.branchId}
+              teamId={teamId}
+              host={host}
+              onConfigureModels={onConfigureModels}
             />
-            {subscriptionHarness &&
-              !sharedAccount &&
-              !harnessManifest(settings.config.harness)?.models.nativeOnly && (
-                <div
-                  className="account-mode"
-                  role="group"
-                  aria-label={t("Connection method")}
-                >
-                  <button
-                    type="button"
-                    aria-pressed={subscriptionMode}
-                    onClick={() => {
-                      if (subscriptionMode) return;
-                      config({
-                        provider: null,
-                        baseUrl: null,
-                        credentialEnv: null,
-                        protocol: null,
-                        model: null,
-                        effort: null,
-                        thinkingFormat: null,
-                      });
-                      setSecret("");
-                      setApiMode(false);
-                      setAdvanced(false);
+          )}
+          {settings && (
+            <form
+              className="execution-form"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (busy) return;
+                const seconds = Math.round(Number(timeLimit) * 60);
+                if (
+                  !timeLimit.trim() ||
+                  !Number.isFinite(seconds) ||
+                  seconds < 10 ||
+                  seconds > 3600
+                ) {
+                  setError(
+                    t("Enter a duration from 10 seconds to 60 minutes."),
+                  );
+                  return;
+                }
+                setBusy(true);
+                setError("");
+                try {
+                  await product.saveSettings(teamId, {
+                    ...settings,
+                    timeoutSeconds: seconds,
+                  });
+                  onClose();
+                } catch (e) {
+                  setError((e as Error).message);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              <div className="form-body">
+                <h3>{t("Team runtime")}</h3>
+                <div className="directory-field">
+                  <div className="directory-label">
+                    <label htmlFor="execution-workspace">
+                      {t("Project folder")}
+                    </label>
+                    {window.teamswarmDesktop && (
+                      <button
+                        type="button"
+                        className="directory-picker"
+                        onClick={async () => {
+                          const directory =
+                            await window.teamswarmDesktop!.chooseDirectory();
+                          if (directory)
+                            setSettings({ ...settings, workspace: directory });
+                        }}
+                      >
+                        {t("Browse…")}
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    id="execution-workspace"
+                    value={settings.workspace}
+                    onChange={(e) =>
+                      setSettings({ ...settings, workspace: e.target.value })
+                    }
+                    required
+                    spellCheck={false}
+                  />
+                </div>
+                <label>
+                  {t("Session mode")}
+                  <FieldSelect
+                    aria-label={t("Session mode")}
+                    value={settings.sessionLongevityMode ?? "standard"}
+                    disabled={busy}
+                    onValueChange={(value) => {
+                      if (value === "standard" || value === "high-efficiency")
+                        setSettings(
+                          (old) =>
+                            old && { ...old, sessionLongevityMode: value },
+                        );
                     }}
                   >
-                    {t("Subscription sign-in")}
-                  </button>
-                  {
-                    <button
-                      type="button"
-                      aria-pressed={!subscriptionMode}
-                      onClick={() => {
-                        if (!subscriptionMode) return;
-                        config({ model: null, effort: null });
-                        setApiMode(true);
-                        setAdvanced(true);
-                      }}
-                    >
-                      {t("API connection")}
-                    </button>
-                  }
-                </div>
-              )}
-            {subscriptionMode && hasSubscription(settings.config.harness) && (
-              <HarnessAccount
-                key={"account:" + settings.config.harness}
-                harness={settings.config.harness}
-                model={settings.config.model}
-                revision={inspectionRevision}
-                onChanged={inspect}
-              />
-            )}
-            {(!subscriptionMode || settings.config.harness === "codex") && (
-              <div className="connection-inspection">
+                    <option value="standard">{t("Standard mode")}</option>
+                    <option value="high-efficiency">
+                      {t("High-efficiency mode")}
+                    </option>
+                  </FieldSelect>
+                  <small>
+                    {t(
+                      settings.sessionLongevityMode === "high-efficiency"
+                        ? "Refresh sessions earlier during long-running work."
+                        : "Keep the current session longer when work can continue.",
+                    )}
+                  </small>
+                </label>
+                <label>
+                  {t("Time limit per turn (minutes)")}
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min={10 / 60}
+                    max={60}
+                    step="any"
+                    required
+                    disabled={busy}
+                    value={timeLimit}
+                    onChange={(e) => {
+                      e.currentTarget.setCustomValidity("");
+                      setTimeLimit(e.target.value);
+                    }}
+                    onInvalid={(e) => {
+                      e.currentTarget.setCustomValidity(
+                        t("Enter a duration from 10 seconds to 60 minutes."),
+                      );
+                    }}
+                  />
+                  <small>
+                    {t(
+                      "A turn that runs longer is stopped and kept as interrupted. Applies to new requests; 10 seconds–60 minutes.",
+                    )}
+                  </small>
+                </label>
+                {error && (
+                  <p role="alert" className="form-error">
+                    {t(error)}
+                  </p>
+                )}
+              </div>
+              <div className="form-footer">
                 <button
                   type="button"
                   className="secondary-button"
-                  onClick={() => void inspect()}
-                  disabled={checking}
+                  onClick={onClose}
                 >
-                  {checking ? (
-                    <LoaderCircle size={16} className="spinner" />
-                  ) : (
-                    <RotateCcw size={16} />
-                  )}{" "}
-                  {t("Check connection")}
+                  {t("Cancel")}
                 </button>
-                {inspection && (!sharedAccount || sharedInspection) && (
-                  <span
-                    className={
-                      connectionNeedsAction
-                        ? "connection-needs-action"
-                        : "connection-ready"
-                    }
-                  >
-                    {connectionNeedsAction ? (
-                      <AlertCircle size={16} />
-                    ) : (
-                      <Check size={16} />
-                    )}{" "}
-                    {t(
-                      inspection.available === false
-                        ? "Not installed"
-                        : sharedAccount
-                          ? sharedInspection?.authenticated === true
-                            ? "Connected"
-                            : "Reconnect ChatGPT"
-                          : customProvider
-                            ? customCredential
-                              ? "Configured · request not yet verified"
-                              : "Configure the endpoint and credential reference"
-                            : inspection.authenticated === false
-                              ? "Sign in to your harness"
-                              : "Available",
-                    )}
-                  </span>
-                )}
-              </div>
-            )}
-            {inspection?.available === false && (
-              <p className="form-error" role="alert">
-                {t(
-                  "Install the harness on this device, then check the connection again.",
-                )}
-              </p>
-            )}
-            {settings.config.harness === "codex" &&
-              !sharedAccount &&
-              !customProvider &&
-              inspection?.authenticated === false && (
-                <div className="harness-login">
-                  {login ? (
-                    <>
-                      <a
-                        className="primary-button"
-                        href={login.url}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                      >
-                        {t("Open sign-in page")}
-                      </a>
-                      <button
-                        type="button"
-                        className="text-button"
-                        onClick={() =>
-                          void api("/product/harnesses/codex/login/cancel", {
-                            loginId: login.loginId,
-                          })
-                            .then(() => setLogin(null))
-                            .catch((e) => setError(e.message))
-                        }
-                      >
-                        {t("Cancel")}
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      disabled={checking}
-                      onClick={() => void signIn()}
-                    >
-                      {t("Sign in with ChatGPT")}
-                    </button>
-                  )}
-                </div>
-              )}
-            <div className="directory-field">
-              <div className="directory-label">
-                <label htmlFor="execution-workspace">
-                  {t("Project folder")}
-                </label>
-                {window.teamswarmDesktop && (
-                  <button
-                    type="button"
-                    className="directory-picker"
-                    onClick={async () => {
-                      const directory =
-                        await window.teamswarmDesktop!.chooseDirectory();
-                      if (directory)
-                        setSettings({ ...settings, workspace: directory });
-                    }}
-                  >
-                    {t("Browse…")}
-                  </button>
-                )}
-              </div>
-              <input
-                id="execution-workspace"
-                value={settings.workspace}
-                onChange={(e) =>
-                  setSettings({ ...settings, workspace: e.target.value })
-                }
-                required
-                spellCheck={false}
-              />
-            </div>
-            <div className="form-pair">
-              <label>
-                {t("Effort")}
-                <FieldSelect
-                  value={settings.config.effort ?? ""}
-                  disabled={busy || !settings.config.model}
-                  onValueChange={(value) => config({ effort: value || null })}
-                >
-                  {savedEffortMissing && (
-                    <option
-                      value={configuredEffort}
-                      disabled={effortCatalogReady}
-                    >
-                      {effortLabel(configuredEffort)}
-                      {effortCatalogReady && ` · ${t("Unavailable")}`}
-                    </option>
-                  )}
-                  {["", ...effortChoices].map((v) => (
-                    <option key={v} value={v}>
-                      {effortChoiceLabel(v, providerEffort, t)}
-                    </option>
-                  ))}
-                </FieldSelect>
-              </label>
-              <label>
-                {t("Execution permissions")}
-                <MemberPermissionPicker
-                  teamId={teamId}
-                  harness={settings.config.harness}
-                  sharedModel={
-                    !!(
-                      settings.config.baseUrl ||
-                      settings.config.chatgptAccountId
-                    )
-                  }
-                  value={currentMemberPreset(settings.config)}
-                  disabled={busy}
-                  onChange={async (preset) => {
-                    setBusy(true);
-                    try {
-                      config(
-                        await product.resolvePermissionConfiguration(
-                          teamId,
-                          settings.config,
-                          preset as MemberPermissionPreset,
-                        ),
-                      );
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                />
-              </label>
-            </div>
-            <label>
-              {t("Time limit per turn (minutes)")}
-              <input
-                type="number"
-                inputMode="decimal"
-                min={10 / 60}
-                max={60}
-                step="any"
-                required
-                disabled={busy}
-                value={timeLimit}
-                onChange={(e) => {
-                  e.currentTarget.setCustomValidity("");
-                  setTimeLimit(e.target.value);
-                }}
-                onInvalid={(e) => {
-                  e.currentTarget.setCustomValidity(
-                    t("Enter a duration from 10 seconds to 60 minutes."),
-                  );
-                }}
-              />
-              <small>
-                {t(
-                  "A turn that runs longer is stopped and kept as interrupted. Applies to new requests; 10 seconds–60 minutes.",
-                )}
-              </small>
-            </label>
-            {!subscriptionMode && !sharedAccount && (
-              <div
-                className="advanced-settings"
-                onInvalidCapture={(event) => {
-                  event.preventDefault();
-                  const input = event.target as HTMLInputElement;
-                  setAdvanced(true);
-                  setError(input.validationMessage);
-                  requestAnimationFrame(() => input.focus());
-                }}
-              >
-                <button
-                  type="button"
-                  className="advanced-toggle"
-                  aria-expanded={advanced}
-                  onClick={() => setAdvanced(!advanced)}
-                >
-                  {t("Model connection")}
-                  <ChevronDown size={16} />
+                <button className="primary-button" disabled={busy}>
+                  {busy && <LoaderCircle size={16} className="spinner" />}
+                  {t("Save changes")}
                 </button>
-                <Disclosure open={advanced} className="advanced-fields">
-                  <label>
-                    {t("Provider name")}
-                    <input
-                      value={settings.config.provider ?? ""}
-                      onChange={(e) =>
-                        config({ provider: e.target.value || null })
-                      }
-                      maxLength={100}
-                    />
-                  </label>
-                  <label>
-                    {t("API endpoint")}
-                    <input
-                      value={settings.config.baseUrl ?? ""}
-                      onChange={(e) =>
-                        config({ baseUrl: e.target.value || null })
-                      }
-                      type="url"
-                      placeholder="https://api.openai.com/v1"
-                    />
-                  </label>
-                  <label>
-                    {t("Protocol")}
-                    <FieldSelect
-                      value={settings.config.protocol ?? ""}
-                      onValueChange={(value) =>
-                        config({
-                          protocol: (value ||
-                            null) as RuntimeSettings["config"]["protocol"],
-                        })
-                      }
-                    >
-                      <option value="">{t("Default")}</option>
-                      <option value="responses">Responses</option>
-                      <option value="chat-completions">Chat Completions</option>
-                      <option value="anthropic-messages">
-                        Anthropic Messages
-                      </option>
-                    </FieldSelect>
-                  </label>
-                  <label>
-                    {t("API key")}
-                    <input
-                      type="password"
-                      value={secret}
-                      onChange={(e) => setSecret(e.target.value)}
-                      autoComplete="new-password"
-                      placeholder={t("Enter a key to save")}
-                      spellCheck={false}
-                    />
-                  </label>
-                  <label>
-                    {t("Credential reference")}
-                    <input
-                      value={settings.config.credentialEnv ?? ""}
-                      onChange={(e) =>
-                        config({ credentialEnv: e.target.value || null })
-                      }
-                      placeholder="OPENAI_API_KEY"
-                      spellCheck={false}
-                    />
-                  </label>
-                </Disclosure>
               </div>
-            )}
-            {error && (
-              <p role="alert" className="form-error">
-                {t(error)}
-              </p>
-            )}
-          </div>
-          <div className="form-footer">
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={onClose}
-            >
-              {t("Cancel")}
-            </button>
-            <button className="primary-button" disabled={busy}>
-              {busy && <LoaderCircle size={16} className="spinner" />}
-              {t("Save changes")}
-            </button>
-          </div>
-        </form>
+            </form>
+          )}
+        </div>
       )}
     </Modal>
   );
@@ -971,7 +496,7 @@ export function ExecutionActivity({
   };
   const status =
     issue?.status === "recovery_required" || issue?.status === "interrupted"
-      ? "Interrupted"
+      ? issue.status
       : run?.state === "paused"
         ? "Paused"
         : active.some((w) => w.status === "stopping")

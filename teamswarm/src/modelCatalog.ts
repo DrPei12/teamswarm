@@ -231,8 +231,9 @@ export async function switchHarness(
   resolve: Resolve,
 ): Promise<ExecutionConfig> {
   if (harness === config.harness) return config;
+  const { nativeReadProbes: _probe, ...previous } = config;
   config = {
-    ...config,
+    ...previous,
     permissions: permissionsForHarness(config, harness),
   };
   if (

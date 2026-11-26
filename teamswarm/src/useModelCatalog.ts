@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import type { TeamCapabilities } from "@team/contracts/allocation";
+import type { ModelAccess, TeamCapabilities } from "@team/contracts/allocation";
+import { hostConnections, hostModelChoices } from "./hostModelCatalog";
 import type { HarnessInspection } from "./harnessCatalog";
 import { harnessManifests } from "@team/contracts/harness-catalog";
 import { api } from "./service";
@@ -15,12 +16,14 @@ export function useModelCatalog(
   teamId: string,
   harness: string,
   active = true,
+  host = false,
 ) {
   const [revision, refresh] = useState(0);
   useEffect(() => subscribeModelCatalog(() => refresh((v) => v + 1)), []);
   const [snapshot, setSnapshot] = useState<{
     teamId: string;
     value: TeamCapabilities;
+    host?: ModelAccess[];
   } | null>(null);
   const capabilities = snapshot?.teamId === teamId ? snapshot.value : null;
   const [inspections, setInspections] = useState<
@@ -40,21 +43,44 @@ export function useModelCatalog(
     )
       .then(async (value) => {
         if (!current) return;
-        setSnapshot({ teamId, value });
-        const ids = [
-          ...new Set([
-            harness,
-            ...(value.version === 0
-              ? harnessManifests()
-                  .filter((h) => h.models.nativeLogin)
-                  .map((h) => h.id)
-              : []),
-            ...value.connections
-              .filter((c) => c.enabled && c.kind === "subscription")
-              .map(subscriptionCatalogId)
-              .filter((id): id is string => !!id),
-          ]),
-        ];
+        const accounts =
+          host && value.inheritsDefaults !== false
+            ? await cachedCatalog("chatgpt-accounts", () =>
+                api<{ accounts: { id: string; connected: boolean }[] }>(
+                  "/model-accounts/chatgpt",
+                ),
+              )
+                .then((result) => result.accounts)
+                .catch((error: Error) => {
+                  if (current) setError(error.message);
+                  return [];
+                })
+            : [];
+        if (!current) return;
+        const sources = host ? hostConnections(value, accounts) : undefined;
+        setSnapshot({ teamId, value, host: sources });
+        const ids = host
+          ? [
+              ...new Set(
+                sources!
+                  .map(subscriptionCatalogId)
+                  .filter((id): id is string => !!id),
+              ),
+            ]
+          : [
+              ...new Set([
+                harness,
+                ...(value.version === 0
+                  ? harnessManifests()
+                      .filter((h) => h.models.nativeLogin)
+                      .map((h) => h.id)
+                  : []),
+                ...value.connections
+                  .filter((c) => c.enabled && c.kind === "subscription")
+                  .map(subscriptionCatalogId)
+                  .filter((id): id is string => !!id),
+              ]),
+            ];
         await Promise.all(
           ids.map(async (id) => {
             try {
@@ -76,14 +102,24 @@ export function useModelCatalog(
     return () => {
       current = false;
     };
-  }, [teamId, harness, active, revision]);
+  }, [teamId, harness, active, revision, host]);
   const models = capabilities
-    ? modelChoices(capabilities, inspections, harness)
+    ? host
+      ? hostModelChoices(snapshot?.host ?? [], inspections)
+      : modelChoices(capabilities, inspections, harness)
     : [];
   return {
     capabilities,
     loading,
-    error: error || (!models.length ? (inspections[harness]?.error ?? "") : ""),
+    error:
+      error ||
+      (!models.length
+        ? (inspections[harness]?.error ??
+          (host
+            ? Object.values(inspections).find((item) => item.error)?.error
+            : undefined) ??
+          "")
+        : ""),
     inspection: inspections[harness] ?? null,
     models,
     retry: () => invalidateModelCatalog(),

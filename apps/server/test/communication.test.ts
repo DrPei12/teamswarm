@@ -13,6 +13,8 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { createApp } from "../src/app.js";
+import { memberConversation } from "../src/member-conversation.js";
+import { hash } from "../src/runtime/store.js";
 import type {
   Attempt,
   ExecutionConfig,
@@ -617,7 +619,7 @@ test("blocked integration exposes missing acceptance and requests one bounded co
       .at(-1)!;
     assert.match(
       correction.work.instructions,
-      /Submitted work is NOT accepted/,
+      /Complete independent acceptance before integration/,
     );
     assert.equal(correction.request.sessionId, undefined);
     t.harness.finish(correction.work.id);
@@ -1788,9 +1790,11 @@ test("isolated acceptance cannot deliver before independently accepted integrati
             path.join(t.harness.call(w.id).request.workspace, file),
             "42",
           );
+      if (w.id === b.id)
+        writeFileSync(path.join(t.harness.call(w.id).request.workspace, "A.txt"), "24");
       await t.tool(w.id, "team_submit_result", {
         summary: "Checked file",
-        files: [w.title + ".txt", ...(w.id === a.id ? extraFiles : [])],
+        files: [w.title + ".txt", ...(w.id === a.id ? extraFiles : []), ...(w.id === b.id ? ["A.txt"] : [])],
         usedArtifactIds: [],
       });
       t.harness.finish(w.id);
@@ -1822,7 +1826,7 @@ test("isolated acceptance cannot deliver before independently accepted integrati
           path.join(t.harness.call(review.id).request.workspace, "A.txt"),
           "utf8",
         ),
-        "42",
+        work.id === b.id ? "24" : "42",
       );
       await t.tool(review.id, "team_accept_work", {
         workId: work.id,
@@ -1830,7 +1834,7 @@ test("isolated acceptance cannot deliver before independently accepted integrati
         criteria: work.acceptanceCriteria.map((criterion) => ({
           criterion,
           passed: true,
-          evidence: "Independent fixture driver read actual A.txt bytes 42",
+          evidence: "Independent check of the submitted A.txt contents",
           evidenceType: "review_judgment",
           evidenceEventIds: [],
         })),
@@ -1839,11 +1843,12 @@ test("isolated acceptance cannot deliver before independently accepted integrati
       await until(() => t.state(review.id).status === "submitted");
     }
     await accept(t.hostId, a);
+    await accept(t.hostId, b);
     t.harness.finish(t.hostId);
     await until(() => t.state(t.hostId).status === "submitted");
     const next = await t.api(
       `${t.prefix}/conversations/${t.conversation.id}/messages`,
-      { clientRequestId: randomUUID(), content: "Integrate A and retire B/C." },
+      { clientRequestId: randomUUID(), content: "Integrate A and B, and retire C." },
     );
     // A queued background turn may have claimed the Host just before this user request.
     for (const call of t.harness.calls.filter(
@@ -1854,8 +1859,8 @@ test("isolated acceptance cannot deliver before independently accepted integrati
       t.harness.finish(call.work.id);
     await until(() => t.harness.call(next.body.workId));
     await t.tool(next.body.workId, "team_define_requirements", {
-      content: "Integrate accepted A; B/C are unnecessary.",
-      affectedWorkIds: [b.id, c.id],
+      content: "Integrate the accepted A and B submissions. Retire C.",
+      affectedWorkIds: [c.id],
     });
     const oldRun = () =>
       t.service.runtime.store.get<Run>("runs", t.team.id, a.runId);
@@ -1865,33 +1870,68 @@ test("isolated acceptance cannot deliver before independently accepted integrati
       name: "Integrator",
       responsibility: "Integrate accepted output",
     });
-    const inputs = t.state(a.id).artifactIds;
-    const integration = await t.tool(next.body.workId, "team_delegate", {
+    const inputs = [...t.state(a.id).artifactIds, ...t.state(b.id).artifactIds];
+    const integrationInput = {
       memberId: integrator.id,
       title: "Integration",
-      instructions: "Place accepted A.txt in shared project",
+      instructions: "Integrate the accepted files from A and B",
       acceptanceCriteria: ["Shared A.txt contains 42"],
       inputArtifactIds: inputs,
-      dependsOn: [a.id],
-      workspaceMode: "shared",
-      integratesWorkIds: [a.id],
+      dependsOn: [a.id, b.id],
+      writePaths: ["A.txt", "B.txt", ...extraFiles],
+      integratesWorkIds: [a.id, b.id],
+    };
+    await assert.rejects(t.tool(next.body.workId, "team_delegate", {
+      ...integrationInput, workspaceMode: "shared",
+    }), { code: "integration_policy" });
+    await assert.rejects(t.tool(next.body.workId, "team_delegate", {
+      ...integrationInput, writePaths: ["A.txt"],
+    }), { code: "integration_write_paths" });
+    writeFileSync(path.join(t.workspace, "A.txt"), "mainline");
+    writeFileSync(path.join(t.state(a.id).workspace!, "A.txt"), "later author change");
+    const integration = await t.tool(next.body.workId, "team_delegate", {
+      ...integrationInput,
     });
     await until(() => t.harness.call(integration.id));
-    assert.equal(t.harness.call(integration.id).request.workspace, t.workspace);
-    for (const id of inputs)
-      await t.tool(integration.id, "team_read_artifact", { artifactId: id });
-    writeFileSync(path.join(t.workspace, "A.txt"), "42");
+    const candidate = t.harness.call(integration.id).request.workspace;
+    assert.ok(candidate !== t.workspace);
+    assert.equal(readFileSync(path.join(candidate, "A.txt"), "utf8"), "mainline");
+    await assert.rejects(t.tool(integration.id, "team_submit_result", {
+      summary: "Missing reads", files: [], usedArtifactIds: inputs,
+    }), { code: "integration_artifact_read" });
+    const receivedValues = [];
+    for (const id of inputs) {
+      const version = await t.tool(integration.id, "team_read_artifact", { artifactId: id });
+      if (version.path === "A.txt") {
+        assert.deepEqual(version.comparison, {
+          base: null, current: hash("mainline"), candidate: hash(version.content), decision: "resolve_conflict",
+        });
+        const current = await t.tool(integration.id, "team_read_artifact", { artifactId: id, view: "current" });
+        assert.equal(current.content, "mainline");
+        const base = await t.tool(integration.id, "team_read_artifact", { artifactId: id, view: "base" });
+        assert.equal(base.content, null);
+        receivedValues.push(version.content);
+      }
+    }
+    assert.deepEqual(receivedValues, ["42", "24"]);
+    writeFileSync(path.join(candidate, "A.txt"), "42");
+    writeFileSync(path.join(candidate, "B.txt"), "42");
     for (const file of extraFiles)
-      writeFileSync(path.join(t.workspace, file), "42");
+      writeFileSync(path.join(candidate, file), "42");
+    await assert.rejects(t.tool(integration.id, "team_submit_result", {
+      summary: "Incomplete integration", files: ["A.txt"], usedArtifactIds: inputs,
+    }), { code: "integration_files" });
     await t.tool(integration.id, "team_submit_result", {
       summary: "A integrated",
-      files: ["A.txt", ...extraFiles],
+      files: ["A.txt", "B.txt", ...extraFiles],
       usedArtifactIds: inputs,
     });
     t.harness.finish(integration.id);
     await until(() => t.state(integration.id).status === "submitted");
     assert.notEqual(oldRun().state, "completed");
+    assert.equal(readFileSync(path.join(t.workspace, "A.txt"), "utf8"), "mainline");
     await accept(next.body.workId, integration);
+    assert.equal(t.state(integration.id).publication?.state, "published");
     t.harness.finish(next.body.workId);
     const deadline = Date.now() + 5000;
     while (oldRun().state !== "completed" && Date.now() < deadline) {
@@ -1913,6 +1953,21 @@ test("isolated acceptance cannot deliver before independently accepted integrati
       "Background coordination must rebuild current Team facts rather than accumulate prior coordination transcripts",
     );
     assert.equal(readFileSync(path.join(t.workspace, "A.txt"), "utf8"), "42");
+    const revised = await t.api(`/product/teams/${t.team.id}/works/${integration.id}/messages`, {
+      mode: "revise", clientRequestId: randomUUID(), expectedRevision: t.state(integration.id).revision,
+      content: "Update the integrated wording while keeping both source versions.",
+    });
+    assert.equal(revised.status, 200, JSON.stringify(revised.body));
+    await until(() => t.harness.call(revised.body.work.id));
+    const continued = t.state(revised.body.work.id);
+    assert.deepEqual(continued.integratesWorkIds, [a.id, b.id]);
+    assert.deepEqual(continued.dependsOn, [a.id, b.id]);
+    assert.equal(continued.continuationOf, integration.id);
+    assert.equal(continued.verification, "independent");
+    assert.ok(inputs.every(id => continued.inputs.includes(id)));
+    assert.ok(continued.baseSnapshotId);
+    assert.ok(continued.workspace !== candidate && continued.workspace !== t.workspace);
+    assert.equal(readFileSync(path.join(continued.workspace!, "A.txt"), "utf8"), "42");
   } finally {
     await t.close();
   }
@@ -2359,7 +2414,7 @@ test("expired exchange waits do not dispatch model turns until new peer evidence
   }finally{await t.close();}
 });
 
-test("duplicate delegations reuse one responsibility and overlapping shared writes are rejected",async()=>{
+test("overlapping write assignments require a dependency across shared and isolated copies",async()=>{
   const t=await setup();
   try{
     const input={memberId:t.members[0].id,title:"Scoped document",instructions:"Maintain the document",acceptanceCriteria:["Correct document"],inputArtifactIds:[],dependsOn:[],verification:"self-check",workspaceMode:"shared",writePaths:["owned.md"]};
@@ -2367,8 +2422,54 @@ test("duplicate delegations reuse one responsibility and overlapping shared writ
     const second=await t.tool(t.hostId,"team_delegate",input);
     assert.equal(second.id,first.id);
     await assert.rejects(t.tool(t.hostId,"team_delegate",{...input,memberId:t.members[1].id,instructions:"Different requested content"}),/already owns/);
+    const samePath={...input,memberId:t.members[1].id,title:"Follow-on change",workspaceMode:"isolated",responsibilityKey:"follow-on-owned"};
+    await assert.rejects(t.tool(t.hostId,"team_delegate",samePath),{code:"write_scope_busy"});
+    const successor=await t.tool(t.hostId,"team_delegate",{...samePath,dependsOn:[first.id]});
+    assert.equal(t.state(successor.id).status,"queued");
     assert.equal(t.service.runtime.store.list<Work>("works",t.team.id).filter(w=>w.title==="Scoped document").length,1);
   }finally{await t.close();}
+});
+
+test("serial isolated writers bind the output head when their dependency has published", async () => {
+  const t = await setup();
+  try {
+    for (const work of t.works) t.harness.finish(work.id, "failed");
+    await until(() => t.works.every(work => t.state(work.id).status === "failed"));
+    const file = "serial.txt";
+    const criterion = "The serial file has the assigned contents";
+    const input = {
+      title: "First serial edit", instructions: "Create the serial file",
+      acceptanceCriteria: [criterion], inputArtifactIds: [], dependsOn: [],
+      writePaths: [file], verification: "self-check", workspaceMode: "isolated",
+    };
+    const first = await t.tool(t.hostId, "team_delegate", {
+      ...input, memberId: t.members[0].id, responsibilityKey: "create-serial",
+    });
+    const second = await t.tool(t.hostId, "team_delegate", {
+      ...input, memberId: t.members[1].id, responsibilityKey: "update-serial",
+      title: "Second serial edit", dependsOn: [first.id],
+    });
+    assert.equal(t.state(second.id).status, "queued");
+    assert.equal(t.state(second.id).outputHeads, undefined);
+    const submit = async (work: Work, content: string) => {
+      const directory = t.harness.call(work.id).request.workspace;
+      writeFileSync(path.join(directory, file), content);
+      await t.tool(work.id, "team_submit_result", {
+        summary: "Recorded " + content, files: [file], usedArtifactIds: [],
+        selfChecks: [{ criterion, evidence: "Read the submitted file contents", evidenceEventIds: [] }],
+      });
+      t.harness.finish(work.id);
+      await until(() => t.state(work.id).publication?.state === "published");
+    };
+    await until(() => t.harness.call(first.id));
+    await submit(first, "first");
+    const [output] = t.service.runtime.records.outputs(t.team.id).filter(value => value.path === file);
+    await until(() => t.harness.call(second.id));
+    assert.equal(t.state(second.id).outputHeads?.[file], output.current.id);
+    assert.equal(readFileSync(path.join(t.state(second.id).workspace!, file), "utf8"), "first");
+    await submit(second, "second");
+    assert.equal(readFileSync(path.join(t.workspace, file), "utf8"), "second");
+  } finally { await t.close(); }
 });
 
 test("bounded members write disjoint shared files concurrently while a legacy unbounded writer waits",async()=>{
@@ -2418,6 +2519,7 @@ test("file-only recovery revokes old tool authority without inventing native ter
   const t=await setup();
   try{
     const [a,b]=t.works;
+    t.service.runtime.store.event(t.team.id, "transcript.item", { id: "pending-tool", kind: "tool", text: "Pending native result", status: "running" }, t.state(a.id), t.state(a.id).attemptId!);
     for(const w of [a,b])t.harness.finish(w.id,"unknown");
     await until(()=>[a,b].every(w=>t.state(w.id).status==="recovery_required"));
     Object.assign(t.harness.capabilities,{boundedWorkspaceWrites:true});
@@ -2434,6 +2536,11 @@ test("file-only recovery revokes old tool authority without inventing native ter
     const priorAttempt=t.state(a.id).attemptId!;
     const recovered=await t.service.runtime.reconcile(t.team.id,a.id);
     assert.equal(recovered.status,"interrupted");
+    const conversation = memberConversation(t.service.runtime, t.team.id, recovered.memberId, { workId: recovered.id });
+    assert.equal(conversation.entries.find(entry => entry.id === `attempt:${priorAttempt}`)?.status, "interrupted");
+    assert.equal(conversation.entries.find(entry => entry.id === `attempt:${priorAttempt}`)?.items?.find(item => item.id === "pending-tool")?.status, "unknown");
+    assert.equal(store.get<Attempt>("attempts", t.team.id, priorAttempt).status, "unknown");
+    assert.equal(store.get<Attempt>("attempts", t.team.id, priorAttempt).finishedAt, null);
     assert.equal(store.get<Attempt>("attempts",t.team.id,priorAttempt).actual!.nativeTerminationObserved,false);
     assert.ok(store.get<Attempt>("attempts",t.team.id,priorAttempt).actual!.toolsRevokedAt);
     await assert.rejects(t.tool(a.id,"team_write_file",{path:"owned.md",text:"late write",expectedSha256:null}),{code:"stale_attempt"});

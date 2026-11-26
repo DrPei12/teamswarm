@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ExecutionConfig, BuiltinNativePermissions } from "@team/contracts/runtime";
-import { harnessManifest } from "@team/contracts/harness-catalog";
+import { harnessManifest, supportsNativeReadProbes } from "@team/contracts/harness-catalog";
 import { validatePolicy } from "./manifest.js";
 
 export const nativePermissions = z.object({ harness: z.string().min(1).max(64) }).catchall(z.unknown()).superRefine((policy, ctx) => {
@@ -26,6 +26,12 @@ export function validateNativePermissions(config: ExecutionConfig) {
       if (Array.isArray(values) && values.some(v => excluded.includes(v))) throw new Error("Read-only members cannot enable native edit tools.");
     }
   }
+}
+
+export function scopeNativeReadProbes(config: ExecutionConfig): ExecutionConfig {
+  if (!config.nativeReadProbes || supportsNativeReadProbes(config)) return config;
+  const { nativeReadProbes: _probe, ...scoped } = config;
+  return scoped;
 }
 
 /** Temporary dialogue/review roles narrow the chosen native policy, never the saved member policy. */

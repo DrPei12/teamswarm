@@ -55,6 +55,15 @@ const service = createApp({
     },
   ],
 });
+const appendAssistant = service.runtime.store.appendAssistant.bind(service.runtime.store);
+let failSettlement = true;
+service.runtime.store.appendAssistant = (...args) => {
+  if (failSettlement) {
+    failSettlement = false;
+    throw new Error("Result storage was temporarily unavailable.");
+  }
+  return appendAssistant(...args);
+};
 server.on("request", service.app);
 const headers = { authorization: "Bearer " + service.controlToken, "content-type": "application/json" };
 const api = async (url, body, method = "POST") => {
@@ -98,6 +107,15 @@ try {
   await page.locator(".execution-receipt").getByText(fetchFailure, { exact: true }).waitFor();
   const recovery = page.locator(".execution-activity");
   await recovery.getByRole("button", { name: "Retry", exact: true }).click();
+  const settlement = page.locator('.execution-receipt.recovery_required[data-execution-status="completed"]');
+  await settlement.getByText("Execution completed", { exact: true }).waitFor();
+  await settlement.getByText("Result storage was temporarily unavailable.", { exact: true }).waitFor();
+  await page.locator('.execution-activity').getByText("Needs recovery", { exact: true }).waitFor();
+  assert.equal(turn, 2);
+  await page.screenshot({ path: path.join(root, "execution-completed-recovery.png") });
+  await page.reload();
+  await page.locator('.execution-receipt.recovery_required[data-execution-status="completed"]').waitFor();
+  await page.locator('.execution-activity').getByRole("button", { name: "Retry", exact: true }).click();
   await page.getByText("Recovered final response", { exact: true }).last().waitFor();
   const retryActivity = page.locator(".conversation-activity").last();
   if ((await retryActivity.locator(".activity-summary").getAttribute("aria-expanded")) !== "true")

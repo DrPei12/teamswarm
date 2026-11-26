@@ -4,7 +4,7 @@ import { effectiveWindow } from "./runtime/context-window.js";
 import { previousClaudeUsage } from "./runtime/claude-turn-usage.js";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
-import type { ContextWindowUsage } from "@team/contracts/product";
+import type { ContextWindowUsage, SessionLongevityMode, SessionRotationSummary } from "@team/contracts/product";
 import type { Attempt, ExecutionConfig } from "./runtime/types.js";
 import { DEEPSEEK_NATIVE_WINDOW } from "./runtime/context-budget.js";
 import { needsModelRoute } from "./runtime/model-routing.js";
@@ -31,6 +31,7 @@ export function contextWindowUsage(
   config?: ExecutionConfig,
   attempt?: Attempt,
   next?: ContextWindowPlan,
+  session?: { mode?: SessionLongevityMode; compactionCount?: number },
 ): ContextWindowUsage | undefined {
   if (!config) return undefined;
   const configured =
@@ -41,18 +42,26 @@ export function contextWindowUsage(
     limit: configured,
     ...(configured ? { limitSource: "configured" as const } : {}),
   };
-  const upcoming = next
-    ? {
-        used: null,
-        limit: next.usableTokens,
-        rawLimit: next.rawTokens,
-        limitSource:
-          next.source === "estimate"
-            ? ("estimate" as const)
-            : ("configured" as const),
-      }
-    : empty;
+  const upcoming: ContextWindowUsage = {
+    ...(next
+      ? {
+          used: null,
+          limit: next.usableTokens,
+          rawLimit: next.rawTokens,
+          limitSource: next.source === "estimate" ? "estimate" : "configured",
+        }
+      : empty),
+    ...(session?.mode ? { sessionLongevityMode: session.mode } : {}),
+  };
   if (!attempt || !isDeepStrictEqual(config, attempt.config)) return upcoming;
+  const generation = attempt.sessionGeneration;
+  const sessionMode = attempt.sessionLongevityMode ?? session?.mode;
+  const sessionFacts = {
+    ...(sessionMode ? { sessionLongevityMode: sessionMode } : {}),
+    ...(attempt.sessionId && generation != null && (!attempt.sessionRotation || attempt.sessionRotation.confirmedSessionId === attempt.sessionId)
+      ? { sessionGeneration: generation } : {}),
+    ...(attempt.sessionId && session?.compactionCount !== undefined && session.compactionCount > 0 ? { compactionCount: session.compactionCount } : {}),
+  };
   // Extract counters in SQLite without copying a conversation's full saved prompt into the product snapshot.
   const frame = db
     .prepare(
@@ -133,14 +142,17 @@ export function contextWindowUsage(
     estimated = true;
   }
   const plan = attempt.contextWindow;
-  const addNext = (value: ContextWindowUsage): ContextWindowUsage =>
-    next &&
-    next.usableTokens !== value.limit &&
-    (!attempt.contextWindow ||
-      next.rawTokens !== attempt.contextWindow.rawTokens ||
-      next.usableTokens !== attempt.contextWindow.usableTokens)
-      ? { ...value, nextLimit: next.usableTokens }
-      : value;
+  const addNext = (value: ContextWindowUsage): ContextWindowUsage => ({
+    ...value,
+    ...sessionFacts,
+    ...(next &&
+      next.usableTokens !== value.limit &&
+      (!attempt.contextWindow ||
+        next.rawTokens !== attempt.contextWindow.rawTokens ||
+        next.usableTokens !== attempt.contextWindow.usableTokens)
+      ? { nextLimit: next.usableTokens }
+      : {}),
+  });
   // A guessed window that was never applied to the Harness yields to the
   // capacity the Harness actually reported for this session.
   const guessed =
@@ -170,7 +182,7 @@ export function contextWindowUsage(
       estimated,
       limitSource: "configured",
     });
-  if (used === null && next) return upcoming;
+  if (used === null && next) return { ...upcoming, ...sessionFacts };
   if (harnessManifest(config.harness)?.models.nativeOnly ||
       (config.harness === "antigravity" && !needsModelRoute(config)))
     return addNext({ used, limit: null, estimated, limitSource: "estimate" });
@@ -190,4 +202,27 @@ export function contextWindowUsage(
         }
       : {}),
   });
+}
+
+export function sessionRotationSummary(db: DatabaseSync, attempt: Attempt): SessionRotationSummary | undefined {
+  const rotation = attempt.sessionRotation;
+  if (!attempt.sessionId || !rotation || rotation.confirmedSessionId !== attempt.sessionId) return;
+  const row = db.prepare(`SELECT
+    json_extract(data,'$.input.handoff.worktree.changeCount') AS changedFileCount,
+    json_extract(data,'$.input.handoff.checkCount') AS checkCount,
+    (SELECT json_group_array(json_extract(value,'$.path')) FROM json_each(data,'$.input.handoff.preloadedFileSpans')) AS hotPaths
+    FROM host_context_frames WHERE team_id=? AND attempt_id=? AND json_extract(data,'$.input.handoff.sha256')=?`)
+    .get(attempt.teamId, attempt.id, rotation.handoffSha256);
+  const changedFileCount = count(row?.changedFileCount), checkCount = count(row?.checkCount);
+  const hotPaths = typeof row?.hotPaths === "string"
+    ? [...new Set<string>(JSON.parse(row.hotPaths).filter((value: unknown): value is string => typeof value === "string"))]
+    : [];
+  return {
+    previousAttemptId: rotation.previousAttemptId,
+    generation: rotation.generation,
+    reason: rotation.reason,
+    ...(changedFileCount !== null ? { changedFileCount } : {}),
+    ...(checkCount !== null ? { checkCount } : {}),
+    ...(hotPaths.length ? { hotPaths } : {}),
+  };
 }

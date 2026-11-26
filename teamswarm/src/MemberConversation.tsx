@@ -30,6 +30,11 @@ import { RuntimeControls } from "./ComposerTools";
 import { harnessLabel } from "./harnessCatalog";
 import { IconButton, useMediaQuery } from "./ui";
 import { executionFeedback } from "./executionFeedback";
+import { SubspaceRecovery } from "./SubspaceRecovery";
+import { PublicationRetention } from "./PublicationRetention";
+import { CandidateReview } from "./CandidateReview";
+import { ContextIndicator } from "./ContextIndicator";
+import { FieldSelect } from "./FieldSelect";
 
 const statusLabels: Record<string, string> = {
   queued: "Queued",
@@ -48,6 +53,21 @@ const exchangeStateLabels = {
   cancelled: "Exchange cancelled",
   declined: "Request declined",
 };
+const rotationLabels: Partial<Record<string, string>> = {
+  compaction_base: "The retained context kept growing after compaction.",
+  action_decline: "The session was completing less work per step.",
+  compound_fatigue: "Several signs of session slowdown persisted.",
+  sustained_pressure: "The session was repeatedly near its context limit.",
+  session_rotation: "The worker paused at a work checkpoint.",
+  capacity: "The previous context window had no room for the next turn.",
+};
+const publicationLabels = {
+  pending: "Publication pending",
+  published: "Published to project",
+  conflict: "Publication conflict",
+  recovery_required: "Publication interrupted",
+  kept_current: "Current project files kept.",
+};
 const readingPositions = new Map<
   string,
   { offset: number; following: boolean; entryId?: string }
@@ -58,6 +78,11 @@ type ConversationProps = {
   workspace: Workspace;
   anchor?: string;
   workId?: string;
+  onNavigateMember?: (
+    memberId: string,
+    messageId: string,
+    workId?: string,
+  ) => void;
   onUpdate: (change: (old: Workspace) => Workspace) => boolean;
   onSettings: (tab?: "harnesses" | "connections" | "runtime") => void;
 };
@@ -114,6 +139,25 @@ export function MemberConversation(props: ConversationProps) {
           ? threads.find((w) => rootOf(w) === rootOf(anchored))
           : undefined) ??
         recent);
+  const exactWork =
+    chosen && anchored && rootOf(chosen) === rootOf(anchored)
+      ? anchored
+      : chosen;
+  const candidateWork = exactWork?.reviewOf
+    ? teamWorks.find((w) => w.id === exactWork.reviewOf)
+    : exactWork;
+  const execution = props.workspace.executions?.[props.member.teamId];
+  const candidateRun = execution?.runs.find(
+    (run) => run.id === candidateWork?.runId,
+  );
+  const candidateBranch =
+    candidateRun?.branchId ??
+    props.workspace.chats.find(
+      (chat) =>
+        chat.teamId === props.member.teamId &&
+        chat.id === candidateRun?.conversationId,
+    )?.branchId;
+  const onNavigateMember = props.onNavigateMember;
   return (
     <div className="work-thread-panel">
       {!!threads.length && (
@@ -169,6 +213,37 @@ export function MemberConversation(props: ConversationProps) {
               </Select.Content>
             </Select.Portal>
           </Select.Root>
+          {candidateWork &&
+            candidateBranch &&
+            !candidateWork.reviewOf &&
+            !props.member.id.startsWith("host:") &&
+            candidateWork.verification !== "self-check" && (
+              <CandidateReview
+                key={candidateWork.id}
+                teamId={props.member.teamId}
+                branchId={candidateBranch}
+                workId={candidateWork.id}
+                reviewWorkId={exactWork?.reviewOf ? exactWork.id : undefined}
+                producerAttemptId={
+                  exactWork === anchored &&
+                  !exactWork?.reviewOf &&
+                  props.anchor?.startsWith("attempt:")
+                    ? props.anchor.slice("attempt:".length)
+                    : undefined
+                }
+                cursor={execution?.latestEvent ?? 0}
+                onWork={
+                  onNavigateMember
+                    ? (target, anchor) =>
+                        onNavigateMember(
+                          target.memberId,
+                          anchor ?? `assignment:${target.workId}`,
+                          target.workId,
+                        )
+                    : undefined
+                }
+              />
+            )}
         </div>
       )}
       <ConversationThread
@@ -190,6 +265,7 @@ function ConversationThread({
 }: ConversationProps & { work?: Work }) {
   const { t, locale } = useI18n();
   const [entries, setEntries] = useState<ConversationEntry[]>([]);
+  const [context, setContext] = useState<Conversation["context"]>();
   const [canSend, setCanSend] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -330,6 +406,7 @@ function ConversationThread({
           data.before ?? 0,
         );
         setCanSend(data.canSend);
+        setContext(data.context);
         setHasMore(loadedStart.current > 0);
         setHasNewer(!!data.hasNewer);
         setLoadError("");
@@ -600,6 +677,50 @@ function ConversationThread({
               tabIndex={-1}
               className={`member-entry ${entry.role} ${entry.id === highlight ? "message-focus" : ""}`}
             >
+              {entry.sessionRotation && (
+                <details
+                  className="delivery-history nokey"
+                  onToggle={(event) => {
+                    if (event.currentTarget.open) {
+                      inspectingActivity.current = true;
+                      stopAutoScroll();
+                    }
+                  }}
+                >
+                  <summary>
+                    {t("Session refreshed · Generation {count}", {
+                      count: entry.sessionRotation.generation,
+                    })}
+                  </summary>
+                  {rotationLabels[entry.sessionRotation.reason] && (
+                    <p>{t(rotationLabels[entry.sessionRotation.reason]!)}</p>
+                  )}
+                  {entry.sessionRotation.changedFileCount !== undefined && (
+                    <p>
+                      {t("Recorded workspace changes: {count} files", {
+                        count: entry.sessionRotation.changedFileCount,
+                      })}
+                    </p>
+                  )}
+                  {entry.sessionRotation.checkCount !== undefined && (
+                    <p>
+                      {t("Saved check receipts: {count}", {
+                        count: entry.sessionRotation.checkCount,
+                      })}
+                    </p>
+                  )}
+                  {!!entry.sessionRotation.hotPaths?.length && (
+                    <>
+                      <p>{t("Files brought into the new session")}</p>
+                      <ul>
+                        {entry.sessionRotation.hotPaths.map((file) => (
+                          <li key={file}>{file}</li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </details>
+              )}
               <div className="member-entry-meta">
                 <span>
                   {entry.role === "assistant"
@@ -707,6 +828,8 @@ function ConversationThread({
                   "failed",
                   "interrupted",
                   "recovery_required",
+                  "rejected",
+                  "superseded",
                   "waiting",
                 ].includes(entry.status ?? "") && (
                   <div className="session-status">
@@ -714,6 +837,64 @@ function ConversationThread({
                       t(statusLabels[entry.status!] ?? entry.status!)}
                   </div>
                 )}
+              {entry.publication && (
+                <div
+                  className="session-status"
+                  data-publication-state={entry.publication.state}
+                >
+                  <strong>
+                    {t(publicationLabels[entry.publication.state])}
+                  </strong>
+                  {entry.publication.error &&
+                    entry.publication.state !== "kept_current" && (
+                      <div>{t(executionFeedback(entry.publication.error))}</div>
+                    )}
+                  {entry.publication.keepCurrentAllowed && (
+                    <PublicationRetention
+                      key={entry.publication.workId}
+                      teamId={member.teamId}
+                      workId={entry.publication.workId}
+                    />
+                  )}
+                  {["pending", "recovery_required", "conflict"].includes(
+                    entry.publication.state,
+                  ) &&
+                    entry.publication.appliedPaths.length > 0 && (
+                      <div>
+                        {t("Applied files")} ·{" "}
+                        {entry.publication.appliedPaths.join(", ")}
+                      </div>
+                    )}
+                  {entry.publication.state === "recovery_required" &&
+                    !member.removedAt && (
+                      <button
+                        type="button"
+                        className="text-button"
+                        disabled={!!retrying}
+                        onClick={async () => {
+                          const publication = entry.publication!;
+                          setRetrying(entry.id);
+                          setError("");
+                          try {
+                            await api(
+                              `/teams/${encodeURIComponent(member.teamId)}/works/${encodeURIComponent(publication.workId)}/publication/recover`,
+                              { expectedRevision: publication.revision },
+                            );
+                            await product.refresh();
+                          } catch (error) {
+                            setError(
+                              executionFeedback((error as Error).message),
+                            );
+                          } finally {
+                            setRetrying(null);
+                          }
+                        }}
+                      >
+                        {t("Resume publication")}
+                      </button>
+                    )}
+                </div>
+              )}
               {entry.retryWorkId && !member.removedAt && (
                 <button
                   className="text-button"
@@ -749,6 +930,17 @@ function ConversationThread({
         </div>
       </div>
       <div className="member-action-area">
+        {work?.isolatedSubspaces &&
+          !member.removedAt &&
+          !["queued", "running", "stopping", "waiting"].includes(
+            work.status,
+          ) && (
+            <SubspaceRecovery
+              key={`${work.id}:${work.revision}`}
+              teamId={member.teamId}
+              workId={work.id}
+            />
+          )}
         {(!following || hasNewer) && (
           <button
             type="button"
@@ -819,6 +1011,7 @@ function ConversationThread({
             <ComposerChin className="member-composer-toolbar">
               <div className="member-composer-config">
                 <RuntimeControls
+                  host={member.id.startsWith("host:")}
                   team={team}
                   config={runtimeConfig}
                   executionConfig={executionConfig}
@@ -858,6 +1051,51 @@ function ConversationThread({
                     }
                   }}
                 />
+                {!member.id.startsWith("host:") &&
+                  !member.removedAt &&
+                  member.configurationVersion !== undefined && (
+                    <FieldSelect
+                      aria-label={t("Session mode")}
+                      value={member.sessionLongevityMode ?? "team"}
+                      disabled={configuring || sending}
+                      onValueChange={async (value) => {
+                        if (
+                          configurationLock.current ||
+                          member.configurationVersion === undefined ||
+                          (value !== "team" &&
+                            value !== "standard" &&
+                            value !== "high-efficiency")
+                        )
+                          return;
+                        configurationLock.current = true;
+                        setConfiguring(true);
+                        setError("");
+                        try {
+                          await product.command(
+                            `/teams/${encodeURIComponent(member.teamId)}/members/${encodeURIComponent(member.id)}/session-longevity`,
+                            {
+                              expectedVersion: member.configurationVersion,
+                              mode: value === "team" ? null : value,
+                            },
+                            "PUT",
+                          );
+                        } catch (error) {
+                          if (mounted.current)
+                            setError((error as Error).message);
+                        } finally {
+                          configurationLock.current = false;
+                          if (mounted.current) setConfiguring(false);
+                        }
+                      }}
+                    >
+                      <option value="team">{t("Team session mode")}</option>
+                      <option value="standard">{t("Standard mode")}</option>
+                      <option value="high-efficiency">
+                        {t("High-efficiency mode")}
+                      </option>
+                    </FieldSelect>
+                  )}
+                {context && <ContextIndicator usage={context} />}
                 {canSend && !work && (
                   <IconButton
                     className="member-composer-help"

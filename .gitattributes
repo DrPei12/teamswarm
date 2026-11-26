@@ -17,3 +17,6 @@
 *.woff2 binary
 tools/offline-audit/tests/fixtures/** -text
 apps/desktop/licenses/** -text
+docs/baseline/** text eol=lf
+scripts/sync_baseline.py text eol=lf
+scripts/test_sync_baseline.py text eol=lf

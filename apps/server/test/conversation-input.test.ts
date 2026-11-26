@@ -2,13 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { conversationInput } from "../src/runtime/harness/conversation-input.js";
 
-test("a rebuilt Host dialogue carries its previous answer before the current request", () => {
+test("a rebuilt Host dialogue separates its current request from its previous answer", () => {
   const input = { turnPurpose: "dialogue", work: { instructions: "Recall your last reply" }, history: [
     { role: "user", content: "Read the file" }, { role: "assistant", content: "ACTUAL_FILE_CONTENT" },
   ] };
   const rendered = conversationInput(JSON.stringify(input));
   assert.match(rendered, /Most recent messages \(oldest first\):\n\nUser:\nRead the file\n\nAssistant:\nACTUAL_FILE_CONTENT/);
-  assert.ok(rendered.endsWith("Current message:\n\nUser:\nRecall your last reply"));
+  assert.ok(rendered.startsWith("Current message:\n\nUser:\nRecall your last reply"));
+  assert.equal(rendered.split("Recall your last reply").length - 1, 1);
   assert.deepEqual(input.history[1], { role: "assistant", content: "ACTUAL_FILE_CONTENT" });
 });
 
@@ -20,11 +21,11 @@ test("a member reply uses the incoming message rather than its original assignme
     incomingMessages: [{ id: "message", senderId: "user", content: "My current question" }],
   }));
   assert.match(rendered, /Most recent messages \(oldest first\):\n\nAssistant:\nLatest answer/);
-  assert.ok(rendered.endsWith("Current message:\n\nUser:\nMy current question"));
+  assert.ok(rendered.startsWith("Current message:\n\nUser:\nMy current question"));
   assert.equal(rendered.split("My current question").length - 1, 1);
 });
 
-test("a long conversation keeps the last exchange adjacent to the current request", () => {
+test("a long conversation distinguishes the current request and preserves the last exchange after older history", () => {
   const rendered = conversationInput(JSON.stringify({
     work: { memberId: "member", interaction: { messageIds: ["current"] } },
     conversationHistory: [
@@ -34,7 +35,8 @@ test("a long conversation keeps the last exchange adjacent to the current reques
     ],
     incomingMessages: [{ senderId: "user", content: "Repeat your last reply" }],
   }));
-  assert.ok(rendered.endsWith("Most recent messages (oldest first):\n\nUser:\nRead another file\n\nAssistant:\nCURRENT_FILE_RESULT\nsecond line\n\nCurrent message:\n\nUser:\nRepeat your last reply"));
+  assert.ok(rendered.startsWith("Current message:\n\nUser:\nRepeat your last reply"));
+  assert.ok(rendered.endsWith("Most recent messages (oldest first):\n\nUser:\nRead another file\n\nAssistant:\nCURRENT_FILE_RESULT\nsecond line"));
   assert.ok(rendered.indexOf("OLD_TASK_RESULT") < rendered.indexOf("Most recent messages"));
 });
 

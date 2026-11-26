@@ -445,6 +445,7 @@ function CanvasContent({
   onAddMember,
   onSettings,
   onDelivery,
+  onNavigateMember,
 }: Props) {
   const { t: tr, locale } = useI18n();
   const [selection, setSelection] = useState<Selection>(null);
@@ -1229,6 +1230,7 @@ function CanvasContent({
                 workId={
                   selection?.kind === "member" ? selection.workId : undefined
                 }
+                onNavigateMember={onNavigateMember}
                 onUpdate={onUpdate}
                 onSettings={onSettings}
               />

@@ -4,13 +4,16 @@ import { mkdirSync } from "node:fs";
 import { z } from "zod";
 import { badRequest, conflict, notFound, ServiceError } from "../errors.js";
 import { activeStates, hash, overlaps, type RuntimeStore } from "./store.js";
-import { ProjectSnapshots } from "./project-snapshots.js";
+import { ProjectSnapshots, type CapturedWorkspace } from "./project-snapshots.js";
+import { sameWorkspace, workspaceIdentity } from "./workspace-access.js";
+import { requireSemanticResolution } from "./semantic-conflicts.js";
 import { conversationMessageSql } from "./resource-notifications.js";
 import type {
   Attempt,
   Member,
   ProjectBranch,
   ProjectContext,
+  ProjectDefinitionScope,
   ProjectDocument,
   ProjectNode,
   Run,
@@ -42,6 +45,7 @@ export const definitionInput = z
     removeKeys: z.array(z.string().max(120)).max(30).default([]),
     title: z.string().trim().min(1).max(160),
     reason: z.string().trim().max(2000).default(""),
+    resolvesConflictIds: z.array(id).min(1).max(16).optional(),
     affectedWorkIds: z
       .array(id)
       .max(100)
@@ -252,6 +256,7 @@ export class ProjectHistory {
       this.insert("documents", doc);
       documents[doc.key] = doc.id;
     }
+    const workspaceSnapshot = this.snapshots.captureWithProvenance(workspace);
     const node: ProjectNode = {
       id: randomUUID(),
       teamId,
@@ -261,7 +266,8 @@ export class ProjectHistory {
       title: name,
       documents,
       contextVersion: version(documents),
-      workspaceSnapshotId: this.snapshots.capture(workspace),
+      workspaceSnapshotId: workspaceSnapshot.id,
+      workspaceSnapshotSource: workspaceSnapshot.source,
       artifactIds: [],
       source: { actor: "user", conversationId },
       createdAt: now(),
@@ -397,7 +403,7 @@ export class ProjectHistory {
     title: string,
     documents: Record<string, string>,
     source: Source,
-    snapshotId?: string | null,
+    snapshot?: CapturedWorkspace | null,
     artifactIds: string[] = [],
   ): ProjectNode {
     if (branch.headNodeId !== expectedHeadId)
@@ -415,7 +421,8 @@ export class ProjectHistory {
       title,
       documents,
       contextVersion: version(documents),
-      workspaceSnapshotId: snapshotId ?? null,
+      workspaceSnapshotId: snapshot?.id ?? null,
+      ...(snapshot ? { workspaceSnapshotSource: snapshot.source } : {}),
       artifactIds,
       source,
       createdAt: now(),
@@ -492,6 +499,8 @@ export class ProjectHistory {
           "history_conflict",
           "The branch changed. Reload before publishing.",
         );
+      if (input.resolvesConflictIds)
+        requireSemanticResolution(this.store, teamId, branchId, input.resolvesConflictIds, input.documents, input.affectedWorkIds);
       const documents = { ...this.node(teamId, branch.headNodeId).documents };
       const keys = input.documents.map((d) => d.key);
       if (
@@ -566,6 +575,7 @@ export class ProjectHistory {
           ...source,
           reason: input.reason,
           exchangeMessageIds: input.exchangeMessageIds ?? [],
+          ...(input.resolvesConflictIds ? { resolvesConflictIds: input.resolvesConflictIds, semanticAffectedWorkIds: [...new Set(input.affectedWorkIds)] } : {}),
         },
         this.captureDefinition(branch),
       );
@@ -680,12 +690,66 @@ export class ProjectHistory {
           ),
       );
   }
-  private captureDefinition(branch: ProjectBranch): string | null {
+  private observingWrites(workspace: string) {
+    for (const work of this.store.workQuery(undefined, { statuses: ["running", "stopping", "recovery_required", "accepted", "self_checked"] })) {
+      if (["pending", "recovery_required"].includes(work.publication?.state ?? "") &&
+          overlaps(work.publication?.plan?.workspace.path ?? work.sourceWorkspace ?? this.store.workspace(work), workspace)) return true;
+      if (!activeStates.has(work.status) || !overlaps(this.store.workspace(work), workspace)) continue;
+      if (!work.attemptId || this.store.get<Attempt>("attempts", work.teamId, work.attemptId).config.access === "workspace-write") return true;
+    }
+    return this.store.db.prepare("SELECT json_extract(data,'$.workspace.path') AS path FROM runtime_host_inline_edits WHERE json_extract(data,'$.state') IN ('pending','recovery_required')")
+      .all().some(row => typeof row.path === "string" && overlaps(row.path, workspace));
+  }
+  handoffWorktree(work: Work, branchId: string, baseHeadId: string) {
+    const unavailable = (reason: "checkpoint" | "writes_in_progress" | "inventory_scope" | "workspace_changed") => ({ state: "unavailable" as const, reason });
+    const workspace = this.store.workspace(work);
+    try {
+      const identity = workspaceIdentity(workspace);
+      const deleted = this.store.db.prepare("SELECT 1 FROM project_checkpoint_deletions WHERE team_id=? AND node_id=?");
+      let checkpoint = this.node(work.teamId, baseHeadId);
+      for (;;) {
+        if (checkpoint.branchId !== branchId) return unavailable("checkpoint");
+        if (checkpoint.workspaceSnapshotId && checkpoint.workspaceSnapshotSource &&
+            sameWorkspace(checkpoint.workspaceSnapshotSource.identity, identity) && !deleted.get(work.teamId, checkpoint.id)) break;
+        if (!checkpoint.parentNodeId) return unavailable("checkpoint");
+        checkpoint = this.node(work.teamId, checkpoint.parentNodeId);
+      }
+      if (this.observingWrites(identity.path)) return unavailable("writes_in_progress");
+      const current = this.snapshots.inspectWorkspace(identity.path);
+      if (!sameWorkspace(current.source.identity, checkpoint.workspaceSnapshotSource!.identity)) return unavailable("workspace_changed");
+      if (current.source.inventory !== checkpoint.workspaceSnapshotSource!.inventory) return unavailable("inventory_scope");
+      const original = this.snapshots.manifest(checkpoint.workspaceSnapshotId!);
+      const key = (relative: string) => process.platform === "win32" ? relative.toLowerCase() : relative;
+      const before = new Map(original.files.map(file => [key(file.path), file]));
+      const after = new Map(current.manifest.files.map(file => [key(file.path), file]));
+      const excluded = new Set([...original.excludedPaths, ...current.manifest.excludedPaths].map(key));
+      const masked = (relative: string) => {
+        for (let item = relative; item.length; item = item.includes("/") ? item.slice(0, item.lastIndexOf("/")) : "")
+          if (excluded.has(item)) return true;
+        return false;
+      };
+      const changes = [...new Set([...before.keys(), ...after.keys()])].sort().flatMap(relative => {
+        if (masked(relative)) return [];
+        const previous = before.get(relative), next = after.get(relative);
+        const head = (file: NonNullable<typeof previous>) => ({ sha256: file.hash, executable: (file.mode & 0o111) !== 0 });
+        const prior = previous ? head(previous) : null, current = next ? head(next) : null;
+        if (prior?.sha256 === current?.sha256 && prior?.executable === current?.executable && previous?.path === next?.path) return [];
+        return [{ path: next?.path ?? previous!.path, before: prior, after: current }];
+      });
+      return { state: "observed" as const, checkpointId: checkpoint.id, snapshotId: checkpoint.workspaceSnapshotId!, observedAt: now(), changes };
+    } catch (error) {
+      if (error instanceof ServiceError && ["workspace_identity", "checkpoint_inventory", "unsupported_checkpoint_entry", "checkpoint_capacity", "workspace_changed", "snapshot_corrupt"].includes(error.code) ||
+          ["ENOENT", "ENOTDIR", "EACCES", "EPERM", "EBUSY"].includes((error as NodeJS.ErrnoException)?.code ?? ""))
+        return unavailable("workspace_changed");
+      throw error;
+    }
+  }
+  private captureDefinition(branch: ProjectBranch): CapturedWorkspace | null {
     if (!(branch.workspace ?? this.store.settings(branch.teamId)?.workspace))
       return null;
     if (this.writableBusy(branch)) return null;
     try {
-      return this.snapshots.capture(this.workspace(branch));
+      return this.snapshots.captureWithProvenance(this.workspace(branch));
     } catch (error) {
       this.store.event(branch.teamId, "project.checkpoint_unavailable", {
         branchId: branch.id,
@@ -716,7 +780,7 @@ export class ProjectHistory {
           "workspace_busy",
           "Confirm writable attempts have ended before capturing a checkpoint.",
         );
-      const snapshot = this.snapshots.capture(this.workspace(branch));
+      const snapshot = this.snapshots.captureWithProvenance(this.workspace(branch));
       return this.append(
         branch,
         expectedHeadId,
@@ -932,10 +996,57 @@ export class ProjectHistory {
   }
   bind(attempt: Attempt, run: Run) {
     const context = this.context(run.teamId, this.forRun(run).id);
+    const work = this.store.get<Work>("works", run.teamId, attempt.workId);
+    const scoped = this.executionContext(work, context);
+    if (work.definitionScope && !this.matchesDefinitionScope(work, context))
+      throw conflict("definition_scope_changed", "Continue this work against the updated definition.");
     attempt.contextNodeId = context.nodeId;
     attempt.contextVersion = context.contextVersion;
+    attempt.definitionScope = work.definitionScope;
     this.store.save("attempts", attempt);
-    return context;
+    return scoped;
+  }
+  private scopedDefinitions(context: ProjectContext, roots: string[]): ProjectDefinitionScope {
+    const byId = new Map(context.documents.map(document => [document.id, document]));
+    const ids = new Set(context.documents
+      .filter(document => roots.includes(document.key) || document.kind === "goal" || document.kind === "requirement")
+      .map(document => document.id));
+    for (const id of ids)
+      for (const dependency of byId.get(id)?.dependencies ?? []) ids.add(dependency);
+    const revisions = Object.fromEntries(context.documents.filter(document => ids.has(document.id))
+      .map((document): [string, string] => [document.key, document.id])
+      .sort(([a], [b]) => a.localeCompare(b)));
+    return { branchId: context.branchId, roots, revisions };
+  }
+  pinDefinitionScope(run: Run, refs: string[]) {
+    const context = this.context(run.teamId, this.forRun(run).id);
+    const roots = [...new Set(refs.filter(ref => ref.startsWith("document:")).map(ref => ref.slice(9)))].sort();
+    if (!roots.length || roots.some(key => !context.documents.some(document => document.key === key)))
+      throw conflict("definition_scope_required", "Select current definition documents for this work.");
+    return this.scopedDefinitions(context, roots);
+  }
+  matchesDefinitionScope(work: Work, context?: ProjectContext) {
+    if (!work.definitionScope && !work.semanticRepair?.length) return true;
+    const branch = this.forRun(this.store.get<Run>("runs", work.teamId, work.runId));
+    const current = context ?? this.context(work.teamId, branch.id);
+    return (!work.semanticRepair?.length || work.semanticRepair.every(binding =>
+      current.documents.some(doc => doc.key === binding.contractKey && doc.id === binding.documentId && doc.kind === "design"))) &&
+      (!work.definitionScope || JSON.stringify(work.definitionScope) === JSON.stringify(
+        this.scopedDefinitions(current, work.definitionScope.roots),
+      ));
+  }
+  private executionContext(work: Work, context: ProjectContext): ProjectContext {
+    const scope = work.definitionScope;
+    return scope ? {
+      ...context,
+      definitionScope: scope,
+      documents: context.documents.filter(document => scope.revisions[document.key] === document.id),
+    } : context;
+  }
+  canReuseContext(previous: Attempt, work: Work, context: ProjectContext) {
+    if (work.definitionScope || previous.definitionScope)
+      return JSON.stringify(work.definitionScope) === JSON.stringify(previous.definitionScope);
+    return (previous.acknowledgedContextVersion ?? previous.contextVersion) === context.contextVersion;
   }
   receipt(
     work: Work,
@@ -964,13 +1075,15 @@ export class ProjectHistory {
       this.forRun(this.store.get<Run>("runs", work.teamId, work.runId)).id,
     );
     this.receipt(work, attempt, "read", context.nodeId);
-    return context;
+    return this.executionContext(work, context);
   }
   acknowledge(work: Work, attempt: Attempt, nodeId: string) {
     const context = this.context(
       work.teamId,
       this.forRun(this.store.get<Run>("runs", work.teamId, work.runId)).id,
     );
+    if (!this.matchesDefinitionScope(work, context))
+      throw conflict("definition_scope_changed", "Continue this work against the updated definition.");
     if (context.nodeId !== nodeId)
       throw conflict(
         "context_changed",
@@ -1007,8 +1120,11 @@ export class ProjectHistory {
     };
   }
   isCurrent(work: Work, attemptId: string) {
-    if (work.invalidatedByNodeId) return false;
+    if (work.invalidatedByNodeId || work.semanticRepair?.length && !this.matchesDefinitionScope(work)) return false;
     const attempt = this.store.get<Attempt>("attempts", work.teamId, attemptId);
+    if (work.definitionScope || attempt.definitionScope)
+      return JSON.stringify(work.definitionScope) === JSON.stringify(attempt.definitionScope) &&
+        this.matchesDefinitionScope(work);
     const branch = this.forRun(
       this.store.get<Run>("runs", work.teamId, work.runId),
     );
@@ -1022,14 +1138,17 @@ export class ProjectHistory {
     );
   }
   assertCurrent(work: Work, attemptId: string) {
-    if (!this.isCurrent(work, attemptId))
+    if (!this.isCurrent(work, attemptId)) {
+      if (work.definitionScope)
+        throw conflict("definition_scope_changed", "Continue this work against the updated definition.");
       throw conflict(
         "context_update_required",
         "The shared project definition changed. Call team_project_context, reconsider your work, then team_acknowledge_context before continuing.",
       );
+    }
   }
   syncState(teamId: string, branchId: string) {
-    const context = this.context(teamId, branchId);
+    this.branch(teamId, branchId);
     const attempts = this.store
       .list<Attempt>("attempts", teamId)
       .filter(
@@ -1048,9 +1167,7 @@ export class ProjectHistory {
       status: a.status,
       contextNodeId: a.contextNodeId ?? null,
       contextVersion: a.contextVersion ?? null,
-      pending:
-        (a.acknowledgedContextVersion ?? a.contextVersion ?? version({})) !==
-        context.contextVersion,
+      pending: !this.isCurrent(this.store.get<Work>("works", teamId, a.workId), a.id),
       receipts: this.store.db
         .prepare(
           "SELECT node_id AS nodeId,version,delivered_at AS deliveredAt,read_at AS readAt,acknowledged_at AS applicationClaimedAt FROM project_context_receipts WHERE team_id=? AND attempt_id=? ORDER BY rowid",

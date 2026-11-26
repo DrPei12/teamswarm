@@ -2,10 +2,23 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { badRequest, conflict } from "../errors.js";
+import type { WorkspaceIdentity } from "./types.js";
 
 const protectedNames = /^(?:\.git|\.local|\.codex(?:-local)?|node_modules|\.env(?:\..*)?)$/i;
 const digest = (value: Buffer | string) => createHash("sha256").update(value).digest("hex");
 const canonical = (value: string) => process.platform === "win32" ? value.toLowerCase() : value;
+
+export function workspaceIdentity(directory: string): WorkspaceIdentity {
+  const root = realpathSync(directory);
+  const stat = lstatSync(root);
+  if (!stat.isDirectory()) throw conflict("workspace_identity", "The workspace path must refer to a directory.");
+  return { path: root, device: stat.dev, inode: stat.ino, createdAt: stat.birthtimeMs };
+}
+
+export function sameWorkspace(a: WorkspaceIdentity, b: WorkspaceIdentity): boolean {
+  return canonical(a.path) === canonical(b.path) &&
+    a.device === b.device && a.inode === b.inode && a.createdAt === b.createdAt;
+}
 
 /** This service is the only writer exposed to a bounded native member. */
 export class WorkspaceAccess {
@@ -102,13 +115,32 @@ export class WorkspaceAccess {
     } finally { if (existsSync(temporary)) unlinkSync(temporary); }
     return { path: relative, beforeSha256: before, sha256: digest(bytes), bytes: bytes.length };
   }
+
+  removeBytes(value: string, expectedSha256: string) {
+    const { absolute } = this.file(value, true);
+    const current = this.readBytes(value);
+    if (current.sha256 !== expectedSha256)
+      throw conflict("file_changed", "The file changed after recovery was previewed.");
+    this.preserve?.(current.bytes);
+    this.file(value, true);
+    if (this.readBytes(value).sha256 !== expectedSha256)
+      throw conflict("file_changed", "The file changed while preparing recovery.");
+    unlinkSync(absolute);
+  }
   edit(value: string, oldText: string, newText: string, expectedSha256: string) {
-    const current = this.read(value, 0, 2 * 1024 * 1024);
-    if (!current.exists || current.sha256 !== expectedSha256) throw conflict("file_changed", "Read the current file before editing.");
-    const text = current.text!;
+    const edit = this.prepareEdit(value, oldText, newText, expectedSha256);
+    return this.writeBytes(edit.path, edit.bytes, edit.sha256);
+  }
+  prepareEdit(value: string, oldText: string, newText: string, expectedSha256: string) {
+    this.file(value, true);
+    const current = this.readBytes(value, 2 * 1024 * 1024);
+    if (current.sha256 !== expectedSha256) throw conflict("file_changed", "Read the current file before editing.");
+    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(current.bytes);
     const index = text.indexOf(oldText);
-    if (!oldText || index < 0 || text.indexOf(oldText, index + oldText.length) >= 0)
+    if (!oldText || index < 0 || text.indexOf(oldText, index + 1) >= 0)
       throw conflict("edit_not_unique", "oldText must match exactly one location in the current file.");
-    return this.write(value, text.slice(0, index) + newText + text.slice(index + oldText.length), expectedSha256);
+    const bytes = Buffer.from(text.slice(0, index) + newText + text.slice(index + oldText.length));
+    if (bytes.length > 2 * 1024 * 1024) throw badRequest("workspace_file_size", "Project text edits are limited to 2 MiB.");
+    return { path: current.path, sha256: current.sha256, original: current.bytes, bytes };
   }
 }

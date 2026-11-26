@@ -1,20 +1,22 @@
 import { autonomousWorkers } from "./evidence-fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
+import { spawnSync } from "node:child_process";
 import { TeamStore } from "../src/store.js";
 import { TeamRuntime } from "../src/runtime/engine.js";
 import { runtimeSettings, tools, toolSpecs } from "../src/runtime/validation.js";
-import { CommandObservations, successfulCommand } from "../src/runtime/harness/command-observations.js";
+import { CommandObservations, finishedCommand, successfulCommand } from "../src/runtime/harness/command-observations.js";
 import { validateNativePermissions } from "../src/runtime/harness/permissions.js";
 import { NativePermissions } from "../src/runtime/native-permissions.js";
 import { CollaborationRecords } from "../src/runtime/collaboration-records.js";
+import { Coordination } from "../src/runtime/coordination.js";
 import { canReuseSession } from "../src/runtime/allocation.js";
 import type { Harness, Run, Work } from "../src/runtime/types.js";
 
-function fixture() {
+function fixture(withOutcome = false) {
   const root = mkdtempSync(path.join(process.cwd(), ".test-native-contract-")), workspace = path.join(root, "project");
   mkdirSync(workspace); writeFileSync(path.join(workspace, "source.txt"), "source-v1");
   const teams = new TeamStore({ dataDir: path.join(root, "data") });
@@ -29,7 +31,9 @@ function fixture() {
   store.configure(team.id, settings, expectedVersion);
   let host!: Work;
   teams.recordMessage(team.id, conversation.id, "Implement scoped changes", randomUUID(), message => { host = store.enqueueHost(team.id, conversation.id, message.id, true, false); });
-  store.publishRequirement(host, "Implement scoped changes", []);
+  store.publishRequirement(host, "Implement scoped changes", [], withOutcome ? { expectedRequirementId: null, specification: {
+    valueGoal: "Correct the source file", invariants: ["Preserve unrelated files"], criteria: [{key:"wording",text:"Correct wording"}], nonGoals: [],
+  } } : undefined);
   const run = store.get<Run>("runs", team.id, host.runId);
   const member = (name: string, access: "read-only" | "workspace-write" = "workspace-write") => store.createMember(team.id, name, name, { ...settings.config, access }, history.forRun(run).id);
   const work = (id: string, inputs: string[] = [], reviewOf: string | null = null) => store.createWork(run, id, "Scoped work", "Update source.txt", ["Correct wording"], inputs, [], reviewOf);
@@ -86,6 +90,86 @@ test("member directories exist at creation and default work/review use separate 
   } finally { await f.close(); }
 });
 
+test("isolated submissions freeze the exact changed files for independent review", async () => {
+  const f = fixture();
+  try {
+    const producer = f.member("Producer"), reviewer = f.member("Reviewer", "read-only");
+    const work = f.work(producer.id);
+    work.writePaths = ["source.txt", "dependency.txt"];
+    work.verification = "independent";
+    f.runtime.workspaces.prepare(work, producer, f.run);
+    const attempt = f.store.start(work, producer.config);
+    f.history.bind(attempt, f.run);
+    writeFileSync(path.join(work.workspace!, "source.txt"), "Needs dependency.txt");
+    writeFileSync(path.join(work.workspace!, "dependency.txt"), "Candidate dependency");
+    const submit = (files: string[]) => f.runtime.tool(f.team.id, work.id, attempt.id, "team_submit_result", {
+      files, summary: "Update the source and dependency", usedArtifactIds: [],
+    }, randomUUID());
+    await assert.rejects(submit(["source.txt"]), { code: "candidate_drift" });
+    assert.deepEqual(f.store.get<Work>("works", f.team.id, work.id).artifactIds, []);
+    await submit(["source.txt", "dependency.txt"]);
+    const submitted = f.store.get<Work>("works", f.team.id, work.id);
+    assert(submitted.candidateSnapshotId);
+    writeFileSync(path.join(work.workspace!, "unsubmitted-afterwards.txt"), "Another change");
+    const review = f.work(reviewer.id, submitted.artifactIds, submitted.id);
+    f.runtime.workspaces.prepare(review, reviewer, f.run);
+    assert.equal(review.sourceSnapshotId, submitted.candidateSnapshotId);
+    assert.equal(readFileSync(path.join(review.workspace!, "dependency.txt"), "utf8"), "Candidate dependency");
+    assert(!existsSync(path.join(review.workspace!, "unsubmitted-afterwards.txt")));
+    assert(!existsSync(path.join(f.workspace, "dependency.txt")));
+  } finally { await f.close(); }
+});
+
+test("workspace preparation adopts its recorded directory after a process exit before the work is saved", async () => {
+  const f = fixture();
+  const dataDir = f.teams.dataDir;
+  let originalClosed = false;
+  let reopenedTeams: TeamStore | undefined;
+  let reopened: TeamRuntime | undefined;
+  try {
+    const member = f.member("Working copy owner");
+    const work = f.work(member.id);
+    const destination = path.join(member.workspaceRoot!, "work-" + work.id);
+    await f.runtime.close(); f.teams.close(); originalClosed = true;
+    const script = `
+      import {TeamStore} from ${JSON.stringify(new URL("../src/store.ts", import.meta.url).href)};
+      import {TeamRuntime} from ${JSON.stringify(new URL("../src/runtime/engine.ts", import.meta.url).href)};
+      const teams = new TeamStore({dataDir: ${JSON.stringify(dataDir)}});
+      const runtime = new TeamRuntime(teams, []);
+      const teamId = ${JSON.stringify(f.team.id)}, workId = ${JSON.stringify(work.id)};
+      const selected = runtime.store.get('works', teamId, workId);
+      const member = runtime.store.get('members', teamId, selected.memberId);
+      const run = runtime.store.get('runs', teamId, selected.runId);
+      const save = runtime.store.save.bind(runtime.store);
+      runtime.store.save = (table, value) => {
+        if (table === 'works' && value.id === workId && value.workspace) process.exit(73);
+        return save(table, value);
+      };
+      runtime.workspaces.prepare(selected, member, run);
+      process.exit(74);
+    `;
+    const crashed = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { windowsHide: true, encoding: "utf8", timeout: 15000 });
+    assert.equal(crashed.status, 73, crashed.stderr);
+    assert.equal(readFileSync(path.join(destination, "source.txt"), "utf8"), "source-v1");
+    writeFileSync(path.join(f.workspace, "source.txt"), "Changed mainline after prepare");
+    reopenedTeams = new TeamStore({ dataDir });
+    reopened = new TeamRuntime(reopenedTeams, []);
+    const next = reopened.store.get<Work>("works", f.team.id, work.id);
+    assert.equal(next.workspace, undefined);
+    reopened.workspaces.prepare(next, member, f.run);
+    assert.equal(next.workspace, destination);
+    assert.equal(readFileSync(path.join(destination, "source.txt"), "utf8"), "source-v1");
+    assert.equal(reopened.store.db.prepare("SELECT 1 FROM runtime_workspace_preparations WHERE work_id=?").get(work.id), undefined);
+  } finally {
+    if (!originalClosed) await f.close();
+    else {
+      await reopened?.close();
+      reopenedTeams?.close();
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("native command observations route 64 interleaved calls, retain full output, and never infer missing exit codes", () => {
   const root = mkdtempSync(path.join(process.cwd(), ".test-command-observation-"));
   const events: any[] = [], observer = new CommandObservations("pi", root, (type, data) => events.push({ type, data }));
@@ -136,6 +220,27 @@ test("ACP command arguments arriving after the pending event retain call identit
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("DeepSeek command cancellation and runner faults remain distinct from process failure", () => {
+  const root = mkdtempSync(path.join(process.cwd(), ".test-dsh-command-"));
+  const events: any[] = [];
+  const observer = new CommandObservations("deepseek-harness", root, (_type, data) => events.push(data));
+  try {
+    for (const [id, flags] of [
+      ["cancelled", { aborted: true }],
+      ["timeout", { timedOut: true }],
+      ["denied", { sandbox: { denied: true } }],
+      ["runner", { sandbox: { runnerFailed: true } }],
+      ["exited", {}],
+    ] as const) {
+      observer.observe({ method: "session.event", params: { event: { type: "tool/call", data: { name: "pwsh", callId: id, arguments: "{}" } } } });
+      observer.observe({ method: "teamswarm.command.result", params: { callId: id, result: { isError: true, value: { exitCode: 9, ...flags } } } });
+    }
+    const terminal = events.filter(event => event.type === "commandExecution");
+    assert.deepEqual(terminal.map(event => event.nativeOutcome), ["cancelled", "unknown", "unknown", "unknown", "failed"]);
+    assert.deepEqual(terminal.map(finishedCommand), [false, false, false, false, true]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("native permission requests are one-time, conversation-bound, cancellable and expire on restart", async () => {
   const f = fixture();
   try {
@@ -153,6 +258,167 @@ test("native permission requests are one-time, conversation-bound, cancellable a
     const final = f.runtime.nativePermissions.request(work, attempt, { nativeId: "tool-3", tool: "Bash", input: {} }, abort.signal);
     const expired = new NativePermissions(f.store); assert.equal(expired.list(f.team.id).length, 0);
     abort.abort(); assert.equal(await final, "deny");
+  } finally { await f.close(); }
+});
+
+test("coordination coalesces durable member signals across restart and preserves queued instructions", async () => {
+  const f = fixture();
+  const live = new Set([f.team.id]);
+  let released = false;
+  let teams: TeamStore | undefined;
+  let runtime: TeamRuntime | undefined;
+  try {
+    const member = f.member("Member");
+    const a = f.work(member.id), b = f.work(member.id), c = f.work(member.id);
+    f.store.setStatus(f.host, "submitted");
+    const prior = new Coordination(f.store);
+    f.store.setStatus(a, "submitted");
+    const due = prior.nextDue(live)!;
+    assert.ok(due > Date.now());
+    f.store.setStatus(b, "self_checked");
+    prior.flush(due - 1, live);
+    assert.equal(f.store.workQuery(f.team.id, { runId: f.run.id, statuses: ["queued"] })
+      .filter(work => work.kind === "host-followup").length, 0);
+    assert(prior.pending(f.run));
+    await f.runtime.close();
+    const dataDir = f.teams.dataDir;
+    f.teams.close();
+    released = true;
+    teams = new TeamStore({ dataDir });
+    runtime = new TeamRuntime(teams, []);
+    (runtime as any).pump = () => {};
+    const { store } = runtime;
+    const coordination = new Coordination(store);
+    const run = store.get<Run>("runs", f.team.id, f.run.id);
+    assert.equal(coordination.nextDue(live), due);
+    assert.equal(coordination.nextDue(new Set()), null);
+    assert(coordination.pending(run));
+    run.state = "paused";
+    store.save("runs", run);
+    coordination.flush(due, live);
+    assert(coordination.pending(run));
+    assert.equal(coordination.nextDue(live), null);
+    run.state = "active";
+    store.save("runs", run);
+    coordination.flush(due, live);
+    function briefs() {
+      return store.workQuery(f.team.id, { runId: run.id }).filter(work => work.kind === "host-followup");
+    }
+    const [brief] = briefs();
+    assert.equal(brief.coordination?.eventCount, 2);
+    assert.equal(brief.coordination?.urgent, false);
+    assert.deepEqual(brief.coordination?.changes.map(change => change.workId), [a.id, b.id]);
+    brief.instructions = "Reconcile the existing delivery plan";
+    store.save("works", brief);
+    store.setStatus(c, "failed");
+    coordination.flush(coordination.nextDue(live)!, live);
+    assert.equal(briefs().length, 1);
+    const updated = briefs()[0];
+    assert.equal(updated.instructions, brief.instructions);
+    assert.equal(updated.coordination?.eventCount, 3);
+    assert.equal(updated.coordination?.urgent, true);
+    assert.deepEqual(updated.coordination?.changes.map(change => change.workId), [a.id, b.id, c.id]);
+    coordination.flush(due + 5000, live);
+    assert.equal(briefs()[0].coordination?.eventCount, 3);
+    assert.equal(coordination.pending(run), false);
+  } finally {
+    if (!released) await f.close();
+    else {
+      await runtime?.close();
+      teams?.close();
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a rejection wakes coordination directly, but not once the candidate has been superseded", async () => {
+  const f = fixture();
+  try {
+    const coordination = new Coordination(f.store), live = new Set([f.team.id]);
+    const producer = f.member("Engineer"), candidate = f.work(producer.id), retired = f.work(producer.id);
+    f.store.setStatus(f.host, "submitted");
+    f.store.setStatus(candidate, "rejected");
+    f.store.setStatus(retired, "rejected");
+    f.store.setStatus(retired, "superseded");
+    assert(coordination.pending(f.run));
+    coordination.flush(coordination.nextDue(live)!, live);
+    const briefs = f.store.workQuery(f.team.id, { runId: f.run.id, statuses: ["queued"] }).filter(work => work.kind === "host-followup");
+    assert.equal(briefs.length, 1);
+    assert.equal(briefs[0].coordination?.urgent, true);
+    assert.deepEqual(briefs[0].coordination?.changes.map(({ workId, type }) => ({ workId, type })), [{ workId: candidate.id, type: "work.rejected" }]);
+    assert(!coordination.pending(f.run));
+  } finally { await f.close(); }
+});
+
+test("same-contract repair rebinds a rejected workflow node without weakening its command evidence", async () => {
+  const f = fixture(true);
+  try {
+    const { store, runtime, history, team, run } = f;
+    const writer = f.member("Producer"), reviewer = f.member("Reviewer", "read-only");
+    const host = store.start(f.host, run.settings.config);
+    history.bind(host, run);
+    const plan = runtime.workflows.revise(run, f.host, host.id, { expectedRevision: 0,
+      upsert: [{key:"repair",title:"Correct source",dependsOn:[],outcomeCriteria:["wording"],assigneeMemberId:writer.id}], remove: [] });
+    const candidate = f.work(writer.id);
+    Object.assign(candidate, { writePaths: ["source.txt"], verification: "independent", acceptanceEvidence: [{criterion:"Correct wording",evidenceType:"native_check"}],
+      workflowNodeKey:"repair",workflowRevision:plan.revision,workflowGeneration:1,workflowInputs:[], outcomeCriteria:["wording"] });
+    runtime.workspaces.prepare(candidate, writer, run);
+    const produced = store.start(candidate, writer.config);
+    history.bind(produced, run);
+    store.recordSession(produced, randomUUID(), {});
+    writeFileSync(path.join(candidate.workspace!,"source.txt"), "Rejected frozen bytes");
+    await runtime.tool(team.id,candidate.id,produced.id,"team_submit_result",{summary:"Ready for review",files:["source.txt"],usedArtifactIds:[]},randomUUID());
+    store.finishAttempt(team.id, produced.id, {status:"completed",text:"Ready for review"},"native");
+    const original = store.get<Work>("works",team.id,candidate.id);
+    store.setStatus(original,"submitted");
+    const review = runtime.requestReview(team.id, original.id, { clientRequestId:randomUUID(),expectedRevision:original.revision,
+      reviewerMemberId:reviewer.id,instructions:"Review the frozen wording" });
+    runtime.workspaces.prepare(review, reviewer, run);
+    const reviewing = store.start(review, reviewer.config);
+    history.bind(reviewing, run);
+    store.recordSession(reviewing, randomUUID(), {});
+    for (const artifactId of original.artifactIds)
+      await runtime.tool(team.id,review.id,reviewing.id,"team_read_artifact",{artifactId},randomUUID());
+    const verdict = await runtime.tool(team.id,review.id,reviewing.id,"team_accept_work",{workId:original.id,verdict:"rejected",criteria:[{
+      criterion:"Correct wording",passed:false,evidenceType:"review_judgment",evidenceEventIds:[],evidence:"The result has the wrong wording.",
+    }]},randomUUID()) as {id:string};
+    store.finishAttempt(team.id,reviewing.id,{status:"completed",text:"Rejected wording"},"native");
+    store.setStatus(review,"submitted");
+    const rejected = store.get<Work>("works",team.id,original.id);
+    writeFileSync(path.join(rejected.workspace!,"source.txt"), "Unsubmitted late work");
+    writeFileSync(path.join(f.workspace,"source.txt"), "External project change during review");
+    writeFileSync(path.join(f.workspace,"unrelated.txt"), "Current mainline bytes");
+    const requestId = randomUUID();
+    const repair = () => runtime.repairRejectedWork(team.id,rejected.id,"Fix only the wording, choose a clear phrase",requestId,rejected.revision,verdict.id);
+    const next = repair().work;
+    assert.deepEqual(repair().work.id,next.id);
+    assert.throws(()=>runtime.repairRejectedWork(team.id,rejected.id,"Same old candidate",randomUUID(),rejected.revision,verdict.id),{code:"review_repair_changed"});
+    assert.equal(next.continuationOf,rejected.id);
+    assert.equal(next.runId,run.id);
+    assert.equal(next.requirementId,rejected.requirementId);
+    assert.deepEqual(next.inputs,rejected.artifactIds);
+    assert.deepEqual(next.acceptanceCriteria,["Correct wording"]);
+    assert.deepEqual(next.acceptanceEvidence,[{criterion:"Correct wording",evidenceType:"native_check"}]);
+    assert.equal(next.workflowGeneration,2);
+    assert.equal(runtime.workflows.view(run)?.nodes[0].workId,next.id);
+    assert.equal(runtime.workflows.view(run,1)?.nodes[0].workId,rejected.id);
+    runtime.workspaces.prepare(next,writer,run);
+    assert.equal(readFileSync(path.join(next.workspace!,"source.txt"),"utf8"),"Rejected frozen bytes");
+    assert.equal(readFileSync(path.join(next.workspace!,"unrelated.txt"),"utf8"),"Current mainline bytes");
+    assert.equal(readFileSync(path.join(f.workspace,"source.txt"),"utf8"),"External project change during review");
+    // Publication must compare against the source of the rejected bytes, not the fresh working copy's preparation time.
+    const fixed = store.start(next, writer.config);
+    history.bind(fixed, run);
+    writeFileSync(path.join(next.workspace!, "source.txt"), "Repaired wording");
+    const files = store.capture(next, "Repaired", ["source.txt"]);
+    next.artifactIds = files.map(file => file.id);
+    next.candidateSnapshotId = history.snapshots.candidate(next.baseSnapshotId!, files, next.workspace!);
+    store.finishAttempt(team.id, fixed.id, { status: "completed", text: "Repaired" }, "native");
+    store.setStatus(next, "accepted");
+    runtime.records.publishOutputs(next);
+    assert.equal(store.get<Work>("works", team.id, next.id).publication?.state, "conflict");
+    assert.equal(readFileSync(path.join(f.workspace, "source.txt"), "utf8"), "External project change during review");
+    assert.equal(readFileSync(path.join(next.workspace!, "source.txt"), "utf8"), "Repaired wording");
   } finally { await f.close(); }
 });
 
@@ -223,6 +489,95 @@ test("private results publish after commit, preserve concurrent edits, and recov
     assert.equal(f.store.get<Work>("works", f.team.id, continuation.id).publication?.state, "conflict");
     assert.equal(readFileSync(path.join(f.workspace, "source.txt"), "utf8"), "user-edit");
   } finally { await f.close(); }
+});
+
+test("a replacement project directory cannot receive a publication prepared for the original directory", async () => {
+  const f = fixture();
+  try {
+    const member = f.member("Publisher");
+    const work = f.work(member.id);
+    work.writePaths = ["source.txt"];
+    work.verification = "self-check";
+    f.runtime.workspaces.prepare(work, member, f.run);
+    f.runtime.records.bindOutputs(work);
+    f.store.start(work, member.config);
+    writeFileSync(path.join(work.workspace!, "source.txt"), "candidate");
+    const files = f.store.capture(work, "Result", ["source.txt"]);
+    work.candidateSnapshotId = f.history.snapshots.candidate(work.baseSnapshotId!, files, work.workspace!);
+    work.artifactIds = files.map(file => file.id);
+    f.store.setStatus(work, "self_checked");
+    const moved = path.join(f.root, "original");
+    renameSync(f.workspace, moved);
+    mkdirSync(f.workspace);
+    writeFileSync(path.join(f.workspace, "source.txt"), "source-v1");
+    f.runtime.records.publishOutputs(work);
+    const current = f.store.get<Work>("works", f.team.id, work.id);
+    assert.equal(current.publication?.state, "conflict");
+    assert.match(current.publication?.error ?? "", /changed identity/);
+    assert.deepEqual(current.publication?.appliedPaths, []);
+    assert.equal(readFileSync(path.join(moved, "source.txt"), "utf8"), "source-v1");
+    assert.equal(readFileSync(path.join(f.workspace, "source.txt"), "utf8"), "source-v1");
+  } finally { await f.close(); }
+});
+
+test("publication resumes the frozen plan after the process exits during a file replacement", async () => {
+  const f = fixture();
+  const dataDir = f.teams.dataDir;
+  let originalClosed = false;
+  let reopened: TeamRuntime | undefined;
+  let reopenedTeams: TeamStore | undefined;
+  try {
+    const member = f.member("Publisher");
+    const work = f.work(member.id);
+    work.writePaths = ["one.txt", "two.txt"];
+    work.verification = "self-check";
+    f.runtime.workspaces.prepare(work, member, f.run);
+    f.runtime.records.bindOutputs(work);
+    f.store.start(work, member.config);
+    writeFileSync(path.join(work.workspace!, "one.txt"), "First frozen version");
+    writeFileSync(path.join(work.workspace!, "two.txt"), "Second frozen version");
+    const artifacts = f.store.capture(work, "Publish two files", ["one.txt", "two.txt"]);
+    work.artifactIds = artifacts.map(artifact => artifact.id);
+    work.candidateSnapshotId = f.history.snapshots.candidate(work.baseSnapshotId!, artifacts, work.workspace!);
+    f.store.setStatus(work, "self_checked");
+    await f.runtime.close();
+    f.teams.close();
+    originalClosed = true;
+    const script = `
+      import {TeamStore} from ${JSON.stringify(new URL("../src/store.ts", import.meta.url).href)};
+      import {TeamRuntime} from ${JSON.stringify(new URL("../src/runtime/engine.ts", import.meta.url).href)};
+      import {WorkspaceAccess} from ${JSON.stringify(new URL("../src/runtime/workspace-access.ts", import.meta.url).href)};
+      const write = WorkspaceAccess.prototype.write;
+      WorkspaceAccess.prototype.write = function (...args) {
+        const result = write.apply(this, args);
+        if (args[0] === 'one.txt') process.exit(73);
+        return result;
+      };
+      const teams = new TeamStore({dataDir: ${JSON.stringify(dataDir)}});
+      new TeamRuntime(teams, []);
+      process.exit(74);
+    `;
+    const crashed = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { windowsHide: true, encoding: "utf8", timeout: 15000 });
+    assert.equal(crashed.status, 73, crashed.stderr);
+    assert.equal(readFileSync(path.join(f.workspace, "one.txt"), "utf8"), "First frozen version");
+    assert(!existsSync(path.join(f.workspace, "two.txt")));
+    writeFileSync(path.join(work.workspace!, "two.txt"), "Later producer edit");
+    reopenedTeams = new TeamStore({ dataDir });
+    reopened = new TeamRuntime(reopenedTeams, []);
+    const recovered = reopened.store.get<Work>("works", f.team.id, work.id).publication!;
+    assert.equal(recovered.state, "published");
+    assert.deepEqual(recovered.recoveredPaths, ["one.txt"]);
+    assert.deepEqual(recovered.appliedPaths, ["one.txt", "two.txt"]);
+    assert.equal(readFileSync(path.join(f.workspace, "two.txt"), "utf8"), "Second frozen version");
+    assert.equal(reopened.records.outputs(f.team.id).filter(output => output.path === "one.txt")[0].revisions.length, 1);
+  } finally {
+    if (!originalClosed) await f.close();
+    else {
+      await reopened?.close();
+      reopenedTeams?.close();
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  }
 });
 
 test("TeamSwarm automatic review records bounded decisions without a pending or reusable grant", async () => {

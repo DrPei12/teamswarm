@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { conflict, notFound } from "../errors.js";
 import { approvalPresetAvailable, hasSharedModel, mergePermissionChoice } from "./permission-options.js";
-import { readOnlyExecution } from "./harness/permissions.js";
+import { readOnlyExecution, scopeNativeReadProbes } from "./harness/permissions.js";
 import type { MemberPermissionPreset } from "@team/contracts/allocation";
 import type { Attempt, ExecutionApproval, ExecutionConfig, Harness, Member, Run, Work } from "./types.js";
 import type { RuntimeStore } from "./store.js";
@@ -47,7 +47,7 @@ export class MemberPermissions {
     if (selected === "workspace-write") {
       const options = this.harnesses.get(base.harness)?.permissionOptions?.();
       const initial = options?.options.find(o => o.id === options.defaultId);
-      return { ...model, access: "workspace-write" as const, ...(initial ? { permissions: { ...initial.permissions } } : {}) };
+      return scopeNativeReadProbes({ ...model, access: "workspace-write", ...(initial ? { permissions: { ...initial.permissions } } : {}) });
     }
     if (base.harness === "antigravity" && selected === "auto" && !hasSharedModel(base))
       throw conflict("permission_choice", "Select a shared model before using automatic approval with Antigravity.");
@@ -60,7 +60,7 @@ export class MemberPermissions {
     if (change.preset) return this.configuration(teamId,base,change.preset);
     const scoped = change.access && change.access !== base.access && !change.permissions
       ? this.configuration(teamId,base,change.access) : base;
-    return { ...scoped, ...(change.access ? { access: change.access } : {}), ...(change.permissions ? { permissions: change.permissions } : {}) };
+    return scopeNativeReadProbes({ ...scoped, ...(change.access ? { access: change.access } : {}), ...(change.permissions ? { permissions: change.permissions } : {}) });
   }
   private preset(config: ExecutionConfig): MemberPermissionPreset {
     if (config.access === "read-only") return "read-only";

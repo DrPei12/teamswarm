@@ -1372,6 +1372,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                   type="button"
                   className="icon-button execution-settings-trigger"
                   onClick={() => {
+                    setSettingsTeamId(team.id);
                     setExecutionTab("harnesses");
                     setExecutionSettings(true);
                   }}
@@ -1824,6 +1825,14 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                                 m.execution.status !== "submitted" && (
                                   <ExecutionReceipt execution={m.execution} />
                                 )}
+                              {m.references
+                                ?.filter((ref) => ref.kind === "global-skill")
+                                .map((ref) => (
+                                  <span className="skill-tag" key={ref.id}>
+                                    <Icon name="skills" />
+                                    {ref.label} · r{ref.revision}
+                                  </span>
+                                ))}
                               {m.skill && (
                                 <span className="skill-tag">
                                   <Icon name="skills" />
@@ -2160,8 +2169,13 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                       {!!draft.references?.length && (
                         <div className="files-row">
                           {draft.references.map((ref) => (
-                            <span className="selected-skill" key={ref.id}>
+                            <span
+                              className="selected-skill"
+                              key={`${ref.kind}:${ref.id}`}
+                            >
                               {ref.label}
+                              {ref.kind === "global-skill" &&
+                                ` · r${ref.revision}`}
                               <button
                                 type="button"
                                 aria-label={tr("Remove {name}", {
@@ -2170,7 +2184,8 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                                 onClick={() =>
                                   updateDraft({
                                     references: draft.references?.filter(
-                                      (r) => r.id !== ref.id,
+                                      (r) =>
+                                        r.id !== ref.id || r.kind !== ref.kind,
                                     ),
                                   })
                                 }
@@ -2225,6 +2240,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                             )}
                           </IconButton>
                           <RuntimeControls
+                            host
                             team={team}
                             executionConfig={
                               workspace.executions?.[team.id]?.host?.config ??

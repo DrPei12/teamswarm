@@ -26,6 +26,7 @@ import type {
 /** Deterministic failure injection. Native execution is verified separately against real Codex. */
 class FlowHarness implements Harness {
   unknownCompletion = false;
+  omitResult = false;
   id = "flow-fixture";
   capabilities = { fixture: true, resume: true };
   requests: HarnessRequest[] = [];
@@ -44,6 +45,7 @@ class FlowHarness implements Harness {
           ? `Question for ${work.threadId}`
           : "Delivery summary",
       };
+    if (this.omitResult) return { status: "completed" as const, text: "The native turn ended." };
     const file = path.join(request.workspace, "guide.md");
     writeFileSync(
       file,
@@ -165,6 +167,44 @@ async function fixture() {
     },
   };
 }
+
+test("native completion retains its identity when the work has no submitted result", async () => {
+  const f = await fixture();
+  try {
+    f.harness.omitResult = true;
+    const work = f.create();
+    await until(() => f.store.get<Work>("works", f.team.id, work.id).status === "failed");
+    const failed = f.store.get<Work>("works", f.team.id, work.id);
+    const attempt = f.store.get<Attempt>("attempts", f.team.id, failed.attemptId!);
+    assert.equal(attempt.status, "completed");
+    assert.equal(attempt.outcome?.source, "native");
+    assert.ok(attempt.finishedAt);
+    assert.ok(failed.error);
+    const conversation = memberConversation(f.service.runtime, f.team.id, f.member.id, { workId: work.id });
+    const entry = conversation.entries.find(item => item.id === `attempt:${attempt.id}`)!;
+    assert.equal(entry.status, "failed");
+    assert.equal(entry.error, failed.error);
+    assert.ok(entry.elapsedMs! >= 0);
+    assert.ok(f.store.events(f.team.id).some(event => event.type === "attempt.execution_ended" && event.attemptId === attempt.id));
+  } finally { await f.close(); }
+});
+
+test("superseding verified work preserves the completed execution and its finish time", async () => {
+  const f = await fixture();
+  try {
+    const work = f.create();
+    await until(() => f.store.get<Work>("works", f.team.id, work.id).status === "self_checked");
+    const completed = f.store.get<Work>("works", f.team.id, work.id);
+    const before = f.store.get<Attempt>("attempts", f.team.id, completed.attemptId!);
+    f.store.setStatus(completed, "superseded", "A new requirement replaces this result.");
+    const after = f.store.get<Attempt>("attempts", f.team.id, before.id);
+    assert.equal(after.status, "completed");
+    assert.equal(after.finishedAt, before.finishedAt);
+    assert.deepEqual(after.outcome, before.outcome);
+    const observed = f.store.finishAttempt(f.team.id, before.id, { status: "failed", error: "A later publication failed." }, "runtime");
+    assert.deepEqual(observed.outcome, before.outcome);
+  } finally { await f.close(); }
+});
 
 test("lightweight task delivers real bytes, continuation keeps its thread, snapshots and independent acceptance stay separate", async () => {
   const f = await fixture();

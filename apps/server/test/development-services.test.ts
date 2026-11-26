@@ -7,8 +7,12 @@ import {
   symlinkSync,
   readFileSync,
   unlinkSync,
+  rmdirSync,
+  existsSync,
+  readdirSync,
 } from "node:fs";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import path from "node:path";
 import { setup, until } from "./helpers/service-fixture.js";
 import { NativeHarness } from "../src/runtime/harness/native.js";
@@ -119,11 +123,14 @@ test(
       );
       writeFileSync(path.join(f.a.workspace!, "state.txt"), "A_UPDATED");
       await until(
-        () =>
-          readFileSync(
+        () => {
+          const service = f.runtime.services.list(f.team.id).find(s => s.id === first.id)!;
+          assert.equal(service.status, "running", service.error);
+          return readFileSync(
             path.join(first.runtimeDirectory!, "state.txt"),
             "utf8",
-          ) === "A_UPDATED",
+          ) === "A_UPDATED";
+        },
       );
       const stopped = await f.runtime.services.stop(
         f.team.id,
@@ -160,6 +167,20 @@ async function runLaunch(prefix: string[]) {
     );
   });
 }
+
+test("background working-copy failures reach the managed service record", { timeout: 30000 }, async () => {
+  const f = await setup();
+  try {
+    const service = await f.runtime.services.start(f.a, {
+      name: "Failure fixture", directory: ".", development: developmentFixture(f), execution,
+    }, randomUUID());
+    const manifest = path.join(f.a.workspace!, "package.json");
+    const original = readFileSync(manifest, "utf8");
+    writeFileSync(manifest, original + "\n");
+    await until(() => f.runtime.services.list(f.team.id).find(s => s.id === service.id)?.status === "failed");
+    assert.match(f.runtime.services.list(f.team.id).find(s => s.id === service.id)!.error!, /startup configuration changed/);
+  } finally { await f.close(); }
+});
 
 test("development policies reject read-only, missing shell and unverified adapters", () => {
   const pi = new NativeHarness("pi");
@@ -388,11 +409,24 @@ test(
       );
       writeFileSync(path.join(f.a.workspace!, "state.txt"), "A stale");
       writeFileSync(path.join(f.b.workspace!, "state.txt"), "B update");
-      await until(
-        () =>
-          readFileSync(path.join(copy!.directory, "state.txt"), "utf8") ===
-          "B update",
-      );
+      await until(() => {
+        if (failures.length) throw failures[0];
+        return readFileSync(path.join(copy!.directory, "state.txt"), "utf8") === "B update";
+      });
+      const changed = path.join(f.b.workspace!, "state.txt");
+      unlinkSync(changed);
+      mkdirSync(changed);
+      await until(() => {
+        if (failures.length) throw failures[0];
+        return !existsSync(path.join(copy!.directory, "state.txt"));
+      });
+      rmdirSync(changed);
+      writeFileSync(changed, "B restored file");
+      await until(() => {
+        if (failures.length) throw failures[0];
+        const mirrored = path.join(copy!.directory, "state.txt");
+        return existsSync(mirrored) && readFileSync(mirrored, "utf8") === "B restored file";
+      });
       assert.equal(failures.length, 0);
     } finally {
       await copy?.close();
@@ -400,3 +434,47 @@ test(
     }
   },
 );
+
+test("Windows preview replacement keeps the old bytes while a reader holds the target", {
+  skip: process.platform !== "win32",
+  timeout: 15000,
+}, async () => {
+  const f = await setup();
+  let copy: DevelopmentWorkingCopy | undefined;
+  let reader: ReturnType<typeof spawn> | undefined;
+  let switching: Promise<unknown> | undefined;
+  try {
+    const preview = developmentFixture(f);
+    copy = new DevelopmentWorkingCopy(path.join(f.root, "view"), preview, error => { throw error; });
+    await copy.switchTo(f.a.workspace!);
+    const destination = path.join(copy.directory, "state.txt");
+    const program = `
+      $file = [IO.File]::Open($env:TEAMSWARM_PREVIEW_LOCK, 'Open', 'Read', 'ReadWrite')
+      try { [Console]::WriteLine('ready'); [void][Console]::ReadLine() } finally { $file.Dispose() }
+    `;
+    reader = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(program, "utf16le").toString("base64")], {
+      env: { ...process.env, TEAMSWARM_PREVIEW_LOCK: destination }, windowsHide: true, stdio: ["pipe", "pipe", "pipe"],
+    });
+    const stopped = once(reader, "exit");
+    const ready = await Promise.race([
+      once(reader.stdout!, "data").then(([chunk]) => String(chunk)),
+      stopped.then(([code]) => { throw new Error(`File reader exited with ${code} before acquiring the handle.`); }),
+    ]);
+    assert.match(ready, /ready/);
+    switching = copy.switchTo(f.b.workspace!);
+    switching.catch(() => {});
+    await until(() => readdirSync(copy!.directory).some(file => file.startsWith(".teamswarm-preview-")));
+    assert.equal(readFileSync(destination, "utf8"), "A_COPY");
+    reader.stdin!.end("\n");
+    const [code] = await stopped;
+    assert.equal(code, 0);
+    await switching;
+    assert.equal(readFileSync(destination, "utf8"), "B_COPY");
+    assert.equal(readdirSync(copy.directory).some(file => file.startsWith(".teamswarm-preview-")), false);
+  } finally {
+    if (reader && reader.exitCode === null && !reader.stdin!.writableEnded) reader.stdin!.end("\n");
+    await switching?.catch(() => {});
+    await copy?.close();
+    await f.close();
+  }
+});

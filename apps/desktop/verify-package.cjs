@@ -15,7 +15,9 @@ function verifyProduct(product) {
   }
   const runtime = JSON.parse(fs.readFileSync(path.join(product, "runtime-manifest.json"), "utf8"));
   for (const relative of [runtime.nodeFile, runtime.codexFile, "runtime/node_modules/npm/bin/npm-cli.js", "scripts/install-harnesses.mjs",
-    "scripts/platform.cjs", "scripts/runtime-temp.mjs", "config/harnesses.json", "teamswarm/dist/index.html", "node_modules/express/package.json", "LICENSE", "NOTICE", "README.md", "README.zh-CN.md", "THIRD_PARTY_NOTICES.md"])
+    "scripts/opencode-probe-sdk-install.mjs", "apps/server/dist/runtime/harness/opencode-probe-sdk.js", "scripts/platform.cjs", "scripts/runtime-temp.mjs", "config/harnesses.json",
+    "config/opencode-probe-sdk/package.json", "config/opencode-probe-sdk/package-lock.json",
+    "teamswarm/dist/index.html", "node_modules/express/package.json", "LICENSE", "NOTICE", "README.md", "README.zh-CN.md", "THIRD_PARTY_NOTICES.md"])
     if (!fs.existsSync(path.join(product, relative))) throw new Error(`Missing packaged dependency: ${relative}`);
   if (runtime.platform !== process.platform || runtime.arch !== process.arch) throw new Error("Verify this package on its target platform and architecture.");
   const run = (args) => {
@@ -23,7 +25,16 @@ function verifyProduct(product) {
     if (result.error || result.status !== 0) throw new Error("Packaged runtime verification failed: " + (result.stderr || result.error?.message));
     return result.stdout.trim();
   };
-  run(["--input-type=module", "-e", "await import('./apps/server/dist/app.js'); await import('./apps/server/dist/runtime/harness/registry.js');"]);
+  run(["--input-type=module", "-e", "await import('./apps/server/dist/app.js'); await import('./apps/server/dist/runtime/harness/registry.js'); await import('./scripts/opencode-probe-sdk-install.mjs');"]);
+  if (runtime.platform === "darwin") {
+    const file = "runtime/owned-process-darwin";
+    const absolute = path.join(product, file);
+    if (runtime.supervisor?.file !== file || runtime.supervisor.sha256 !== inventory.files[file] ||
+        createHash("sha256").update(fs.readFileSync(absolute)).digest("hex") !== runtime.supervisor.sha256)
+      throw new Error("Packaged macOS process supervisor does not match the runtime manifest.");
+    fs.accessSync(absolute, fs.constants.X_OK);
+    run(["--input-type=module", "-e", "import assert from 'node:assert/strict';const {sampleDarwinProcesses}=await import('./apps/server/dist/runtime/harness/darwin-supervisor.js');const sample=await sampleDarwinProcesses(process.pid);assert.equal(sample.supervision,'native');assert.equal(sample.processCoverage,'descendants');assert(sample.processes.some(p=>p.pid===process.pid&&p.privateBytes>0));"]);
+  }
   const npm = run([path.join(product, "runtime/node_modules/npm/bin/npm-cli.js"), "--version"]);
   if (npm !== runtime.npm) throw new Error("Packaged npm version differs.");
   const npx = run([path.join(product, "runtime/node_modules/npm/bin/npx-cli.js"), "--version"]);

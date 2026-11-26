@@ -30,6 +30,8 @@ import { connectionSource, subscriptionCatalogId } from "./modelCatalog";
 import { useSubscriptionCatalog } from "./useSubscriptionCatalog";
 import { ModelPicker, modelProvider } from "./ModelPicker";
 import { useHarnessCatalog, type HarnessInspection } from "./harnessCatalog.ts";
+import { GlobalSkillSettings } from "./GlobalSkillSettings";
+import { McpSettings } from "./McpSettings";
 import "./capabilities.css";
 
 const protocols: ConnectionProtocol[] = [
@@ -43,7 +45,14 @@ const protocolNames = {
   "anthropic-messages": "Anthropic Messages",
 };
 type Installation = { installed: boolean; version: string | null };
-type Tab = "harnesses" | "connections" | "preferences";
+const capabilityTabs = [
+  ["harnesses", "Harness"],
+  ["connections", "Models and connections"],
+  ["mcp", "MCP tools"],
+  ["skills", "Text skills"],
+  ["preferences", "Team preferences"],
+] as const;
+type Tab = (typeof capabilityTabs)[number][0];
 
 export function CapabilitySettings({
   open,
@@ -121,6 +130,7 @@ export function CapabilitySettings({
       live = false;
     };
   }, [open, revision, harnesses]);
+  const separateCatalog = tab === "mcp" || tab === "skills";
   const dirty = !!draft && JSON.stringify(draft) !== saved;
   async function save() {
     if (!draft || busy) return;
@@ -183,13 +193,7 @@ export function CapabilitySettings({
           role="tablist"
           aria-label={t("Team capabilities")}
         >
-          {(
-            [
-              ["harnesses", "Harness"],
-              ["connections", "Models and connections"],
-              ["preferences", "Team preferences"],
-            ] as const
-          ).map(([id, label]) => (
+          {capabilityTabs.map(([id, label], index) => (
             <button
               key={id}
               role="tab"
@@ -198,20 +202,19 @@ export function CapabilitySettings({
               id={`cap-tab-${id}`}
               aria-controls={`cap-panel-${id}`}
               onKeyDown={(e) => {
-                const ids: Tab[] = ["harnesses", "connections", "preferences"];
                 if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key))
                   return;
                 e.preventDefault();
+                const count = capabilityTabs.length;
                 const next =
-                  e.key === "Home"
-                    ? ids[0]
-                    : e.key === "End"
-                      ? ids[2]
-                      : ids[
-                          (ids.indexOf(tab) +
-                            (e.key === "ArrowRight" ? 1 : 2)) %
-                            3
-                        ];
+                  capabilityTabs[
+                    e.key === "Home"
+                      ? 0
+                      : e.key === "End"
+                        ? count - 1
+                        : (index + (e.key === "ArrowRight" ? 1 : count - 1)) %
+                          count
+                  ][0];
                 setTab(next);
                 document.getElementById(`cap-tab-${next}`)?.focus();
               }}
@@ -249,7 +252,7 @@ export function CapabilitySettings({
         />
       ) : (
         <>
-          {teamScope && (
+          {teamScope && !separateCatalog && (
             <label className="cap-preference-toggle cap-inherit">
               <span>
                 <strong>{t("Inherit global defaults")}</strong>
@@ -266,11 +269,28 @@ export function CapabilitySettings({
           )}
           <div
             className="cap-body"
-            inert={busy || (teamScope && (draft.inheritsDefaults ?? true))}
+            inert={
+              busy ||
+              (!separateCatalog &&
+                teamScope &&
+                (draft.inheritsDefaults ?? true))
+            }
             role="tabpanel"
             id={`cap-panel-${tab}`}
             aria-labelledby={`cap-tab-${tab}`}
           >
+            {tab === "skills" && (
+              <GlobalSkillSettings
+                key={endpoint}
+                teamId={teamScope ? teamId : undefined}
+              />
+            )}
+            {tab === "mcp" && (
+              <McpSettings
+                key={endpoint}
+                teamId={teamScope ? teamId : undefined}
+              />
+            )}
             {tab === "harnesses" && (
               <>
                 <div className="cap-harness-list">
@@ -622,28 +642,30 @@ export function CapabilitySettings({
               </>
             )}
           </div>
-          <footer className="cap-footer">
-            <div aria-live="polite">
-              {error ? (
-                <span className="form-error">{t(error)}</span>
-              ) : notice ? (
-                <span className="cap-success">
-                  <Check size={14} />
-                  {notice}
-                </span>
-              ) : (
-                <span>{dirty ? t("Unsaved changes") : null}</span>
-              )}
-            </div>
-            <button
-              className="primary-button"
-              onClick={() => void save()}
-              disabled={busy || !dirty || !draft.enabledHarnesses.length}
-            >
-              {busy ? <LoaderCircle className="spinner" size={15} /> : null}
-              {t(busy ? "Saving…" : "Save settings")}
-            </button>
-          </footer>
+          {!separateCatalog && (
+            <footer className="cap-footer">
+              <div aria-live="polite">
+                {error ? (
+                  <span className="form-error">{t(error)}</span>
+                ) : notice ? (
+                  <span className="cap-success">
+                    <Check size={14} />
+                    {notice}
+                  </span>
+                ) : (
+                  <span>{dirty ? t("Unsaved changes") : null}</span>
+                )}
+              </div>
+              <button
+                className="primary-button"
+                onClick={() => void save()}
+                disabled={busy || !dirty || !draft.enabledHarnesses.length}
+              >
+                {busy ? <LoaderCircle className="spinner" size={15} /> : null}
+                {t(busy ? "Saving…" : "Save settings")}
+              </button>
+            </footer>
+          )}
         </>
       )}
     </Modal>

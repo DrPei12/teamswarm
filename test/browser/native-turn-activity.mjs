@@ -67,6 +67,11 @@ const service = createApp({
             ],
           },
         });
+        const child = `child-${i}`;
+        emit("execution.node", { threadId: child, parentThreadId: "root", turnId: `child-turn-${i}`, status: "completed" });
+        emit("transcript.item", { id: `subagent:${child}`, kind: "status", title: "Subagent", text: child, status: "completed", nativeThreadId: child, parentThreadId: "root" });
+        emit("transcript.item", { id: `${child}:message`, kind: "message", text: `Child observation ${i}`, status: "completed", nativeThreadId: child, parentThreadId: "root" });
+        emit("transcript.item", { id: `${child}:file`, kind: "tool", title: "teamswarm / team_read_file", toolName: "team_read_file", text: '{"path":"marker.txt"}', status: "completed", nativeThreadId: child, parentThreadId: "root" });
         return { status: "completed", text: "Native turn receipt " + i };
       },
       async interrupt() {},
@@ -152,7 +157,23 @@ try {
       .count(),
     0,
   );
+  assert.equal(await page.locator(".activity-subagent").count(), 2);
+  for (let i = 1; i <= 2; i++) {
+    const child = page.locator(`[data-native-thread="child-${i}"]`);
+    assert.equal(await child.getByText(`Child observation ${i}`, { exact: true }).isVisible(), false);
+    await child.locator("summary").click();
+    await child.getByText(`Child observation ${i}`, { exact: true }).waitFor();
+    await child.getByText("Read file", { exact: true }).waitFor();
+    assert.equal(await child.getByText(`Child observation ${3-i}`, { exact: true }).count(), 0);
+  }
+  await page.waitForFunction(() => [...document.querySelectorAll(".activity-subagent-items")].every(body => {
+    const clip = body.closest(".activity-disclosure");
+    return !clip || body.getBoundingClientRect().bottom <= clip.getBoundingClientRect().bottom + 1;
+  }));
   await page.screenshot({ path: path.join(root, "two-turns.png") });
+  await page.setViewportSize({ width: 640, height: 860 });
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+  await page.screenshot({ path: path.join(root, "subagents-narrow.png") });
   console.log(
     "Two turns, two visible tool activities, zero startup placeholders after reload.",
     root,

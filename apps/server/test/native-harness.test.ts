@@ -1,6 +1,9 @@
+import { conflict } from "../src/errors.js";
 import assert from "node:assert/strict";
+import { request as httpRequest } from "node:http";
 import { test } from "node:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { rm } from "node:fs/promises";
@@ -10,12 +13,160 @@ import {
   resolveConnection,
 } from "../src/runtime/connections.js";
 import { NativeHarness } from "../src/runtime/harness/native.js";
+import { DshProbeTree } from "../src/runtime/harness/dsh-probe-tree.js";
 import {
   toolBridge,
+  toolEndpoint,
   childEnvironment,
+  nativeEnvironment,
 } from "../src/runtime/harness/native-support.js";
 import type { HarnessRequest } from "../src/runtime/types.js";
 import { loadCredentialFiles } from "../src/runtime/credentials.js";
+
+test("a DeepSeek native probe waits for its exact activation and loses both requests at turn end", async () => {
+  const root = randomUUID(), child = randomUUID(), foreign = randomUUID();
+  const state: string[] = [];
+  const tree = new DshProbeTree(root, "root-turn", event => state.push(String(event.data.status)));
+  const signal = new AbortController();
+  assert.equal(await tree.resolve(root, signal.signal), undefined);
+  assert.equal(tree.begin(), true);
+  assert.equal(tree.begin(), false);
+  const unknown = new AbortController();
+  const waiting = tree.resolve(foreign, unknown.signal);
+  tree.observe({ method: "subagent.started", params: { parentSessionId: foreign, childSessionId: foreign } });
+  unknown.abort();
+  assert.equal(await waiting, undefined);
+  const pending = tree.resolve(child, signal.signal);
+  tree.observe({ method: "subagent.started", params: { parentSessionId: root, childSessionId: child } });
+  tree.observe({ method: "session.event", params: { sessionId: child, event: { type: "turn/start", data: { turn: 1 } } } });
+  const childScope = await pending;
+  assert.equal(childScope?.threadId, child);
+  assert.equal(childScope?.parentThreadId, root);
+  assert.equal(childScope?.turnId, child + ":1");
+  tree.observe({ method: "session.event", params: { sessionId: child, event: { type: "turn/end" } } });
+  assert(childScope?.signal?.aborted);
+  assert.equal(await tree.resolve(child, signal.signal), undefined);
+  assert.equal(tree.settled(), false);
+  tree.observe({ method: "subagent.finished", params: { parentSessionId: root, childSessionId: child, status: "ok", stopReason: "completed" } });
+  tree.observe({ method: "teamswarm.probe.disposed", params: { id: child, parent: root } });
+  assert(tree.settled());
+  const rootScope = await tree.resolve(root, signal.signal);
+  tree.observe({ method: "session.event", params: { sessionId: root, event: { type: "turn/end" } } });
+  assert.equal(tree.begin(), false);
+  assert(rootScope?.signal?.aborted);
+  assert.deepEqual(state, ["pending", "running", "completed", "completed"]);
+});
+
+test("a closed DeepSeek probe with no terminal notice is interrupted by confirmed user cancellation", () => {
+  const root = randomUUID(), child = randomUUID(), nodes: unknown[] = [];
+  const tree = new DshProbeTree(root, "root-turn", event => nodes.push(event.data));
+  tree.begin();
+  tree.observe({ method: "subagent.started", params: { parentSessionId: root, childSessionId: child } });
+  tree.observe({ method: "session.event", params: { sessionId: child, event: { type: "turn/start", data: { turn: 1 } } } });
+  tree.end();
+  tree.observe({ method: "teamswarm.probe.disposed", params: { id: child, parent: root } });
+  assert.equal(tree.settled(), false);
+  tree.processExited(true);
+  assert.deepEqual(nodes.at(-1), { threadId: child, parentThreadId: root, turnId: child + ":1", status: "interrupted", runtimeClosed: true });
+  assert(tree.settled());
+});
+
+test("actor-bound tools separate native call IDs and withhold a result after revocation", { timeout: 8000 }, async () => {
+  const endpoint = await toolEndpoint("deepseek-harness");
+  const actors = new Map([["first", new AbortController()], ["second", new AbortController()]]);
+  let enter!: () => void, resume!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const resumed = new Promise<void>(resolve => { resume = resolve; });
+  const ids: string[] = [];
+  try {
+    const base = request(process.cwd());
+    endpoint.bind({ ...base, config: { ...base.config, harness: "deepseek-harness" },
+      tools: [{ name: "read", description: "Read", inputSchema: { type: "object" } }],
+      async onTool(_name, args: any, callId) {
+        ids.push(callId);
+        if (args.wait) { enter(); await resumed; }
+        return "protected receipt";
+      },
+    }, caller => {
+      const signal = actors.get(caller.threadId ?? "")?.signal;
+      return signal && !signal.aborted ? { sessionId: "root", threadId: caller.threadId, turnId: "1", signal } : undefined;
+    });
+    const call = (actor: string, wait = false) => fetch(endpoint.url, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: "same-call-id", method: "tools/call",
+        params: { name: "read", arguments: { wait }, _meta: { threadId: actor } } }),
+    }).then(response => response.json()) as Promise<any>;
+    assert.equal((await call("first")).result.isError, undefined);
+    const pending = call("second", true);
+    await Promise.race([entered, pending.then(result => { throw Error("Tool returned before entering: " + JSON.stringify(result)); })]);
+    actors.get("second")!.abort();
+    resume();
+    const result = await pending;
+    assert.equal(result.result.isError, true);
+    assert(!JSON.stringify(result).includes("protected receipt"));
+    assert.equal(new Set(ids).size, 2);
+  } finally { resume(); await endpoint.close(); }
+});
+
+test("signed OpenCode MCP dispatch uses only the verified arguments and native identity", async () => {
+  const endpoint = await toolEndpoint("opencode");
+  const root = "ses_native-root", child = "ses_native-child";
+  const observed: unknown[] = [];
+  let admitted = false;
+  const send = (url: string, body: unknown) => fetch(url, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(body) });
+  try {
+    const base = request(process.cwd());
+    const lease = endpoint.bind({ ...base, config: { ...base.config, harness: "opencode" },
+      tools: [{ name: "team_read_file", description: "Read", inputSchema: { type: "object" } }],
+      async onTool(name, args, callId, _signal, scope) {
+        observed.push({ name, args, callId, scope });
+        return { content: "captured excerpt" };
+      },
+    }, undefined, {
+      acceptControl(receipt) {
+        if (receipt !== "fixture-control") throw new Error("Rejected");
+        admitted = true;
+      },
+      verifyTool(name, args, signal) {
+        signal.throwIfAborted();
+        const claimed = args as { path?: string; _teamswarmReceipt?: string };
+        if (!admitted || name !== "team_read_file" || claimed._teamswarmReceipt !== "fixture-read" || claimed.path !== "one.txt")
+          throw new Error("Unsigned read");
+        admitted = false;
+        return { scope: { sessionId: root, threadId: child, parentThreadId: root, turnId: "child-turn" },
+          input: { path: claimed.path }, callId: "verified-native-call" };
+      },
+    });
+    const read = (receipt?: string) => send(endpoint.url, { jsonrpc: "2.0", id: "mcp-untrusted-id", method: "tools/call",
+      params: { name: "team_read_file", arguments: { path: "one.txt", _teamswarmReceipt: receipt }, _meta: { threadId: "foreign" } } });
+    assert.equal((await send(endpoint.permissionUrl, { receipt: "forged" })).status, 403);
+    const unsigned = await read();
+    assert.equal((await unsigned.json() as any).result.isError, true);
+    assert.deepEqual(observed, []);
+    const control = await send(endpoint.permissionUrl, { receipt: "fixture-control" });
+    assert.deepEqual(await control.json(), { ok: true });
+    assert.match(await (await read("fixture-read")).text(), /captured excerpt/);
+    assert.deepEqual(observed, [{ name: "team_read_file", args: { path: "one.txt" }, callId: "verified-native-call",
+      scope: { sessionId: root, threadId: child, parentThreadId: root, turnId: "child-turn" } }]);
+    assert.equal((await (await read("fixture-read")).json() as any).result.isError, true);
+    await lease.close();
+    assert.equal((await send(endpoint.permissionUrl, { receipt: "fixture-control" })).status, 403);
+    assert.equal((await read("fixture-read")).status, 403);
+  } finally { await endpoint.close(); }
+});
+
+test("native environments exclude parent orchestration variables in every casing and restore only the selected credential", () => {
+  const names = ["codex_fixture_host", "CoDeX_APP_TOOLS_PIPE_PATH", "UNRELATED_API_KEY", "TEST_MODEL_KEY"];
+  const previous = names.map(name => process.env[name]);
+  try {
+    for (const name of names) process.env[name] = "fixture-only";
+    const base = nativeEnvironment();
+    assert.equal(Object.keys(base).some(name => /codex_fixture_host|codex_app_tools_pipe_path|unrelated_api_key|test_model_key/i.test(name)), false);
+    const bound = childEnvironment(request(process.cwd()));
+    assert.equal(bound.TEST_MODEL_KEY, "fixture-only");
+    assert.equal(Object.keys(bound).some(name => /codex_fixture_host|codex_app_tools_pipe_path|unrelated_api_key/i.test(name)), false);
+  } finally { names.forEach((name, i) => previous[i] === undefined ? delete process.env[name] : process.env[name] = previous[i]); }
+});
 
 test(
   "an exited native root with inherited descendant pipes settles unknown within a bounded wait",
@@ -310,6 +461,92 @@ test("eight native attempts share one listener, keep their own calls and revoke 
   }
 });
 
+test("tool bridge revocation waits for an in-flight operation and preserves native call identity", async () => {
+  const req = request(process.cwd());
+  let entered!: () => void, finish!: () => void;
+  const started = new Promise<void>(r => { entered = r; });
+  const completed = new Promise<void>(r => { finish = r; });
+  const ids: string[] = [];
+  const signals: AbortSignal[] = [];
+  req.onTool = async (_name, _args, id, abort) => {
+    ids.push(id); signals.push(abort!); entered();
+    if (ids.length === 1) await completed;
+    return { observed: true };
+  };
+  const bridge = await toolBridge(req);
+  const body = JSON.stringify({ id: 3, method: "tools/call", params: {
+    name: "read_fact", arguments: {}, _meta: { sessionId: "root", threadId: "child", callId: "native-call" },
+  } });
+  const invoke = () => fetch(bridge.url, { method: "POST", body }).then(r => r.json());
+  try {
+    const first = invoke(); await started;
+    const duplicate = await invoke();
+    assert.equal(duplicate.result.isError, undefined);
+    assert.equal(ids[0], ids[1]);
+    let drained = false;
+    const closing = bridge.close().then(() => { drained = true; });
+    assert.equal(signals[0].aborted, true);
+    assert.equal(signals[1].aborted, false);
+    await new Promise(r => setTimeout(r, 30));
+    assert.equal(drained, false);
+    finish();
+    assert.equal((await first).result.isError, undefined);
+    await closing;
+    assert.equal(drained, true);
+  } finally { finish(); await bridge.close(); }
+});
+
+test("tool bridge revocation closes an incomplete request body", { timeout: 3000 }, async () => {
+  const bridge = await toolBridge(request(process.cwd()));
+  const client = httpRequest(bridge.url, { method: "POST", headers: { "content-length": 10000 } });
+  const ended = new Promise<void>(resolve => {
+    client.once("error", () => resolve());
+    client.once("close", () => resolve());
+  });
+  try {
+    client.flushHeaders();
+    await new Promise<void>(resolve => { client.write('{"id":', () => resolve()); });
+    await new Promise(r => setTimeout(r, 30));
+    await bridge.close();
+    await ended;
+  } finally { client.destroy(); await bridge.close(); }
+});
+
+test("Grok ACP diagnostics redact the model lease before the native receipt is saved", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "teamswarm-grok-redact-"));
+  const entry = path.join(root, "grok.mjs");
+  const names = ["TEAM_GROK_BIN", "TEAM_HARNESS_HOME"];
+  const prior = names.map(name => process.env[name]);
+  const token = "synthetic-temporary-model-route";
+  writeFileSync(entry, `
+import {createInterface} from 'node:readline';
+createInterface({input:process.stdin}).on('line',line=>{
+  const request=JSON.parse(line);
+  if(request.method==='initialize') console.log(JSON.stringify({id:request.id,error:{message:'Native reply with '+process.env.TEAMSWARM_ROUTE_KEY}}));
+});`);
+  process.env.TEAM_GROK_BIN = entry;
+  process.env.TEAM_HARNESS_HOME = path.join(root, "native");
+  const harness = new NativeHarness("grok");
+  try {
+    let sessionId = "", turnId = "";
+    const req = request(root);
+    req.config = { ...req.config, harness: "grok", protocol: "chat-completions", credentialEnv: "TEAMSWARM_ROUTE_KEY" };
+    req.modelRoute = { token, sourceConfig: req.config };
+    req.onSession = id => { sessionId = id; };
+    req.onTurn = id => { turnId = id; };
+    const result = await harness.execute(req);
+    assert.equal(result.status, "failed");
+    assert.match(result.error ?? "", /\[REDACTED\]/);
+    const receipt = readFileSync(path.join(root, "native", "grok", sessionId, turnId + ".json"), "utf8");
+    assert(!receipt.includes(token));
+    assert(receipt.includes("REDACTED"));
+  } finally {
+    await harness.close();
+    names.forEach((name, i) => prior[i] === undefined ? delete process.env[name] : process.env[name] = prior[i]);
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
 test("native terminal receipts survive adapter replacement; invalid bindings and unavailable configuration fail before execution", async () => {
   const root = mkdtempSync(path.join(tmpdir(), ".test-harness-"));
   const saved = {
@@ -321,7 +558,20 @@ test("native terminal receipts survive adapter replacement; invalid bindings and
   const entry = path.join(root, "fixture.mjs");
   writeFileSync(
     entry,
-    `// Protocol fixture only: no inference, no production adapter.\nimport{createInterface}from'node:readline';const r=createInterface({input:process.stdin});r.on('line',l=>{const v=JSON.parse(l);if(v.type==='user'){console.log(JSON.stringify({type:'result',is_error:false,result:'fixture-complete',usage:{input_tokens:3,output_tokens:2}}));}});`,
+    `import {createInterface} from 'node:readline';
+const send = message => console.log(JSON.stringify(message));
+createInterface({input:process.stdin}).on('line', line => {
+  const value = JSON.parse(line);
+  if (value.type === 'user') {
+    if (value.message.content === 'hold') {
+      send({type:'system',subtype:'init',session_id:'held-session'});
+      return;
+    }
+    send({type:'result',is_error:false,result:'fixture-complete',usage:{input_tokens:3,output_tokens:2}});
+  }
+  if (value.request?.subtype === 'interrupt')
+    send({type:'result',is_error:false,result:'fixture-interrupted'});
+});`,
   );
   process.env.TEAM_CLAUDE_CODE_BIN = entry;
   process.env.TEAM_HARNESS_HOME = path.join(root, "native");
@@ -347,7 +597,24 @@ test("native terminal receipts survive adapter replacement; invalid bindings and
     assert.equal(usageEvents.at(-1).outputTokens, 2);
     assert.equal(usageEvents.at(-1).cacheReadTokens, null);
     assert.equal(usageEvents.at(-1).totalTokens, null);
-    await harness.close();
+    const priorTurn = turn;
+    let ready!: () => void;
+    const running = new Promise<void>(resolve => { ready = resolve; });
+    const followup: HarnessRequest = {
+      ...req, sessionId: session, input: "hold",
+      onEvent: event => { if (event.type === "model.observed") ready(); },
+    };
+    const active = harness.execute(followup);
+    try {
+      await assert.rejects(harness.execute({...followup}), /busy/);
+      await running;
+      assert.notEqual(turn, priorTurn);
+      await harness.interrupt(session, priorTurn);
+      assert.equal((await harness.reconcile(session, priorTurn)).status, "completed");
+      await harness.interrupt(session, turn);
+      assert.equal((await active).status, "interrupted");
+    } finally { await harness.close(); }
+    turn = priorTurn;
     harness = new NativeHarness("claude-code");
     assert.equal((await harness.reconcile(session, turn)).status, "completed");
     const elsewhere = path.join(root, "elsewhere");
@@ -372,6 +639,15 @@ test("native terminal receipts survive adapter replacement; invalid bindings and
       () => harness.validateConfig({ ...req.config, thinkingFormat: "qwen" }),
       /Pi Chat Completions/,
     );
+    let shutdown!: Promise<void>;
+    const closing = harness.execute({
+      ...req,
+      onSession: () => { shutdown = harness.close(); },
+      onEvent: () => { assert.fail("A native process acquired resources after shutdown began"); },
+    });
+    assert.equal((await closing).status, "interrupted");
+    await shutdown;
+    assert.deepEqual(harness.resources(), []);
     process.env.TEAM_CLAUDE_CODE_BIN = path.join(root, "missing.exe");
     assert.throws(() => harness.validateConfig(req.config), /Invalid/);
   } finally {
@@ -464,6 +740,49 @@ test(
     }
   },
 );
+
+for (const id of ["claude-code", "deepseek-harness"] as const) for (const cancelled of [false, true])
+  test(`${id} ${cancelled ? "records a stop before stdin dispatch as interrupted" : "revalidates mounted input at its first prompt write"}`, { timeout: 15000 }, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "teamswarm-prompt-grant-"));
+  const nativeEnv = id === "claude-code" ? "TEAM_CLAUDE_CODE_BIN" : "TEAM_DEEPSEEK_HARNESS_BIN";
+  const names = [nativeEnv, "TEAM_HARNESS_HOME", "TEST_MODEL_KEY"];
+  const saved = names.map(name => process.env[name]);
+  const entry = path.join(root, "fixture.mjs"), ready = path.join(root, "initialized"), prompt = path.join(root, "prompt-sent");
+  writeFileSync(entry, `import {writeFileSync} from 'node:fs';
+    import {createInterface} from 'node:readline';
+    createInterface({input:process.stdin}).on('line', line=>{
+      const m=JSON.parse(line);
+      if(m.method==='initialize') {
+        writeFileSync(${JSON.stringify(ready)},'');
+        console.log(JSON.stringify({jsonrpc:'2.0',id:m.id,result:{}}));
+      } else if(m.type==='user'||m.method==='session/prompt') {
+        writeFileSync(${JSON.stringify(prompt)},'');process.exit(0);
+      }
+    });`);
+  process.env[nativeEnv] = entry;
+  process.env.TEAM_HARNESS_HOME = path.join(root, "native");
+  process.env.TEST_MODEL_KEY = "fixture-only";
+  const h = new NativeHarness(id), req = request(root);
+  req.config.harness = id;
+  let acquired = false, checks = 0;
+  req.onEvent = e => { if (e.type === "resource.acquired") acquired = true; };
+  req.onDispatch = () => {
+    checks++;
+    if (id === "claude-code" ? acquired : existsSync(ready))
+      throw cancelled ? conflict("execution_cancelled", "Stopped before dispatch.") : conflict("skill_revoked", "Skill authorization ended before the prompt.");
+  };
+  try {
+    const result = await h.execute(req);
+    assert.equal(result.status, cancelled ? "interrupted" : "failed");
+    assert.match(result.error ?? "", cancelled ? /Stopped before dispatch/ : /Skill authorization ended/);
+    assert.equal(checks, 1);
+    assert(!existsSync(prompt));
+  } finally {
+    await h.close();
+    names.forEach((name,i) => { if (saved[i] === undefined) delete process.env[name]; else process.env[name] = saved[i]; });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("credential files load atomically and reject executable or ambiguous token content", () => {
   const root = mkdtempSync(path.join(tmpdir(), ".test-credential-"));

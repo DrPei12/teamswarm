@@ -23,9 +23,21 @@ if (existsSync(target)) {
 mkdirSync(target, { recursive: true });
 for (const item of ["apps/server/dist", "teamswarm/dist", "README.md", "README.zh-CN.md", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"])
   copy(path.join(root, item), path.join(target, item));
-for (const item of ["start-product.mjs", "runtime-temp.mjs", "platform.cjs", "data-tools.mjs", "release-identity.mjs", "install-harnesses.mjs"])
+for (const item of ["start-product.mjs", "runtime-temp.mjs", "platform.cjs", "data-tools.mjs", "release-identity.mjs", "install-harnesses.mjs", "opencode-probe-sdk-install.mjs"])
   copy(path.join(root, "scripts", item), path.join(target, "scripts", item));
 copy(runtime.file, path.join(target, "runtime", platform.node));
+let supervisor;
+if (platform.platform === "darwin") {
+  const file = "runtime/owned-process-darwin";
+  const output = path.join(target, file);
+  const source = path.join(root, "apps/server/src/runtime/harness/owned-process-darwin.c");
+  const compile = spawnSync("/usr/bin/xcrun", ["--sdk", "macosx", "clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+    "-mmacosx-version-min=11.0", "-arch", platform.arch === "x64" ? "x86_64" : "arm64", source, "-o", output],
+    { cwd: root, encoding: "utf8", timeout: 60000 });
+  if (compile.error || compile.status !== 0) throw new Error("macOS process supervisor compilation failed: " + (compile.stderr || compile.error?.message));
+  chmodSync(output, 0o755);
+  supervisor = { file, sha256: digest(readFileSync(output)) };
+}
 const codexRoot = path.join(root, "node_modules/@openai", platform.codexPackage, "vendor", platform.triple);
 if (!existsSync(codexRoot)) throw new Error("The target Codex runtime is missing. Install dependencies on the target platform with optional dependencies enabled.");
 copy(codexRoot, path.join(target, "runtime/codex"));
@@ -34,7 +46,7 @@ copy(path.join(root, "teamswarm/licenses"), path.join(target, "licenses/frontend
 copy(path.join(root, "THIRD_PARTY_NOTICES.md"), path.join(target, "licenses/frontend.md"));
 copy(path.join(root, "teamswarm/public/fonts/LICENSE.txt"), path.join(target, "licenses/Inter-LICENSE.txt"));
 const lock = JSON.parse(readFileSync(path.join(root, "package-lock.json"), "utf8"));
-const dependencies = Object.fromEntries(["express", "jsonc-parser", "smol-toml", "yaml", "zod", "@earendil-works/pi-ai", "jose", "ajv", "chokidar", "http-proxy-3"].map(name => [name,
+const dependencies = Object.fromEntries(["express", "jsonc-parser", "smol-toml", "yaml", "zod", "@earendil-works/pi-ai", "jose", "ajv", "chokidar", "http-proxy-3", "@modelcontextprotocol/sdk"].map(name => [name,
   lock.packages["node_modules/" + name]?.version || lock.packages["apps/server/node_modules/" + name]?.version]));
 if (Object.values(dependencies).some(value => !value)) throw new Error("A service dependency is missing from the lockfile.");
 writeFileSync(path.join(target, "package.json"), JSON.stringify({ name: "teamswarm-service", version: identity.version,
@@ -52,6 +64,8 @@ if (JSON.parse(readFileSync(path.join(npmRoot, "package.json"), "utf8")).version
   throw new Error("Packaged npm differs from the pinned runtime.");
 copy(npmRoot, path.join(target, "runtime/node_modules/npm"));
 copy(path.join(root, "config/harnesses.json"), path.join(target, "config/harnesses.json"));
+for (const item of ["config/opencode-probe-sdk/package.json", "config/opencode-probe-sdk/package-lock.json"])
+  copy(path.join(root, item), path.join(target, item));
 if (platform.platform === "win32") {
   for (const command of ["npm", "npx"])
     writeFileSync(path.join(target, `runtime/${command}.cmd`), `@ECHO OFF\r\n"%~dp0node.exe" "%~dp0node_modules\\npm\\bin\\${command}-cli.js" %*\r\n`);
@@ -71,7 +85,7 @@ const codexVersion = JSON.parse(readFileSync(path.join(root, "node_modules/@open
 writeFileSync(path.join(target, "runtime-manifest.json"), JSON.stringify({ platform: platform.platform, arch: platform.arch,
   node: runtime.nodeVersion, nodeFile: `runtime/${platform.node}`, nodeSha256: digest(readFileSync(path.join(target, "runtime", platform.node))),
   codex: codexVersion, codexFile: `runtime/codex/bin/${platform.codex}`, codexSha256: digest(readFileSync(path.join(target, "runtime/codex/bin", platform.codex))),
-  npm: runtime.npmVersion, service: dependencies }, null, 2));
+  npm: runtime.npmVersion, service: dependencies, ...(supervisor ? { supervisor } : {}) }, null, 2));
 verifyBuild(root);
 writeFileSync(path.join(target, "build-identity.json"), JSON.stringify(identity, null, 2));
 writeFileSync(path.join(target, "package-inventory.json"), JSON.stringify(packageInventory(target, root), null, 2));

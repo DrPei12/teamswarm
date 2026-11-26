@@ -1,12 +1,13 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   lstat,
   readdir,
   readFile,
   realpath,
   mkdir,
-  copyFile,
+  open,
   rename,
   unlink,
   symlink,
@@ -15,6 +16,7 @@ import {
 import path from "node:path";
 import { watch, type FSWatcher } from "chokidar";
 import type { DevelopmentPreview } from "@team/contracts/services";
+import { windowsRenameBlocked, windowsRenameDelays } from "../prepared-directory.js";
 
 const generated = new Set([
   "node_modules",
@@ -80,9 +82,10 @@ export async function inspectDevelopmentProject(
   spec: DevelopmentPreview,
 ) {
   const files = await projectFiles(directory);
-  const pkg = JSON.parse(
-    await readFile(path.join(directory, "package.json"), "utf8"),
-  );
+  const manifest = await readFile(path.join(directory, "package.json"));
+  if (hash(manifest) !== files.get("package.json"))
+    throw new Error("Development startup configuration changed. Reopen the preview to load it.");
+  const pkg = JSON.parse(manifest.toString("utf8"));
   const script = pkg.scripts?.[spec.script];
   // A declared framework command is the launch surface. Shell chains and lifecycle
   // hooks would make ownership and argument forwarding ambiguous.
@@ -141,7 +144,7 @@ export class DevelopmentWorkingCopy {
   private source = "";
   private files = new Map<string, string>();
   private watcher?: FSWatcher;
-  private pending = new Set<string>();
+  private pending = new Map<string, boolean>();
   private timer?: NodeJS.Timeout;
   private queue: Promise<void> = Promise.resolve();
   private generation = 0;
@@ -154,13 +157,42 @@ export class DevelopmentWorkingCopy {
     private fatal: (error: Error) => void,
   ) {}
 
-  private async write(source: string, relative: string) {
+  private async write(source: string, relative: string, expectedCritical?: string) {
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(path.join(source, relative));
+    } catch (error) {
+      if (!critical.test(relative) && ["ENOENT", "EISDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
+      throw error;
+    }
+    const digest = hash(bytes);
+    if (critical.test(relative) && digest !== expectedCritical)
+      throw new Error("Development startup configuration changed. Reopen the preview to load it.");
     const destination = path.join(this.directory, relative);
+    const previous = await readFile(destination).catch(error => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    });
+    if (previous && hash(previous) === digest) return digest;
     await mkdir(path.dirname(destination), { recursive: true });
-    // Only the service's own copied files are replaced; source workspaces are read-only here.
-    const temporary = `${destination}.teamswarm-copy`;
-    await copyFile(path.join(source, relative), temporary);
-    await rename(temporary, destination);
+    const temporary = path.join(path.dirname(destination), ".teamswarm-preview-" + randomUUID());
+    const staged = await open(temporary, "wx");
+    try {
+      try { await staged.writeFile(bytes); }
+      finally { await staged.close(); }
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await rename(temporary, destination);
+          return digest;
+        } catch (error) {
+          if (!windowsRenameBlocked(error) || attempt >= windowsRenameDelays.length) throw error;
+          await delay(windowsRenameDelays[attempt]);
+        }
+      }
+    } catch (error) {
+      await unlink(temporary).catch(() => {});
+      throw error;
+    }
   }
 
   private async remove(relative: string) {
@@ -189,12 +221,32 @@ export class DevelopmentWorkingCopy {
     }
   }
 
-  private async synchronize(source: string, files: Map<string, string>) {
+  private async synchronize(source: string, files: Map<string, string>, inspected: Map<string, string>) {
+    for (const file of new Set([...inspected.keys(), ...files.keys()])) {
+      if (critical.test(file) && inspected.get(file) !== files.get(file))
+        throw new Error("Development startup configuration changed. Reopen the preview to load it.");
+    }
     for (const file of this.files.keys())
-      if (!files.has(file)) await this.remove(file);
-    for (const [file, digest] of files)
-      if (this.files.get(file) !== digest) await this.write(source, file);
-    this.files = files;
+      if (!files.has(file)) {
+        await this.remove(file);
+        this.files.delete(file);
+      }
+    for (const [file, digest] of files) {
+      const destination = path.join(this.directory, file);
+      if (this.files.get(file) === digest) {
+        const mirror = await readFile(destination).catch(error => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+          throw error;
+        });
+        if (mirror && hash(mirror) === digest) continue;
+      }
+      const observed = await this.write(source, file, inspected.get(file));
+      if (observed) this.files.set(file, observed);
+      else if (this.files.has(file)) {
+        await this.remove(file);
+        this.files.delete(file);
+      }
+    }
   }
 
   async switchTo(source: string) {
@@ -206,6 +258,7 @@ export class DevelopmentWorkingCopy {
     this.switching = true;
     this.generation++;
     clearTimeout(this.timer);
+    this.timer = undefined;
     this.pending.clear();
     await this.watcher?.close();
     await this.queue;
@@ -215,7 +268,7 @@ export class DevelopmentWorkingCopy {
         inspected.modules,
         path.join(this.directory, "node_modules"),
       );
-    await this.synchronize(source, inspected.files);
+    await this.synchronize(source, inspected.files, inspected.files);
     this.identity = inspected.identity;
     this.source = source;
     const generation = this.generation;
@@ -225,22 +278,25 @@ export class DevelopmentWorkingCopy {
       ignored: (file) => excludedSource(path.relative(source, file)),
       awaitWriteFinish: { stabilityThreshold: 150, pollInterval: 50 },
     });
-    this.watcher.on("error", (error) =>
-      this.fatal(error instanceof Error ? error : new Error(String(error))),
-    );
-    this.watcher.on("all", (_event, file) => {
+    const failure = (error: unknown) => {
+      if (!this.closed && generation === this.generation)
+        this.fatal(error instanceof Error ? error : new Error(String(error)));
+    };
+    this.watcher.on("error", failure);
+    const enqueue = (file: string, stable: boolean) => {
       if (this.closed || generation !== this.generation) return;
-      this.pending.add(path.relative(source, file).split(path.sep).join("/"));
-      if (this.switching) return;
-      clearTimeout(this.timer);
+      const relative = path.relative(source, file).split(path.sep).join("/");
+      if (!relative || relative === ".." || relative.startsWith("../") || path.isAbsolute(relative) || excludedSource(relative)) return;
+      this.pending.set(relative, this.pending.get(relative) === true || stable);
+      if (this.switching || this.timer) return;
       this.timer = setTimeout(() => {
+        this.timer = undefined;
         const changes = [...this.pending];
         this.pending.clear();
         this.queue = this.queue
           .then(async () => {
             if (this.closed || generation !== this.generation) return;
-            for (const relative of changes) {
-              if (!relative || excludedSource(relative)) continue;
+            for (const [relative, stable] of changes) {
               let stat;
               try {
                 stat = await lstat(path.join(source, relative));
@@ -248,7 +304,7 @@ export class DevelopmentWorkingCopy {
                 if ((error as NodeJS.ErrnoException).code !== "ENOENT")
                   throw error;
               }
-              if (critical.test(relative))
+              if (critical.test(relative) && !stat?.isFile())
                 throw new Error(
                   "Development startup configuration changed. Reopen the preview to load it.",
                 );
@@ -256,8 +312,15 @@ export class DevelopmentWorkingCopy {
                 throw new Error(
                   "Linked source cannot enter the preview working copy.",
                 );
-              if (stat?.isDirectory()) continue;
+              if (stat?.isDirectory()) {
+                if (this.files.has(relative)) {
+                  await this.remove(relative);
+                  this.files.delete(relative);
+                }
+                continue;
+              }
               if (stat?.isFile()) {
+                if (!stable) continue;
                 for (const file of [...this.files.keys()].filter(
                   (file) =>
                     file.startsWith(relative + "/") ||
@@ -266,29 +329,33 @@ export class DevelopmentWorkingCopy {
                   await this.remove(file);
                   this.files.delete(file);
                 }
-                await this.write(source, relative);
-                this.files.set(
-                  relative,
-                  hash(await readFile(path.join(source, relative))),
-                );
-              } else {
-                for (const file of [...this.files.keys()].filter(
-                  (file) =>
-                    file === relative || file.startsWith(relative + "/"),
-                )) {
-                  await this.remove(file);
-                  this.files.delete(file);
+                const digest = await this.write(source, relative, this.files.get(relative));
+                if (digest) {
+                  this.files.set(relative, digest);
+                  continue;
                 }
+              }
+              for (const file of [...this.files.keys()].filter(
+                (file) =>
+                  file === relative || file.startsWith(relative + "/"),
+              )) {
+                await this.remove(file);
+                this.files.delete(file);
               }
             }
           })
-          .catch((error) =>
-            this.fatal(
-              error instanceof Error ? error : new Error(String(error)),
-            ),
-          );
+          .catch(failure);
       }, 120);
-    });
+    };
+    this.watcher.on("all", (_event, file) => enqueue(file, true));
+    if (process.platform === "win32")
+      this.watcher.on("raw", (event, name, details) => {
+        const watchedPath = details && typeof details === "object" && "watchedPath" in details
+          ? details.watchedPath : undefined;
+        if (event === "rename" && typeof name === "string" &&
+            typeof watchedPath === "string" && path.resolve(watchedPath) === path.resolve(source))
+          enqueue(path.resolve(source, name), false);
+      });
     await new Promise<void>((resolve, reject) => {
       this.watcher!.once("ready", resolve);
       this.watcher!.once("error", reject);
@@ -296,7 +363,7 @@ export class DevelopmentWorkingCopy {
     // Reconcile edits made while the initial watcher was attaching.
     do {
       this.pending.clear();
-      await this.synchronize(source, await projectFiles(source));
+      await this.synchronize(source, await projectFiles(source), inspected.files);
     } while (this.pending.size && !this.closed);
     this.switching = false;
     return inspected;

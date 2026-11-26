@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { conflict } from "../errors.js";
 import type { RuntimeStore } from "./store.js";
 import type { ProjectHistory } from "./project-history.js";
+import { captureWorkerInterfaceConflict, hasCurrentInterfaceWait, type WorkerInterfaceInput } from "./worker-interface-conflicts.js";
 import type {
   Attempt,
   ArtifactVersion,
@@ -487,7 +488,9 @@ export class TeamCommunication {
       summary: string;
       waitForExchangeIds: string[];
       waitSeconds: number;
+      interfaceConflict?: WorkerInterfaceInput;
     },
+    sessionRotation?: NonNullable<NonNullable<Attempt["continuation"]>["sessionRotation"]>,
   ) {
     if (work.artifactIds.length)
       throw conflict(
@@ -534,6 +537,7 @@ export class TeamCommunication {
         attempt.inboxDelivered?.[id] ?? 0,
       );
     }
+    const witness = input.interfaceConflict && captureWorkerInterfaceConflict(this.store, work, attempt, input.interfaceConflict);
     attempt.continuation = {
       summary: input.summary,
       waitForExchangeIds: input.waitForExchangeIds,
@@ -543,6 +547,8 @@ export class TeamCommunication {
       attemptId: attempt.id,
       contextVersion:
         attempt.acknowledgedContextVersion ?? attempt.contextVersion!,
+      ...(witness ? { interfaceConflict: witness.report, interfaceWorkspace: witness.identity } : {}),
+      ...(sessionRotation ? { sessionRotation } : {}),
     };
     this.store.save("attempts", attempt);
     this.store.event(
@@ -554,20 +560,23 @@ export class TeamCommunication {
     );
     return {
       checkpointed: true,
-      instruction:
-        "End this native turn now. Responsibility remains assigned; a meaningful new reply resumes it at a new turn boundary. A deadline records overdue status without starting a model turn. Do not poll.",
+      ...(witness ? { conflictId: witness.report.id } : {}),
+      instruction: sessionRotation
+        ? "End this native turn now. The same work will resume in a fresh session using the saved handoff."
+        : witness
+        ? "End this native turn now. The work waits for a published interface decision."
+        : "End this native turn now. Responsibility remains assigned; a meaningful new reply resumes it at a new turn boundary. A deadline records overdue status without starting a model turn. Do not poll.",
     };
   }
   finishYield(work: Work, attempt: Attempt) {
     if (!attempt.continuation) return false;
-    work.continuation = attempt.continuation;
-    this.store.setStatus(work, "yielded");
-    work.attemptId = null;
-    this.store.setStatus(
-      work,
-      work.continuation.waitForExchangeIds.length ? "waiting" : "queued",
-    );
-    return true;
+    return this.store.transaction(() => {
+      work.continuation = attempt.continuation;
+      this.store.setStatus(work, "yielded");
+      work.attemptId = null;
+      this.store.setStatus(work, work.continuation!.interfaceConflict || work.continuation!.waitForExchangeIds.length ? "waiting" : "queued");
+      return true;
+    });
   }
   /** Recovery-safe queue maintenance. Never starts a second execution for a busy member. */
   schedule(teamId: string, ready: (work: Work) => boolean = () => true) {
@@ -578,7 +587,12 @@ export class TeamCommunication {
       )) {
         const run = this.store.get<Run>("runs", teamId, w.runId);
         if (run.state !== "active" || !w.continuation) continue;
-        const changed = w.continuation.waitForExchangeIds.some((id) => {
+        const report = w.continuation.interfaceConflict;
+        if (report && !hasCurrentInterfaceWait(this.store, w, report)) {
+          this.store.setStatus(w, "failed", "The interface report's predecessor or workflow changed. Replan with the current inputs.");
+          continue;
+        }
+        const changed = !w.continuation.interfaceConflict && w.continuation.waitForExchangeIds.some((id) => {
           const e = this.participant(w, id);
           return (
             closed(e) ||
@@ -593,7 +607,7 @@ export class TeamCommunication {
         const expired = Date.parse(w.continuation.deadline) <= Date.now();
         if (
           changed ||
-          this.inbox(w).some((i) =>
+          !w.continuation.interfaceConflict && this.inbox(w).some((i) =>
             i.unread.some(
               (m) =>
                 m.sequence >
@@ -605,7 +619,7 @@ export class TeamCommunication {
         } else if (expired && !w.continuation.timeoutReportedAt) {
           w.continuation.timeoutReportedAt = now();
           this.store.save("works", w);
-          this.store.event(teamId, "exchange.wait_expired", {
+          this.store.event(teamId, w.continuation.interfaceConflict ? "work.contract_wait_expired" : "exchange.wait_expired", {
             exchangeIds: w.continuation.waitForExchangeIds,
             action: "waiting_for_new_evidence",
           }, w);

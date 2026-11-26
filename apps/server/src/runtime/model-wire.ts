@@ -10,6 +10,102 @@ import type {
 import type { ConnectionProtocol } from "@team/contracts/allocation";
 
 type Obj = Record<string, any>;
+export type ToolNamespaces = Map<string, { name: string; namespace: string }>;
+
+/** Preserve Responses namespace identity through protocols with one flat tool-name field. */
+export function flattenToolNamespaces(body: Obj): {
+  body: Obj;
+  namespaces: ToolNamespaces;
+} {
+  const namespaces: ToolNamespaces = new Map();
+  const bareNames = new Set<string>();
+  const alias = (namespace: unknown, name: unknown) => {
+    if (typeof name !== "string" || !name)
+      throw new Error("A tool name is required.");
+    if (namespace == null) {
+      bareNames.add(name);
+      return name;
+    }
+    if (typeof namespace !== "string" || !namespace)
+      throw new Error("A tool namespace is required.");
+    const readable = `${namespace.slice(0, 12)}_${name.slice(0, 26)}`.replace(
+      /[^a-zA-Z0-9_-]/g,
+      "_",
+    );
+    const id = `tsn_${readable}_${createHash("sha256")
+      .update(JSON.stringify([namespace, name]))
+      .digest("hex")
+      .slice(0, 16)}`;
+    const previous = namespaces.get(id);
+    if (
+      previous &&
+      (previous.namespace !== namespace || previous.name !== name)
+    )
+      throw new Error("Ambiguous tool namespace.");
+    namespaces.set(id, { namespace, name });
+    return id;
+  };
+  const flatten = (tools: Obj[]) =>
+    tools.flatMap((tool) => {
+      if (tool.type !== "namespace") {
+        const definition = tool.function ?? tool;
+        if (definition.name) bareNames.add(definition.name);
+        return [tool];
+      }
+      if (!Array.isArray(tool.tools) || !tool.tools.length)
+        throw new Error("A namespace must contain tools.");
+      return tool.tools.map((nested: Obj) => {
+        if (!["function", "custom"].includes(nested.type))
+          throw new Error("A namespace supports function and custom tools.");
+        return {
+          ...nested,
+          name: alias(tool.name, nested.name),
+          description: [
+            `${tool.name}.${nested.name}`,
+            tool.description,
+            nested.description,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        };
+      });
+    });
+  const tools = flatten(body.tools ?? []);
+  const input = Array.isArray(body.input)
+    ? body.input.flatMap((item: Obj) => {
+        if (item.type === "additional_tools") {
+          tools.push(...flatten(item.tools ?? []));
+          return [];
+        }
+        if (
+          ["function_call", "custom_tool_call"].includes(item.type) &&
+          item.namespace
+        )
+          return [
+            {
+              ...item,
+              name: alias(item.namespace, item.name),
+              namespace: undefined,
+            },
+          ];
+        return [item];
+      })
+    : body.input;
+  let choice = body.tool_choice;
+  if (choice && typeof choice === "object" && choice.namespace)
+    choice = {
+      ...choice,
+      name: alias(choice.namespace, choice.name),
+      namespace: undefined,
+    };
+  for (const name of namespaces.keys())
+    if (bareNames.has(name))
+      throw new Error("A tool name conflicts with a namespace alias.");
+  return {
+    body: { ...body, tools, input, ...(choice ? { tool_choice: choice } : {}) },
+    namespaces,
+  };
+}
 /** The public ChatGPT plan route accepts stateless streaming Responses requests. */
 export function chatGPTPayload(payload: Obj): Obj {
   payload.store = false;
@@ -47,8 +143,11 @@ export function chatGPTPayload(payload: Obj): Obj {
   // schemas use omitted properties for optional arguments, not required nulls.
   const tools = (payload.tools ?? [])
     .filter((tool: Obj) => ["function", "custom"].includes(tool.type))
-    .map((tool: Obj) => tool.type === "function"
-      ? { ...tool, strict: tool.strict ?? false } : tool);
+    .map((tool: Obj) =>
+      tool.type === "function"
+        ? { ...tool, strict: tool.strict ?? false }
+        : tool,
+    );
   if (tools.length) {
     payload.input.unshift({
       type: "additional_tools",
@@ -70,10 +169,12 @@ export function requestOptions(
   payload: Obj,
 ) {
   if (source === "responses" && body.tools) {
-    const declarations = new Map(body.tools.map((tool: Obj) => {
-      const definition = tool.function ?? tool;
-      return [definition.name, definition];
-    }));
+    const declarations = new Map(
+      body.tools.map((tool: Obj) => {
+        const definition = tool.function ?? tool;
+        return [definition.name, definition];
+      }),
+    );
     for (const tool of payload.tools ?? []) {
       const definition = declarations.get(tool.name) as Obj | undefined;
       if (tool.type === "function" && definition)
@@ -278,6 +379,22 @@ export function decodeRequest(
             },
           ]),
         );
+      else if (m.type === "agent_message")
+        messages.push({
+          role: "user",
+          timestamp: Date.now(),
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                type: "agent_message",
+                author: m.author,
+                recipient: m.recipient,
+                content: m.content,
+              }),
+            },
+          ],
+        });
       else if (["system", "developer"].includes(m.role))
         system +=
           "\n" +
@@ -412,6 +529,7 @@ const responseBlock = (
   i: number,
   id: string,
   custom = new Set<string>(),
+  namespaces: ToolNamespaces = new Map(),
 ): Obj =>
   c.type === "toolCall"
     ? custom.has(c.name)
@@ -419,7 +537,10 @@ const responseBlock = (
           type: "custom_tool_call",
           id: "ctc_" + id + i,
           call_id: callId(c.id),
-          name: c.name,
+          name: namespaces.get(c.name)?.name ?? c.name,
+          ...(namespaces.has(c.name)
+            ? { namespace: namespaces.get(c.name)!.namespace }
+            : {}),
           input: String(c.arguments.input ?? ""),
           status: "completed",
         }
@@ -427,7 +548,10 @@ const responseBlock = (
           type: "function_call",
           id: "fc_" + id + i,
           call_id: callId(c.id),
-          name: c.name,
+          name: namespaces.get(c.name)?.name ?? c.name,
+          ...(namespaces.has(c.name)
+            ? { namespace: namespaces.get(c.name)!.namespace }
+            : {}),
           arguments: JSON.stringify(c.arguments),
           status: "completed",
         }
@@ -456,6 +580,7 @@ export function encodeResponse(
   m: AssistantMessage,
   id = randomUUID().replaceAll("-", ""),
   custom = new Set<string>(),
+  namespaces: ToolNamespaces = new Map(),
 ): Obj {
   if (wire === "anthropic-messages")
     return {
@@ -480,7 +605,9 @@ export function encodeResponse(
       created_at: Math.floor(Date.now() / 1000),
       model: m.model,
       status: m.stopReason === "length" ? "incomplete" : "completed",
-      output: m.content.map((c, i) => responseBlock(c, i, id, custom)),
+      output: m.content.map((c, i) =>
+        responseBlock(c, i, id, custom, namespaces),
+      ),
       usage: { ...usage(m), total_tokens: m.usage.totalTokens },
       ...(m.stopReason === "length"
         ? { incomplete_details: { reason: "max_output_tokens" } }
@@ -544,6 +671,7 @@ export class WireStream {
     readonly wire: ConnectionProtocol,
     readonly send: (data: string) => void,
     readonly custom = new Set<string>(),
+    readonly namespaces: ToolNamespaces = new Map(),
   ) {}
   private event(type: string, data: Obj) {
     this.send(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
@@ -634,7 +762,7 @@ export class WireStream {
       const emit = (type: string, data: Obj) =>
         this.event(type, { sequence_number: this.sequence++, ...data });
       const item = m.content[i]
-        ? responseBlock(m.content[i], i, this.id, this.custom)
+        ? responseBlock(m.content[i], i, this.id, this.custom, this.namespaces)
         : null;
       if (e.type === "start")
         emit("response.created", {
@@ -722,7 +850,15 @@ export class WireStream {
           m.stopReason === "length"
             ? "response.incomplete"
             : "response.completed",
-          { response: encodeResponse(this.wire, m, this.id, this.custom) },
+          {
+            response: encodeResponse(
+              this.wire,
+              m,
+              this.id,
+              this.custom,
+              this.namespaces,
+            ),
+          },
         );
     }
   }

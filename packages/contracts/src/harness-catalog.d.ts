@@ -1,4 +1,5 @@
 import type { ConnectionProtocol } from './allocation.js';
+import type { ExecutionConfig } from './runtime.js';
 export interface HarnessManifest {
   schemaVersion: 1;
   id: string;
@@ -32,6 +33,7 @@ export interface HarnessManifest {
 }
 export function harnessManifest(id: string): HarnessManifest | undefined;
 export function harnessManifests(): HarnessManifest[];
+export function supportsNativeReadProbes(config: ExecutionConfig): boolean;
 /** Input is validated by the server package loader before registration. */
 export function registerHarnessManifest(manifest: HarnessManifest): () => void;
 /** Browser catalog snapshot from the authenticated service. */

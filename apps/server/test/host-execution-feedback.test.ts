@@ -97,6 +97,7 @@ test("Host partial output and activity survive timeout, interruption, reload and
     f.store.event(f.team.id, "transcript.item", { id: "public", kind: "message", text: "Public progress before failure", phase: "commentary", status: "completed" }, work, attempt.id);
     f.store.event(f.team.id, "transcript.item", { id: "command", kind: "command", text: "fixture-command", title: "fixture-command", status: "completed", exitCode: 0 }, work, attempt.id);
     f.store.setStatus(work, "stopping", "Execution reached its configured time limit.");
+    f.store.finishAttempt(f.team.id, attempt.id, { status: "interrupted" }, "native");
     f.store.setStatus(work, "interrupted", "OS confirmed termination of the native process tree.");
     let receipt = f.messages().find(m => m.execution?.attemptId === attempt.id);
     assert(receipt, "Interruption must not remove the Host turn");
@@ -123,6 +124,7 @@ test("Host partial output and activity survive timeout, interruption, reload and
     assert.equal(pending.activity?.length ?? 0, 0);
     const run = f.store.get<any>("runs", f.team.id, retried.runId);
     retried.result = "Final successful response";
+    f.store.finishAttempt(f.team.id, next.id, { status: "completed" }, "native");
     f.store.setStatus(retried, "submitted");
     f.store.appendAssistant(run, retried.result, next.id);
     assert.equal(f.messages().filter(m => m.execution?.attemptId === next.id).length, 1);

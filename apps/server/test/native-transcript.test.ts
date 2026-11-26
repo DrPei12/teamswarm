@@ -9,7 +9,7 @@ test("OpenCode exposes public tool lifecycle and retains pre-tool commentary wit
   emit({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "PRIVATE_REASONING" } });
   emit({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "I am inspecting the file." } });
   emit({ sessionUpdate: "tool_call", toolCallId: "read", title: "read_file", kind: "read", status: "pending", rawInput: { path: "sample.txt" } });
-  emit({ sessionUpdate: "tool_call_update", toolCallId: "read", status: "completed", rawOutput: "File content" });
+  emit({ sessionUpdate: "tool_call_update", toolCallId: "read", status: "completed", content: [{ type: "content", content: { type: "text", text: "File content" } }] });
   emit({ sessionUpdate: "tool_call", toolCallId: "cmd", title: "bash", kind: "execute", status: "pending", rawInput: { command: "fixture-command" } });
   emit({ sessionUpdate: "tool_call_update", toolCallId: "cmd", status: "completed", rawOutput: { exitCode: 0 } });
   emit({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Final public answer." } });

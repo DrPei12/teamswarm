@@ -38,11 +38,15 @@ import {
   Users,
   ChevronDown,
   Trash2,
+  Archive,
 } from "lucide-react";
 import type {
   ProjectNode,
   ProjectDocument,
   ProjectInsight,
+  Requirement,
+  SemanticConflictView,
+  WorkflowView,
   Work,
 } from "@team/contracts/runtime";
 import type { InsightSource } from "@team/contracts/product";
@@ -53,6 +57,8 @@ import { api, product } from "./service";
 import { MessageContent } from "./MessageContent";
 import { SegmentedControl } from "./design-system/SegmentedControl";
 import { InsightStatus } from "./InsightStatus";
+import { HistoryMemory } from "./HistoryMemory";
+import { CandidateReview } from "./CandidateReview";
 
 type Props = {
   workspace: Workspace;
@@ -66,6 +72,12 @@ type Props = {
     messageId: string,
     workId?: string,
   ) => void;
+};
+type OutcomeSelection = {
+  open?: boolean;
+  outcomeId?: string;
+  runId?: string;
+  workflowRevision?: number;
 };
 function AdoptionDocument({
   before,
@@ -406,6 +418,11 @@ function HistoryContent({
     undefined,
   );
   const [deleting, setDeleting] = useState<ProjectNode | null>(null);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [outcomeSelections, setOutcomeSelections] = useState<
+    Record<string, OutcomeSelection>
+  >({});
+  const memoryToggle = useRef<HTMLButtonElement>(null);
   // Retain the target while the dialog finishes its exit animation.
   const [deleteOpen, setDeleteOpen] = useState(false);
   const records =
@@ -928,6 +945,20 @@ function HistoryContent({
           >
             <Search size={18} />
           </IconButton>
+          {branch && (
+            <IconButton
+              ref={memoryToggle}
+              label={t("Project memory")}
+              onClick={() => {
+                setSelected(null);
+                setForkId(null);
+                setCarry(null);
+                setMemoryOpen((open) => !open);
+              }}
+            >
+              <Archive size={18} />
+            </IconButton>
+          )}
         </div>
         {search && (
           <div className="history-search">
@@ -983,6 +1014,16 @@ function HistoryContent({
           </div>
         )}
       </div>
+      {memoryOpen && branch && !displayed && !carryDoc && (
+        <HistoryMemory
+          key={branch.id}
+          teamId={team.id}
+          branchId={branch.id}
+          branchName={branch.name}
+          onClose={() => setMemoryOpen(false)}
+          fallbackFocus={() => memoryToggle.current}
+        />
+      )}
       {(displayed || carryDoc) && (
         <DetailPanel
           label={t(
@@ -1035,6 +1076,33 @@ function HistoryContent({
                   <time>
                     {new Date(displayed.createdAt).toLocaleString(locale)}
                   </time>
+                  {!fork &&
+                    branches.some(
+                      (branch) =>
+                        branch.id === displayed.branchId && !!branch.headNodeId,
+                    ) && (
+                      <HistoryOutcome
+                        key={displayed.branchId}
+                        teamId={team.id}
+                        branchId={displayed.branchId}
+                        runtimeCursor={
+                          workspace.executions?.[team.id]?.latestEvent
+                        }
+                        onNavigate={onNavigate}
+                        onNavigateMember={onNavigateMember}
+                        onNavigateNode={setSelected}
+                        selection={outcomeSelections[displayed.branchId] ?? {}}
+                        updateSelection={(delta) =>
+                          setOutcomeSelections((current) => ({
+                            ...current,
+                            [displayed.branchId]: {
+                              ...current[displayed.branchId],
+                              ...delta,
+                            },
+                          }))
+                        }
+                      />
+                    )}
                   {fork ? (
                     <>
                       <label className="history-label">
@@ -1261,6 +1329,42 @@ function HistoryContent({
                       ) : (
                         <div className="history-overview">
                           <p>{describe(displayed)}</p>
+                          {displayed.artifactIds.length > 0 &&
+                            (displayed.kind === "acceptance" ||
+                              (displayed.kind === "work-result" &&
+                                [
+                                  "submitted",
+                                  "accepted",
+                                  "rejected",
+                                  "superseded",
+                                ].includes(displayed.source.reason ?? ""))) &&
+                            works.some(
+                              (work) =>
+                                work.id === displayed.source.workId &&
+                                !work.reviewOf &&
+                                !work.interaction &&
+                                work.kind !== "collaboration" &&
+                                memberFor(work)?.id !== `host:${team.id}`,
+                            ) && (
+                              <CandidateReview
+                                key={displayed.id}
+                                teamId={team.id}
+                                branchId={displayed.branchId}
+                                workId={displayed.source.workId!}
+                                nodeId={displayed.id}
+                                cursor={
+                                  workspace.executions?.[team.id]
+                                    ?.latestEvent ?? 0
+                                }
+                                onWork={(target, anchor) =>
+                                  onNavigateMember(
+                                    target.memberId,
+                                    anchor ?? `assignment:${target.workId}`,
+                                    target.workId,
+                                  )
+                                }
+                              />
+                            )}
                           {displayed.source.adoption && (
                             <section className="history-adoption">
                               <h4>{t("Adopted ideas")}</h4>
@@ -1477,6 +1581,459 @@ function HistoryContent({
   );
 }
 
+function HistoryOutcome({
+  teamId,
+  branchId,
+  onNavigate,
+  onNavigateMember,
+  onNavigateNode,
+  runtimeCursor,
+  selection,
+  updateSelection,
+}: Pick<Props, "onNavigate" | "onNavigateMember"> & {
+  teamId: string;
+  branchId: string;
+  onNavigateNode: (nodeId: string) => void;
+  runtimeCursor?: number;
+  selection: OutcomeSelection;
+  updateSelection: (delta: Partial<OutcomeSelection>) => void;
+}) {
+  const { t } = useI18n();
+  const [requirement, setRequirement] = useState<
+    | (Requirement & {
+        workflows: (WorkflowView & { runState: string })[];
+      })
+    | null
+  >(null);
+  const revisionId = selection.outcomeId;
+  const [branchConflicts, setBranchConflicts] = useState<
+    SemanticConflictView[]
+  >([]);
+  const [versionError, setVersionError] = useState("");
+  const [conflictError, setConflictError] = useState("");
+  const [loadingVersion, setLoadingVersion] = useState(false);
+  const route = `/teams/${teamId}/branches/${branchId}`;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const query = revisionId
+      ? "?requirementId=" + encodeURIComponent(revisionId)
+      : "";
+    setLoadingVersion(true);
+    setVersionError("");
+    void api<typeof requirement>(
+      route + "/outcome" + query,
+      undefined,
+      "GET",
+      controller.signal,
+    )
+      .then((value) => {
+        if (!controller.signal.aborted) setRequirement(value);
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) setVersionError(err.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingVersion(false);
+      });
+    return () => controller.abort();
+  }, [route, revisionId, runtimeCursor]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void api<SemanticConflictView[]>(
+      route + "/semantic-conflicts",
+      undefined,
+      "GET",
+      controller.signal,
+    ).then(
+      (issues) => {
+        if (controller.signal.aborted) return;
+        setBranchConflicts(issues);
+        setConflictError("");
+      },
+      (err) => {
+        if (!controller.signal.aborted) setConflictError(err.message);
+      },
+    );
+    return () => controller.abort();
+  }, [route, runtimeCursor]);
+
+  const conflictSection = (
+    <>
+      <HistoryConflicts
+        issues={branchConflicts}
+        onNavigateMember={onNavigateMember}
+        onNavigateNode={onNavigateNode}
+      />
+      {conflictError && <p role="alert">{t(conflictError)}</p>}
+    </>
+  );
+
+  if (!requirement?.outcome)
+    return (
+      <>
+        {versionError && <p role="alert">{t(versionError)}</p>}
+        {conflictSection}
+      </>
+    );
+  const { specification, revision, parentRequirementId } = requirement.outcome;
+  return (
+    <>
+      <details
+        className="history-document"
+        open={selection.open ?? false}
+        onToggle={(event) => {
+          if (event.currentTarget.open !== (selection.open ?? false))
+            updateSelection({ open: event.currentTarget.open });
+        }}
+      >
+        <summary>
+          {t("Result contract")} · {t("Outcome revision")} {revision}
+        </summary>
+        <MessageContent text={specification.valueGoal} />
+        {specification.invariants.length > 0 && (
+          <>
+            <h4>{t("Behavioral invariants")}</h4>
+            <ul>
+              {specification.invariants.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </>
+        )}
+        <h4>{t("Acceptance criteria")}</h4>
+        <ul>
+          {specification.criteria.map((criterion) => (
+            <li key={criterion.key}>{criterion.text}</li>
+          ))}
+        </ul>
+        {specification.nonGoals.length > 0 && (
+          <>
+            <h4>{t("Out of scope")}</h4>
+            <ul>
+              {specification.nonGoals.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </>
+        )}
+        {requirement.workflows.length > 0 && (
+          <HistoryWorkflow
+            key={requirement.id}
+            teamId={teamId}
+            runs={requirement.workflows}
+            onNavigateMember={onNavigateMember}
+            selection={selection}
+            updateSelection={updateSelection}
+          />
+        )}
+        {versionError && <p role="alert">{t(versionError)}</p>}
+        <button
+          className="text-button"
+          onClick={() =>
+            onNavigate(requirement.conversationId, requirement.sourceMessageId)
+          }
+        >
+          {t("Go to source message")}
+        </button>
+        {parentRequirementId && (
+          <button
+            className="text-button"
+            disabled={loadingVersion}
+            onClick={() =>
+              updateSelection({
+                outcomeId: parentRequirementId,
+                runId: undefined,
+                workflowRevision: undefined,
+              })
+            }
+          >
+            {t("Previous outcome revision")}
+          </button>
+        )}
+        {revisionId && (
+          <button
+            className="text-button"
+            disabled={loadingVersion}
+            onClick={() =>
+              updateSelection({
+                outcomeId: undefined,
+                runId: undefined,
+                workflowRevision: undefined,
+              })
+            }
+          >
+            {t("Current outcome revision")}
+          </button>
+        )}
+      </details>
+      {conflictSection}
+    </>
+  );
+}
+
+function HistoryConflicts({
+  issues,
+  onNavigateMember,
+  onNavigateNode,
+}: Pick<Props, "onNavigateMember"> & {
+  issues: SemanticConflictView[];
+  onNavigateNode: (nodeId: string) => void;
+}) {
+  const { t } = useI18n();
+  if (!issues.length) return null;
+  return (
+    <section
+      aria-label={t("Integration conflicts")}
+      className="history-conflicts"
+    >
+      <h4>{t("Integration conflicts")}</h4>
+      {issues.map((issue) => {
+        const evidence =
+          issue.source === "review"
+            ? {
+                memberId: issue.reviewerMemberId,
+                attemptId: issue.reviewerAttemptId,
+                workId: issue.reviewerWorkId,
+              }
+            : {
+                memberId: issue.reporterMemberId,
+                attemptId: issue.reporterAttemptId,
+                workId: issue.reporterWorkId,
+              };
+        const repair = issue.repair;
+        return (
+          <div key={issue.id} className="history-conflict">
+            <strong>{issue.contractKey}</strong>
+            <small>
+              {t(
+                repair
+                  ? issue.source === "review"
+                    ? "Repair accepted and published"
+                    : "Repair published"
+                  : issue.state === "resolved"
+                    ? "Contract decision published"
+                    : issue.state === "historical"
+                      ? "Historical conflict"
+                      : "Awaiting contract decision",
+              )}
+            </small>
+            <dl>
+              <dt>{t("Expected interface")}</dt>
+              <dd>{issue.expected}</dd>
+              <dt>{t("Observed behavior")}</dt>
+              <dd>{issue.observed}</dd>
+            </dl>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() =>
+                onNavigateMember(
+                  evidence.memberId,
+                  "attempt:" + evidence.attemptId,
+                  evidence.workId,
+                )
+              }
+            >
+              {t(
+                issue.source === "review"
+                  ? "Inspect review evidence"
+                  : "Inspect worker report",
+              )}
+            </button>
+            {issue.resolution && (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => onNavigateNode(issue.resolution!.nodeId)}
+              >
+                {t("Inspect contract decision")}
+              </button>
+            )}
+            {repair && (
+              <button
+                type="button"
+                className="text-button"
+                onClick={() =>
+                  onNavigateMember(
+                    repair.memberId,
+                    "attempt:" + repair.attemptId,
+                    repair.workId,
+                  )
+                }
+              >
+                {t("Inspect published repair")}
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+function HistoryWorkflow({
+  teamId,
+  runs,
+  onNavigateMember,
+  selection,
+  updateSelection,
+}: Pick<Props, "onNavigateMember"> & {
+  teamId: string;
+  runs: (WorkflowView & { runState: string })[];
+  selection: OutcomeSelection;
+  updateSelection: (delta: Partial<OutcomeSelection>) => void;
+}) {
+  const { t, locale } = useI18n();
+  const { runId, workflowRevision: requestedRevision } = selection;
+  const [history, setHistory] = useState<WorkflowView>();
+  const [error, setError] = useState("");
+  const run =
+    runs.find((candidate) => candidate.runId === runId) ??
+    runs.find((candidate) => candidate.runState === "active") ??
+    runs[0];
+  const plan =
+    requestedRevision === undefined
+      ? run
+      : history?.runId === run.runId && history.revision === requestedRevision
+        ? history
+        : undefined;
+  useEffect(() => {
+    if (requestedRevision === undefined) return;
+    const controller = new AbortController();
+    void api<WorkflowView>(
+      `/teams/${teamId}/runs/${run.runId}/workflow?revision=${requestedRevision}`,
+      undefined,
+      "GET",
+      controller.signal,
+    )
+      .then((value) => {
+        if (!controller.signal.aborted) setHistory(value);
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) setError(err.message);
+      });
+    return () => controller.abort();
+  }, [run.runId, teamId, requestedRevision]);
+
+  return (
+    <section aria-label={t("Execution workflow")} className="history-workflow">
+      <h4>{t("Execution workflow")}</h4>
+      {runs.length > 1 && (
+        <label>
+          {t("Workflow run")}
+          <select
+            value={run.runId}
+            onChange={(event) => {
+              updateSelection({
+                runId: event.target.value,
+                workflowRevision: undefined,
+              });
+              setError("");
+            }}
+          >
+            {runs.map((candidate) => (
+              <option key={candidate.runId} value={candidate.runId}>
+                {new Date(candidate.createdAt).toLocaleString(locale)} ·{" "}
+                {candidate.nodes[0]?.title ?? t("Execution workflow")}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <p>
+        {t("Workflow revision")} {plan?.revision ?? requestedRevision}
+      </p>
+      {error && <p role="alert">{t(error)}</p>}
+      {plan && (
+        <ul>
+          {plan.nodes.map((node) => (
+            <li key={node.key}>
+              {node.workId && node.memberId ? (
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={() =>
+                    onNavigateMember(
+                      node.memberId!,
+                      "assignment:" + node.workId!,
+                      node.workId!,
+                    )
+                  }
+                >
+                  {node.title}
+                </button>
+              ) : (
+                <span>{node.title}</span>
+              )}
+              {!node.workId && node.assigneeName && (
+                <small>
+                  {t("Planned member: {name}", { name: node.assigneeName })}
+                </small>
+              )}
+              <small>
+                {t(
+                  node.verified
+                    ? "Workflow verified"
+                    : node.ready
+                      ? "Ready to assign"
+                      : node.workStatus === "accepted" ||
+                          node.workStatus === "self_checked"
+                        ? "Workflow verification required"
+                        : node.workStatus
+                          ? historyWorkStatus(node.workStatus)
+                          : "Awaiting predecessors",
+                )}
+              </small>
+              {node.dependsOn.length > 0 && (
+                <small>
+                  {t("Depends on")}{" "}
+                  {node.dependsOn
+                    .map(
+                      (key) =>
+                        plan.nodes.find(
+                          (predecessor) => predecessor.key === key,
+                        )?.title ?? key,
+                    )
+                    .join(", ")}
+                </small>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {plan?.parentRevision && (
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => {
+            setError("");
+            updateSelection({
+              runId: run.runId,
+              workflowRevision: plan.parentRevision ?? undefined,
+            });
+          }}
+        >
+          {t("Previous workflow revision")}
+        </button>
+      )}
+      {requestedRevision !== undefined && (
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => {
+            setError("");
+            updateSelection({ workflowRevision: undefined });
+          }}
+        >
+          {t("Current workflow revision")}
+        </button>
+      )}
+    </section>
+  );
+}
+
 function HistoryInsight({
   teamId,
   insightId,
@@ -1513,7 +2070,7 @@ function HistoryInsight({
   if (!note) return <p role="status">{t("Loading…")}</p>;
   return (
     <section className="history-insight">
-      <InsightStatus status={note.status} />
+      <InsightStatus insight={note} />
       <MessageContent text={note.content} />
       <p className="muted">{note.reason}</p>
       <h3>{t("Original discussion")}</h3>

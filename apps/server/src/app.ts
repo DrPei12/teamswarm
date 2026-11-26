@@ -27,6 +27,7 @@ export interface CreateAppOptions {
   webDistDir?: string;
   apiPort?: number;
   harnesses?: Harness[];
+  enableNativeHost?: boolean;
   resourceSampling?: ResourceSampling;
 }
 
@@ -191,7 +192,7 @@ export function createApp(options: CreateAppOptions = {}): TeamService {
   const apiPort = options.apiPort ?? DEFAULT_API_PORT;
   const store = new TeamStore({ dataDir: options.dataDir ?? defaultDataDir() });
   let runtime: TeamRuntime;
-  try { runtime = new TeamRuntime(store, options.harnesses, options.resourceSampling, options.manualResourceConfiguration === true); } catch (error) { store.close(); throw error; }
+  try { runtime = new TeamRuntime(store, options.harnesses, options.resourceSampling, options.manualResourceConfiguration === true, options.enableNativeHost === true); } catch (error) { store.close(); throw error; }
   const app = express();
   const webDistDir = path.resolve(options.webDistDir ?? defaultWebDistDir());
 

@@ -163,9 +163,11 @@ export function ApprovalRequests({
   const { t } = useI18n();
   const [requests, setRequests] = useState<ExecutionApproval[]>([]);
   const [error, setError] = useState("");
+  const [answerError, setAnswerError] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [revision, reload] = useState(0);
   const cursor = workspace.executions?.[teamId]?.latestEvent;
+  useEffect(() => setAnswerError(""), [teamId, memberId]);
   useEffect(() => {
     let active = true;
     const draftRevision = questionDraftRevision();
@@ -192,7 +194,7 @@ export function ApprovalRequests({
   }, [teamId, memberId, cursor, revision]);
   const send = async (request: ExecutionApproval, answer: Answer) => {
     setBusy(request.id);
-    setError("");
+    setAnswerError("");
     try {
       await api(
         `/teams/${encodeURIComponent(teamId)}/approvals/${encodeURIComponent(request.id)}`,
@@ -202,12 +204,12 @@ export function ApprovalRequests({
       discardQuestionDraft(request.id);
       await product.refresh();
     } catch (e) {
-      setError((e as Error).message);
+      setAnswerError((e as Error).message);
     } finally {
       setBusy(null);
     }
   };
-  if (!requests.length && !error) return null;
+  if (!requests.length && !error && !answerError) return null;
   return (
     <div
       className="approval-requests"
@@ -248,6 +250,8 @@ export function ApprovalRequests({
                     Write: "Edit file",
                     Edit: "Edit file",
                     team_write_file: "Edit file",
+                    team_host_inline_edit: "Approve project text edits",
+                    team_memory_change: "Approve project memory change",
                     team_edit_file: "Edit file",
                     team_set_member_permissions: "Change member permissions",
                   } as Record<string, string>
@@ -293,6 +297,11 @@ export function ApprovalRequests({
             </div>
           </section>
         ),
+      )}
+      {answerError && (
+        <p role="alert" className="form-error">
+          {t(answerError)}
+        </p>
       )}
       {error && (
         <p role="alert" className="form-error">

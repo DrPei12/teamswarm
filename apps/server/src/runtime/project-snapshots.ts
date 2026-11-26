@@ -17,6 +17,8 @@ import path from "node:path";
 import { commitPreparedDirectory } from "./prepared-directory.js";
 import { spawnSync } from "node:child_process";
 import { conflict } from "../errors.js";
+import type { ArtifactVersion, ProjectNode } from "./types.js";
+import { sameWorkspace, WorkspaceAccess, workspaceIdentity } from "./workspace-access.js";
 
 const digest = (value: Buffer | string) =>
   createHash("sha256").update(value).digest("hex");
@@ -42,6 +44,7 @@ type Manifest = {
   files: { path: string; hash: string; bytes: number; mode: number }[];
   excludedPaths: string[];
 };
+export type CapturedWorkspace = { id: string; source: NonNullable<ProjectNode["workspaceSnapshotSource"]> };
 
 /** Content-addressed local checkpoints. Never reset or overwrite the source workspace. */
 export class ProjectSnapshots {
@@ -81,9 +84,10 @@ export class ProjectSnapshots {
     this.persist(this.objectPath(hash), bytes);
     return hash;
   }
-  capture(workspace: string): string {
-    const root = realpathSync(workspace);
-    const collect = (): Manifest => {
+  inspectWorkspace(workspace: string, preserveFiles = false) {
+    const identity = workspaceIdentity(workspace);
+    const root = identity.path;
+    const collect = (preserve: boolean) => {
       const manifest: Manifest = { files: [], excludedPaths: [] };
       // Git's own inventory preserves tracked files even when an ignore rule
       // matches them, and respects nested ignore rules for untracked build data.
@@ -185,8 +189,7 @@ export class ProjectSnapshots {
               "Workspace changed while capturing its checkpoint.",
             );
           const hash = digest(bytes);
-          const target = this.objectPath(hash);
-          this.persist(target, bytes);
+          if (preserve) this.persist(this.objectPath(hash), bytes);
           manifest.files.push({
             path: relative,
             hash,
@@ -197,20 +200,27 @@ export class ProjectSnapshots {
         }
       };
       walk(root);
-      return manifest;
+      return { manifest, inventory: included ? "git" as const : "filesystem" as const };
     };
-    const manifest = collect();
-    const raw = JSON.stringify(manifest);
+    const result = collect(preserveFiles);
     // Recheck inventory as well as bytes; callers hold off all managed writable attempts.
-    if (JSON.stringify(collect()) !== raw)
+    if (JSON.stringify(collect(false)) !== JSON.stringify(result) || !sameWorkspace(identity, workspaceIdentity(workspace)))
       throw conflict(
         "workspace_changed",
         "Workspace changed while capturing its checkpoint.",
       );
+    return { manifest: result.manifest, source: { identity, inventory: result.inventory } };
+  }
+  captureWithProvenance(workspace: string): CapturedWorkspace {
+    const { manifest, source } = this.inspectWorkspace(workspace, true);
+    const raw = JSON.stringify(manifest);
     const id = digest(raw);
     const target = path.join(this.root, "manifests", id + ".json");
     this.persist(target, raw);
-    return id;
+    return { id, source };
+  }
+  capture(workspace: string): string {
+    return this.captureWithProvenance(workspace).id;
   }
   manifest(id: string): Manifest {
     this.objectPath(id);
@@ -221,6 +231,46 @@ export class ProjectSnapshots {
         "Checkpoint manifest no longer matches its identity.",
       );
     return JSON.parse(raw.toString());
+  }
+  fileHash(snapshotId: string, relative: string): string | null {
+    return this.manifest(snapshotId).files.find(file => WorkspaceAccess.overlaps(file.path, relative))?.hash ?? null;
+  }
+  readObject(hash: string): Buffer {
+    const bytes = readFileSync(this.objectPath(hash));
+    if (digest(bytes) !== hash)
+      throw conflict("snapshot_corrupt", "Checkpoint content no longer matches its identity.");
+    return bytes;
+  }
+  candidate(baseId: string, submitted: ArtifactVersion[], workspace: string): string {
+    const base = this.manifest(baseId);
+    const actual = this.manifest(this.capture(workspace));
+    const identity = (relative: string) => process.platform === "win32" ? relative.toLowerCase() : relative;
+    const expected = new Map(base.files.map(file => [identity(file.path), file]));
+    for (const artifact of submitted) {
+      if (artifact.path === "@result") continue;
+      const relative = WorkspaceAccess.relative(artifact.path, false);
+      const key = identity(relative);
+      const bytes = Buffer.from(artifact.content, "utf8");
+      if (digest(bytes) !== artifact.sha256 || bytes.length !== artifact.bytes)
+        throw conflict("artifact_corrupt", `Artifact content failed verification: ${relative}`);
+      const mode = expected.get(key)?.mode ?? (process.platform === "win32" ? 0o666 : 0o600);
+      expected.set(key, { path: relative, hash: artifact.sha256, bytes: artifact.bytes, mode });
+    }
+    const seen = new Set<string>();
+    const drift: string[] = [];
+    for (const file of actual.files) {
+      const key = identity(file.path);
+      const selected = expected.get(key);
+      if (seen.has(key) || selected?.hash !== file.hash || (selected.mode & 0o111) !== (file.mode & 0o111)) drift.push(file.path);
+      seen.add(key);
+    }
+    for (const [key, file] of expected) if (!seen.has(key)) drift.push(file.path);
+    if (drift.length) throw conflict("candidate_drift", `The working copy differs from the submitted files: ${drift.slice(0, 12).join(", ")}. Submit the changed files or remove unrelated changes before verification.`);
+    const files = [...expected.values()].sort((a, b) => a.path.localeCompare(b.path));
+    const raw = JSON.stringify({ files, excludedPaths: base.excludedPaths });
+    const id = digest(raw);
+    this.persist(path.join(this.root, "manifests", id + ".json"), raw);
+    return id;
   }
   restore(id: string, destination: string): void {
     const parent = path.dirname(path.resolve(destination));
@@ -249,8 +299,8 @@ export class ProjectSnapshots {
           "snapshot_corrupt",
           "Checkpoint contains an invalid file path.",
         );
-      const bytes = readFileSync(this.objectPath(file.hash));
-      if (digest(bytes) !== file.hash || bytes.length !== file.bytes)
+      const bytes = this.readObject(file.hash);
+      if (bytes.length !== file.bytes)
         throw conflict(
           "snapshot_corrupt",
           "Checkpoint content no longer matches its identity.",

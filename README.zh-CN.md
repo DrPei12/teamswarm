@@ -4,15 +4,16 @@
 
 TeamSwarm 面向需要跨成员、会话和多轮修改推进代码与文本项目的 AI builders。通过 Host 讨论目标，让成员在各自独立的 Harness 中执行，并把当前决定、任务与成果保存在同一个工作空间。
 
-[English](README.md) · [安装](#install) · [第一个项目](#first-project) · [Harness 与模型](#harnesses-and-models) · [数据与恢复](#data-and-recovery) · [隐私](#privacy) · [代码签名策略](#code-signing-policy)
+[English](README.md) · [安装](#install) · [第一个项目](#first-project) · [Harness 与模型](#harnesses-and-models) · [工作与成果](#work-and-results) · [数据与恢复](#data-and-recovery) · [从源码运行](#run-from-source) · [故障排查](#troubleshooting)
 
 [![观看 TeamSwarm 宣传片 — 36 秒，4K / 120 fps](.github/media/teamswarm-film-cover-zh.jpg)](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-ZH.mp4)
 
 [▶ 观看宣传片](https://github.com/DrPei12/teamswarm/releases/download/v0.6.0/TeamSwarm-launch-film-4K120-ZH.mp4) · 36 秒 · 4K / 120 fps · [English version](README.md)
 
+- **从同一个入口选择 Host 模型。** 在对话输入区或设置中选择已连接的模型。主对话与后台协同使用独立会话，按需交换事实和证据。
 - **保持项目决定一致。** 维护带来源的当前项目定义。明确决定采用讨论分支后，将内容融入主线，并在历史中查看文档变化。
 - **接续同一项工作。** 在原工作线程修改成果，跨会话保留要求、文件归属与历史版本。
-- **组织独立代理。** 使用 Codex、Claude Code、Grok、Pi、DeepSeek Harness 或 OpenCode。成员相互交流，重复责任复用已有工作，等待中的成员在新信息到达后继续。
+- **组织独立代理。** 使用 Codex、Claude Code、Grok、Pi、DeepSeek Harness、OpenCode 或 Antigravity。成员相互交流，重复责任复用已有工作，等待中的成员在新信息到达后继续。
 - **查看实际交付。** 打开和下载保存的文件版本，区分进展与完成成果，查看提交所关联的自检或独立审查。
 - **通过两张画布了解项目。** 协作画布显示成员与实际通信；历史画布连接讨论、决定、工作、文档变化及交付。
 
@@ -21,26 +22,27 @@ TeamSwarm 面向本地单用户场景。Harness 使用你配置的账号或 API 
 <a id="install"></a>
 ## 安装
 
-从下方对应平台的同一版本 Release 下载软件包和 `SHA256SUMS.txt`。桌面包内置 Electron、Node.js、npm 和 Codex，其他 Harness 单独安装到本机。
+[TeamSwarm 0.7.0](https://github.com/DrPei12/teamswarm/releases/tag/v0.7.0) 桌面包内置 Electron、Node.js、npm 和 Codex，其他 Harness 需单独安装。
 
-| 平台 | 格式 | 可用范围 |
-|---|---|---|
-| Windows x64 | NSIS `.exe` | [Windows 发布版](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.1) |
-| Linux x64 | AppImage、DEB | 从源码构建 |
-| macOS Apple Silicon | DMG、ZIP | [macOS 发布版](https://github.com/DrPei12/teamswarm/releases/tag/v0.6.1) |
+- **Windows x64**：[TeamSwarm-0.7.0-Windows-x64.exe](https://github.com/DrPei12/teamswarm/releases/download/v0.7.0/TeamSwarm-0.7.0-Windows-x64.exe)
+- **macOS Apple Silicon**：[TeamSwarm-0.7.0-macOS-arm64.dmg](https://github.com/DrPei12/teamswarm/releases/download/v0.7.0/TeamSwarm-0.7.0-macOS-arm64.dmg) 或 [TeamSwarm-0.7.0-macOS-arm64.zip](https://github.com/DrPei12/teamswarm/releases/download/v0.7.0/TeamSwarm-0.7.0-macOS-arm64.zip)
+- **Linux x64**：[从源码构建](#run-from-source) AppImage 或 DEB。
 
-Windows 安装器未签名，系统会显示未知发布者。签名安排见[代码签名策略](#code-signing-policy)。将文件哈希与同版校验文件比较：
+将下载文件的 SHA-256 与同版 [SHA256SUMS.txt](https://github.com/DrPei12/teamswarm/releases/download/v0.7.0/SHA256SUMS.txt) 中对应的条目比较。[发布清单](https://github.com/DrPei12/teamswarm/releases/download/v0.7.0/release-manifest.json)还记录了源码提交与构建指纹。
+
+**Windows：** 安装器未签名，系统会显示未知发布者。详见[代码签名策略](#code-signing-policy)。
 
 ```powershell
-Get-FileHash .\TeamSwarm-0.6.1-Windows-x64.exe -Algorithm SHA256
+Get-FileHash .\TeamSwarm-0.7.0-Windows-x64.exe -Algorithm SHA256
 ```
 
 运行安装器，从开始菜单打开 **TeamSwarm**。默认按用户安装。升级时先关闭应用、[备份服务数据](#data-and-recovery)，然后在同一系统账号和安装目录运行新版安装器。更新通过手动安装完成，卸载保留服务数据和项目文件。
 
-**macOS Apple Silicon：** 下载 [DMG](https://github.com/DrPei12/teamswarm/releases/download/v0.6.1/TeamSwarm-0.6.1-macOS-arm64.dmg) 或 [ZIP](https://github.com/DrPei12/teamswarm/releases/download/v0.6.1/TeamSwarm-0.6.1-macOS-arm64.zip)。打开 DMG，将 **TeamSwarm.app** 复制到“应用程序”；使用 ZIP 时，解压后将 App 复制到同一目录。使用 macOS Release 中的校验文件核对下载内容：
+**macOS：** 打开 DMG，将 **TeamSwarm.app** 复制到“应用程序”；使用 ZIP 时，解压后将 App 复制到同一目录。按下载格式运行对应的校验命令：
 
 ```sh
-shasum -a 256 TeamSwarm-0.6.1-macOS-arm64.dmg
+shasum -a 256 TeamSwarm-0.7.0-macOS-arm64.dmg
+shasum -a 256 TeamSwarm-0.7.0-macOS-arm64.zip
 ```
 
 本次 macOS 发布版未使用 Developer ID 签名，也未经过 Apple 公证。如果 macOS 阻止首次打开，可参阅 [Apple 针对单个 App 的批准操作说明](https://support.apple.com/zh-cn/102445)。
@@ -52,7 +54,7 @@ shasum -a 256 TeamSwarm-0.6.1-macOS-arm64.dmg
 
 1. 将示例中的 `tasks.json`、`verify.mjs` 和 `verify-followup.mjs` 复制到项目目录。
 2. 打开 TeamSwarm，选择“新对话”，再通过输入框上方的“选择项目”选定目录；当前对话会成为该团队的 Host。未绑定目录的对话保持独立。
-3. 连接已有的受支持账号，或配置 [API 连接](#harnesses-and-models)。检查所选 Harness 与资源的可用状态。
+3. 连接已有的受支持账号，或配置 [API 连接](#harnesses-and-models)。选择 Host 模型，并为下面的示例确认一个可用的 Worker 资源。
 4. 向 Host 发送以下任务：
 
 此示例的命令检查需要可用的 Codex 资源。其他 Harness 可以创建和修改文件，由 Codex 成员运行检查。
@@ -104,12 +106,16 @@ node report.mjs <json-file> --status open|done|blocked
 
 运行时采集可用内存、Windows 提交空间、CPU 负载和进程占用。Host 可以查看内存与进程数据。调度器依据 CPU 采样和正在启动的任务判断何时派发更多原生工作。CPU 容量恢复后，排队任务可以继续执行。队列变化记录在运行事件中，实际执行错误显示在任务状态里。
 
-Windows 支持逐进程采样和所属进程组统计。其他平台使用各自采样器提供的数据。
+在「高级设置 → 设备资源」中，可保持自动，也可手动选择轻量、标准或工作站档位。自动档位按物理内存选择；实时 CPU 和内存情况用于任务派发与空闲进程复用。内存紧张时优先回收空闲执行器，必要时将新任务排队；正在执行的任务与托管预览保留各自的运行周期。
+
+Windows 通过 Job Object 管理服务所属的执行器及子进程。macOS 安装包内置进程监督器，可核对已离开原进程组的所属后代；Linux 使用进程组。尚未确认退出的进程保留待核对状态。
 
 <a id="harnesses-and-models"></a>
 ## Harness 与模型
 
-Harness 执行代理工具与运行循环，模型连接提供模型 API。执行资源将 Harness、模型、连接、权限和受支持的推理设置组合起来。
+在对话输入区或高级设置的「Host 模型」中选择模型。受支持的 API 连接与 ChatGPT 直连授权在本地服务进程内运行 Host，无需启动单独的 CLI 进程；需要 CLI 登录的模型沿用对应的官方 Harness。后台协同使用独立会话，向主对话提供相关事实和证据，而不是整段后台记录。可为只读探针选用另一个模型，探针返回结论与文件引用。
+
+Worker 仍分别选择 Harness 和模型。Harness 负责工具与执行循环；执行资源将它与模型连接、权限和受支持的推理设置组合起来。
 
 | Harness | 安装方式 | 原生会话接续 |
 |---|---|---|
@@ -139,7 +145,7 @@ ChatGPT 连接采用 [Sign in with ChatGPT](https://developers.openai.com/siwc/t
 
 例如，DeepSeek 连接使用 `https://api.deepseek.com` 和 Chat Completions 协议，可由 Pi 原生使用，也可通过协议转换交给 Claude Code。模型以提供方当前账号目录为准。
 
-协议转换支持文本、嵌入式图片、函数工具、工具结果、流式输出与 JSON Schema 输出。每次执行使用独立路由和临时凭据，结束即撤销；一个服务共用一个回环监听器。当前最多同时处理 32 个模型请求，每条执行路由最多 8 个，超限返回繁忙状态。输入上限 8 MiB、响应上限 16 MiB；原生会话的模型元数据达到 16 MiB 时要求新建会话，保留已有记录。不支持的请求会返回具体错误。
+协议转换支持文本、嵌入式图片、函数工具、工具结果、流式输出与 JSON Schema 输出。每次执行使用独立路由和临时凭据，结束即撤销；一个服务共用一个回环监听器。按设备档位最多同时处理 20、32 或 64 个模型请求，每条执行路由最多 8 个，超限返回繁忙状态。输入上限 8 MiB、响应上限 16 MiB；原生会话的模型元数据达到 16 MiB 时要求新建会话，保留已有记录。不支持的请求会返回具体错误。
 
 使用环境变量时，在启动服务前设置 `DEEPSEEK_API_KEY` 等变量，资源中只填写变量名。`TEAM_CREDENTIAL_FILES` 接受一个 JSON 映射，将环境变量名关联到包含单行密钥的绝对文件路径。
 
@@ -160,19 +166,21 @@ Host 和成员先获得项目概况、当前分工与可检索的资料索引，
 
 上下文取材结合模型配置或实际回报的容量、最近一次原生调用用量和任务关联程度，为回复与工具结果留出空间，保留 Harness 的原生压缩能力，并在需要时从保存的项目资料重建会话。未知容量与用量采用明确标记的估算。
 
+团队执行设置的「会话模式」控制符合条件的原生会话保留多久：「标准模式」更久地保留当前会话，「高效模式」更早换代。成员可以继承团队设置或单独覆盖。上下文用量或已核验的压缩达到换代阈值时，TeamSwarm 在安全边界启动新原生会话，带入工作状态、已有的交接备忘和版本仍匹配的文件片段。原工作线程、工作目录和历史消息保留。
+
 向成员提问前选择具体工作线程。只读追问查看已有工作，“继续修改”创建保留原验证要求的后续执行。修改相同文件前，先暂停或停止冲突工作，等待实际状态收束。
 
-小范围可逆修改可以由生产者自检。需要独立接受时，明确另一个审查者及其针对提交版本执行的检查。文件审查可以直接比较提交内容；命令类验收当前需要支持原生检查的 Codex 审查者。审查指令变化后，审查者先读取新要求，再重新运行所需命令后验收。
+小范围可逆修改可以由生产者自检。需要独立接受时，明确另一个审查者及其针对提交版本执行的检查。文件审查可以直接比较提交内容；命令检查需选用兼容的资源。Codex 支持原生检查；在 Windows 上，受支持的 Pi、Claude Code 和 OpenCode 配置也可在隔离候选中执行检查。审查指令变化后，审查者先读取新要求，再重新运行所需命令后验收。
 
 每条验收条件记录所需的语义检查或命令执行证据。执行要求随工作接续和资源切换保留；每条执行条件必须引用当前审查轮次中针对提交版本和当前指令的成功命令事件。未分类条件由 Host 根据原要求确定证据类型后再完成验证，已有验收记录保留为历史。
 
 采用讨论分支时，在该分支向 Host 明确决定和范围。Host 比较来源分支、分支起点与当前主线，更新选定的项目文档。在历史采纳节点中查看决定、来源、想法和文档差异；需要落实到代码时，另行提出实施要求。
 
-进展消息与完成交付分别显示。保存的成果版本可以下载。恢复文件版本会形成新的当前版本，操作前先解决活动写入、未提交本地修改或当前版本已变化等冲突。从历史创建工作区分支需要已保存的文件快照。
+进展消息与完成交付分别显示。在「独立验收」中可选择某次提交，查看文件及对应证据。评审要求返修时，可沿原工作继续而不改变验收条件。部分发布与新的本地编辑发生冲突时，先核对记录版本，再选择继续发布或「保留当前文件」。保留当前文件会结束该次中断的发布，不会把旧候选登记为已发布。保存的成果版本可以下载。恢复文件版本会形成新的当前版本，操作前先解决活动写入、未提交本地修改或当前版本已变化等冲突。从历史创建工作区分支需要已保存的文件快照。
 
 右侧文件栏可以浏览项目文件、打开多个标签，预览 Markdown、图片、PDF、Word、Excel 和 PowerPoint，并编辑代码、文本及现代 Office 文件中的文本或单元格。预览支持适应宽度和缩放；未保存内容保留为本机草稿，保存前核对原文件版本。成员正在写入同一工作区时，先完成或停止该工作再保存。
 
-历史中的手动记录点支持右键删除；原始历史和已有分支仍可追溯。成员会话与 Host 使用相同的 Harness、模型和 effort 选择方式，新选择用于后续执行。
+历史中的手动记录点支持右键删除；原始历史和已有分支仍可追溯。成员会话仍可单独选择 Harness、模型和推理强度，新选择用于后续执行。
 
 可在成员卡片的右键菜单或对话窗口顶部删除空闲成员，也可让 Host 使用 `team_remove_member` 工具删除。已有对话、工作和成果保留在历史中；删除前须完成待处理的任务、验收、协作和消息。已删除成员不再接收新任务或消息。
 
@@ -181,7 +189,7 @@ Host 和成员先获得项目概况、当前分工与可检索的资料索引，
 
 团队、对话、工作、成果版本和项目历史保存在本机，项目文件留在你选择的目录。
 
-成员等待消息时保存接续位置并结束当前回合，有新消息或依赖结果后恢复执行。空闲的 Codex 执行器会释放进程，下次任务从保存的原生会话继续。TeamSwarm 的 Codex 会话只加载分配的团队工具与原生能力。Windows 下，执行器及其子进程由独立进程组管理；关闭执行器或服务退出时一起回收。
+成员等待消息时保存接续位置并结束当前回合，有新消息或依赖结果后恢复执行。空闲的 Codex 执行器会释放进程，下次任务从保存的原生会话继续。TeamSwarm 的 Codex 会话只加载分配的团队工具与原生能力。所属进程回收和任务排队情况可在运行记录中查看。
 
 并发执行同时受团队设置和可用内存约束。内存不足时，新任务排队，活动任务继续执行；资源恢复后自动派发。成员身份、历史和成果保留在本地。
 
@@ -221,9 +229,6 @@ node scripts/data-tools.mjs restore --backup "/absolute/backup-directory" --data
 诊断包含构建身份、记录数量、工作状态和 SQLite 完整性，省略对话正文、项目路径与凭据值。备份包含服务数据库、附件及服务所属配置和原生会话文件，应保存在私有位置。恢复校验文件哈希且要求新目录；将 `TEAM_DATA_DIR` 指向该目录，核对恢复后的团队再继续。结果不明的原生执行仍需恢复核对。
 
 <a id="run-from-source"></a>
-
-本开发工作区使用 `.local/rework/default/` 下的独立数据，默认端口 4427。模型账号和项目与已安装桌面应用分开配置。
-
 ## 从源码运行
 
 使用 Node.js 24，在仓库根目录运行：
@@ -231,12 +236,10 @@ node scripts/data-tools.mjs restore --backup "/absolute/backup-directory" --data
 ```sh
 npm ci
 npm run build
-npm run start:rework
+npm start
 ```
 
-此入口在 `http://127.0.0.1:4427` 打开已连接的浏览器工作空间。`TEAMSWARM_REWORK_PORT` 指定其他端口，`TEAMSWARM_REWORK_PROFILE` 选择 `.local/rework/` 下的另一组独立数据。
-
-常规产品入口 `npm start` 使用 `TEAM_API_PORT`（默认 4317）和 `TEAM_DATA_DIR`，同一数据目录由一个服务管理。`npm run dev` 在 4318 启动 API，在 4317 启动 Vite。
+默认在 `http://127.0.0.1:4317` 打开已连接的浏览器工作空间。若需与已安装的桌面版并行运行，启动前将 `TEAM_API_PORT` 设为空闲端口，并将 `TEAM_DATA_DIR` 设为独立的绝对路径。同一数据目录只由一个服务管理。`npm run dev` 在 4318 启动 API，在 4317 启动 Vite。
 
 构建后安装、检查指定 Harness：
 

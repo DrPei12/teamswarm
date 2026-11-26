@@ -136,9 +136,7 @@ export function ProjectRecords({
         ) : (
           <div className="record-list">
             <p className="record-hint">
-              {t(
-                "Proposals preserve exploration. Only adopted decisions guide future work.",
-              )}
+              {t("Decisions you adopt guide future work in this branch.")}
             </p>
             {!editing && inputSource && (
               <button
@@ -192,16 +190,13 @@ export function ProjectRecords({
                       name="status"
                       defaultValue={current?.status ?? "proposed"}
                     >
-                      {[
-                        "proposed",
-                        ...(current?.status === "adopted" ? ["adopted"] : []),
-                        "rejected",
-                        "superseded",
-                      ].map((s) => (
-                        <option key={s} value={s}>
-                          {t(`insight.${s}`)}
-                        </option>
-                      ))}
+                      {["proposed", "adopted", "rejected", "superseded"].map(
+                        (s) => (
+                          <option key={s} value={s}>
+                            {t(`insight.${s}`)}
+                          </option>
+                        ),
+                      )}
                     </FieldSelect>
                   </label>
                 </div>
@@ -313,6 +308,7 @@ function OutputRecord({
                     : `v${output.revisions.length - i}`}{" "}
                   · {new Date(r.createdAt).toLocaleString()}
                   {r.restoredFrom ? ` · ${t("Restored")}` : ""}
+                  {r.inlineEditId ? ` · ${t("Verified text edit")}` : ""}
                 </option>
               ))}
             </FieldSelect>
@@ -422,7 +418,7 @@ function InsightRecord({
         <strong>{note.title}</strong>
         <span>
           {t(note.kind === "idea" ? "Idea" : "Decision")} ·{" "}
-          <InsightStatus status={note.status} />
+          <InsightStatus insight={note} />
         </span>
       </div>
       <MessageContent text={note.content} />
@@ -473,7 +469,7 @@ function InsightRecord({
           {revisions.map((r) => (
             <details key={r.id}>
               <summary>
-                v{r.revision} · {t(`insight.${r.status}`)} · {r.reason}
+                v{r.revision} · <InsightStatus insight={r} /> · {r.reason}
               </summary>
               <p>{r.content}</p>
             </details>
