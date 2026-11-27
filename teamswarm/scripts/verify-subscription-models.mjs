@@ -175,7 +175,10 @@ try {
   });
   await page.goto(`${base}/#/team/${team.id}/agent`);
   await page
-    .getByRole("button", { name: "Team capabilities", exact: true })
+    .getByRole("button", { name: "Workspace menu", exact: true })
+    .click();
+  await page
+    .getByRole("menuitem", { name: "Global capabilities", exact: true })
     .click();
   await page
     .getByRole("tab", { name: "Models and connections", exact: true })
@@ -318,10 +321,7 @@ try {
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.getByRole("button", { name: "Choose model", exact: true }).click();
-  await page.getByRole("button", { name: /^OpenAI 3$/ }).click();
-  await page
-    .getByRole("button", { name: "GPT Catalog Reasoning", exact: true })
-    .waitFor();
+  await page.getByRole("button", { name: /GPT Catalog Reasoning/ }).waitFor();
   // Revocation and a completed sign-in update the mounted composer without reload.
   const openConnection = async () => {
     await page
@@ -339,7 +339,6 @@ try {
     await page
       .getByRole("button", { name: "Choose model", exact: true })
       .click();
-    await page.getByRole("button", { name: /^OpenAI 3$/ }).click();
   };
   await openConnection();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
@@ -347,11 +346,16 @@ try {
     .getByRole("button", { name: "Continue with ChatGPT", exact: true })
     .waitFor();
   await returnToModels();
-  const reconnectModel = page.getByRole("button", {
-    name: /gpt-catalog-reasoning.*Reconnect ChatGPT/,
-  });
-  await reconnectModel.waitFor();
-  assert(await reconnectModel.isDisabled());
+  await page
+    .locator(".model-picker-popover")
+    .getByRole("button", {
+      name: /GPT Catalog Reasoning|gpt-catalog-reasoning/,
+    })
+    .waitFor({ state: "hidden" });
+  await page
+    .locator(".model-picker-popover")
+    .getByRole("button", { name: /Second account model/ })
+    .waitFor();
   await openConnection();
   await page
     .getByRole("button", { name: "Continue with ChatGPT", exact: true })
@@ -369,8 +373,9 @@ try {
   );
   await request("/product/preferences", { language: "zh-CN" }, "PATCH");
   await page.reload();
+  await page.getByRole("button", { name: "工作空间菜单", exact: true }).click();
   await page
-    .getByRole("button", { name: "团队能力与偏好", exact: true })
+    .getByRole("menuitem", { name: "全局能力与偏好", exact: true })
     .click();
   await page.getByRole("tab", { name: "模型与连接", exact: true }).click();
   await page

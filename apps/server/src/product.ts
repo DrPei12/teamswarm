@@ -4,7 +4,7 @@ import { hostExecution, projectHostExecutions } from "./host-execution.js";
 import { contextWindowUsage } from "./product-context.js";
 import { permissionCatalog, mergePermissionChoice } from "./runtime/permission-options.js";
 import { nativePermissions, validateNativePermissions } from "./runtime/harness/permissions.js";
-import { setHostConfiguration } from "./runtime/allocation.js";
+import { hostReadOnlyConfig, setHostConfiguration } from "./runtime/allocation.js";
 import { allocationTaskIds } from "./runtime/allocation-tasks.js";
 import { executionPermissionPreset, memberPermissionPreset } from "./runtime/member-permissions.js";
 import { harnessManifest } from "@team/contracts/harness-catalog";
@@ -389,7 +389,8 @@ export class ProductStore {
       const dialogueWorks = new Set(state.works.filter(w => dialogueRunIds.has(w.runId) && w.memberId === hostId &&
         w.kind !== "host-followup" && w.kind !== "collaboration").map(w => w.id));
       const contextAttempt = attempts.filter(a => a.memberId === hostId && dialogueWorks.has(a.workId)).at(-1);
-      const contextConfig = contextAttempt && ["running", "stopping"].includes(contextAttempt.status) ? contextAttempt.config : hostConfig;
+      const contextConfig = contextAttempt && ["running", "stopping"].includes(contextAttempt.status)
+        ? contextAttempt.config : hostConfig && hostReadOnlyConfig(hostConfig);
       const health = contextAttempt && this.runtime.store.vitality.inspect(contextAttempt);
       const context = contextWindowUsage(this.db, contextConfig, contextAttempt, nextContextWindow, {
         mode: settings?.sessionLongevityMode ?? "standard",

@@ -450,10 +450,7 @@ export function resolveExecution(
       work.kind !== "collaboration" && work.kind !== "host-followup" && work.verification !== "independent" &&
       !Object.values(work.executionRequirements ?? {}).some(Boolean) &&
       !work.acceptanceEvidence?.some(entry => entry.evidenceType === "native_check");
-    const permissions: ExecutionConfig["permissions"] = config.harness === "claude-code"
-      ? { harness: "claude-code", mode: "dontAsk" }
-      : config.harness === "codex" ? { harness: "codex", approvalPolicy: "on-request", sandbox: "read-only" } : undefined;
-    config = scopeProbes(readOnlyPermissions({ ...config, permissions }));
+    config = scopeProbes(hostReadOnlyConfig(config));
     return { config, selection, inlineEdits, conflict: null };
   }
   if (work.reviewOf || work.interaction || work.kind === "collaboration")
@@ -464,6 +461,13 @@ export function resolveExecution(
   if (!deps.catalog.capabilities.allowed(teamId,config))
     return {config,selection,conflict:"This Harness or model connection is no longer enabled for the Team. Ask Host to choose an enabled combination."};
   return { config, selection, conflict: null };
+}
+
+export function hostReadOnlyConfig(config: ExecutionConfig): ExecutionConfig {
+  const permissions: ExecutionConfig["permissions"] = config.harness === "claude-code"
+    ? { harness: "claude-code", mode: "dontAsk" }
+    : config.harness === "codex" ? { harness: "codex", approvalPolicy: "on-request", sandbox: "read-only" } : undefined;
+  return scopeNativeReadProbes(readOnlyPermissions({ ...config, permissions }));
 }
 
 /** Persist the frozen snapshot on the Attempt. Called once, at start. */

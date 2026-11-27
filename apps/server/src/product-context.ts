@@ -53,7 +53,9 @@ export function contextWindowUsage(
       : empty),
     ...(session?.mode ? { sessionLongevityMode: session.mode } : {}),
   };
-  if (!attempt || !isDeepStrictEqual(config, attempt.config)) return upcoming;
+  // Persisted snapshots omit optional fields that were unset at allocation time.
+  const defined = (value: ExecutionConfig) => Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined));
+  if (!attempt || !isDeepStrictEqual(defined(config), defined(attempt.config))) return upcoming;
   const generation = attempt.sessionGeneration;
   const sessionMode = attempt.sessionLongevityMode ?? session?.mode;
   const sessionFacts = {

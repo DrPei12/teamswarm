@@ -1055,6 +1055,7 @@ function ConversationThread({
                   !member.removedAt &&
                   member.configurationVersion !== undefined && (
                     <FieldSelect
+                      className="member-session-mode"
                       aria-label={t("Session mode")}
                       value={member.sessionLongevityMode ?? "team"}
                       disabled={configuring || sending}

@@ -858,15 +858,35 @@
 }
 .member-composer-config {
   justify-content: flex-start;
-  flex: 1 1 240px;
+  flex: 1 1 0;
+  flex-wrap: wrap;
 }
-.member-composer-config .runtime-controls {
-  min-width: 0;
-  flex: 1;
-  column-gap: 0;
+.member-composer-config > .runtime-controls {
+  /* Share the toolbar's wrap points with session mode and context. */
+  display: contents;
+}
+.member-composer-config > .member-session-mode {
+  width: auto;
+  max-width: 100%;
+  min-height: var(--cds-h-control);
+  padding-block: 4px;
 }
 .member-composer-config .runtime-choice {
   max-width: 100%;
+}
+@container (max-width: 420px) {
+  .member-composer-config .runtime-choice {
+    max-width: calc((100% - 8px) / 3);
+  }
+  .member-composer-config > .member-session-mode {
+    max-width: calc(100% - 48px);
+  }
+}
+@media (max-height: 650px) {
+  .member-action-area:has(> .approval-requests) {
+    /* Keep the thread and Latest reachable without starving the request dock. */
+    max-height: calc(100% - 56px);
+  }
 }
 .member-composer-config .runtime-choice > span {
   overflow: hidden;

@@ -70,11 +70,11 @@ try {
     await page.locator('.member-permission-menu').waitFor({state:'hidden'});
   };
   await permissions().click();
-  assert.deepEqual(await page.getByRole('menuitemradio').locator('.item-label > span').allTextContents(), ['Read-only', 'Request approval', 'Automatic review', 'Full access']);
-  assert.notEqual(await page.getByRole('menuitemradio', {name:/^Full access/}).getAttribute('aria-disabled'), 'true');
+  assert.deepEqual(await page.getByRole('menuitemradio').locator('.item-label > span').allTextContents(), ['Read-only', 'Approve inline edits']);
+  assert.notEqual(await page.getByRole('menuitemradio', {name:/^Approve inline edits/}).getAttribute('aria-disabled'), 'true');
   const branch = {id:(await call('/product')).executions[team.id].host.branchId};
   // Change from the inherited default before testing an explicit Host override.
-  await waitForPermissionSave(() => page.getByRole('menuitemradio', {name:/^Full access/}).click());
+  await waitForPermissionSave(() => page.getByRole('menuitemradio', {name:/^Approve inline edits/}).click());
   await permissions().click();
   await waitForPermissionSave(() => page.getByRole('menuitemradio', { name: /^Read-only/ }).click());
   await page.waitForFunction(() => document.querySelector('.member-permission-choice')?.textContent.includes('Read-only'));
@@ -89,11 +89,11 @@ try {
     await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{code:'fixture_failure',message:'Permission save fixture failed'}})});
   });
   await permissions().click();
-  await page.getByRole('menuitemradio',{name:/^Full access/}).click();
+  await page.getByRole('menuitemradio',{name:/^Approve inline edits/}).click();
   await page.getByRole('alert').filter({hasText:'Permission save fixture failed'}).waitFor();
   assert.match(await permissions().innerText(), /Read-only/);
   await waitForPermissionSave(() => page.getByRole('button',{name:'Retry',exact:true}).click());
-  await page.waitForFunction(() => document.querySelector('.member-permission-choice')?.textContent.includes('Full access'));
+  await page.waitForFunction(() => document.querySelector('.member-permission-choice')?.textContent.includes('Approve inline edits'));
   await page.unroute('**/host/permission-preset');
   await permissions().click();
   await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:/^Read-only/}).click());
@@ -107,10 +107,11 @@ try {
     assert.doesNotMatch(await card.innerText(), /internal-thread|internal-turn|requestApproval/);
     if (!accepted) {
       await permissions().click();
-      await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:/^Full access/}).click());
-      await page.getByRole('status').filter({hasText:'Applies next turn'}).waitFor();
+      await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:/^Approve inline edits/}).click());
+      await page.waitForFunction(() => document.querySelector('.member-permission-choice')?.textContent.includes('Approve inline edits'));
       const attempt = service.runtime.store.list('attempts',team.id).at(-1);
       assert.equal(attempt.config.access,'read-only');
+      assert.equal(attempt.hostInlineEdits,false);
       assert.equal(host().hostSelections[branch.id].permissionPreset,'full-access');
       assert.equal(service.runtime.store.settings(team.id).config.permissions,undefined);
     }
@@ -118,12 +119,11 @@ try {
     await card.getByRole('button', { name: accepted ? 'Allow once' : 'Decline', exact: true }).click();
     await card.waitFor({ state: 'detached' });
     await page.getByText(accepted ? 'Approval fixture allowed' : 'Approval fixture declined', { exact: true }).waitFor();
-    if (!accepted) {
-      await permissions().click();
-      await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:/^Read-only/}).click());
-      await page.waitForFunction(() => document.querySelector('.member-permission-choice')?.textContent.includes('Read-only'));
-    }
   }
+  assert.equal(service.runtime.store.list('attempts',team.id).at(-1).hostInlineEdits,true);
+  await permissions().click();
+  await waitForPermissionSave(() => page.getByRole('menuitemradio',{name:/^Read-only/}).click());
+  await page.waitForFunction(() => document.querySelector('.member-permission-choice')?.textContent.includes('Read-only'));
   assert.deepEqual(answers, [false, true]);
   await page.getByRole('button', { name: 'Collaboration', exact: true }).click();
   await page.getByRole('button', { name: 'Add member', exact: true }).click();
@@ -190,7 +190,7 @@ try {
   await page.getByRole('menuitem',{name:'Advanced settings →',exact:true}).click();
   const settingsDialog = page.getByRole('dialog',{name:'Advanced settings',exact:true});
   await settingsDialog.waitFor();
-  await assertAligned(settingsDialog.getByRole('combobox',{name:'Harness',exact:true}), settingsDialog.getByRole('button',{name:'Choose model',exact:true}), 'Advanced runtime');
+  await assertAligned(settingsDialog.getByRole('button',{name:'Choose primary model',exact:true}), settingsDialog.getByRole('combobox',{name:'Effort',exact:true}), 'Advanced Host models');
   await settingsDialog.getByRole('tab',{name:'Resources and allocation'}).click();
   await settingsDialog.getByRole('button',{name:'Add resource',exact:true}).click();
   const editor = settingsDialog.locator('.resource-form');

@@ -256,14 +256,12 @@ async function exercise(kind, width, height, scroller, composer, max = false) {
   const selectedAfterResize = await card
     .locator("input[type=radio]:checked")
     .count();
-  await page
-    .locator(composer + " textarea")
-    .fill(
-      Array.from(
-        { length: 45 },
-        (_, i) => "草稿第 " + i + " 行。保留未发送的多行输入，检查短窗口操作。",
-      ).join("\n"),
-    );
+  const textarea = page.locator(composer + " textarea");
+  const draft = Array.from(
+    { length: 45 },
+    (_, i) => "草稿第 " + i + " 行。保留未发送的多行输入，检查短窗口操作。",
+  ).join("\n");
+  await textarea.fill(draft);
   await settle();
   const input = await bounds(page.locator(composer + " textarea")),
     compose = await bounds(page.locator(composer)),
@@ -323,6 +321,31 @@ async function exercise(kind, width, height, scroller, composer, max = false) {
   const screenshot = path.join(root, name + ".png");
   await page.screenshot({ path: screenshot, animations: "disabled" });
   assert.deepEqual(issues, [], name);
+  if (kind === "member") {
+    const controls = page.locator(composer);
+    const model = controls.getByRole("button", {
+      name: "Choose model",
+      exact: true,
+    });
+    const picker = page.locator(".model-picker-popover");
+    await model.click();
+    await picker.waitFor();
+    const search = await bounds(picker.getByRole("textbox", { name: "Search models" }));
+    assert(search.fullyVisible && search.reachable, name + " model search");
+    await page.keyboard.press("Escape");
+    await picker.waitFor({ state: "hidden" });
+    const session = controls.getByRole("combobox", {
+      name: "Session mode",
+      exact: true,
+    });
+    const mode = await bounds(session);
+    assert(mode.fullyVisible && mode.reachable, name + " session mode");
+    await session.click();
+    await page.getByRole("option", { name: "High-efficiency mode" }).waitFor();
+    await page.keyboard.press("Escape");
+    await page.getByRole("listbox").waitFor({ state: "hidden" });
+  }
+  assert.equal(await textarea.inputValue(), draft, name + " unsent draft");
   assert.equal(selectedBeforeDraft, 3, name + " choices before resize");
   assert.equal(selectedAfterResize, 3, name + " choices after resize");
   assert.equal(selectedAfterDraft, 3, name + " choices after typing");

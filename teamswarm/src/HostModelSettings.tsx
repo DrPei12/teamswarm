@@ -141,6 +141,7 @@ export function HostModelSettings({
           <label>
             {t("Effort")}
             <FieldSelect
+              aria-label={t("Effort")}
               value={config.effort ?? ""}
               disabled={busy || !config.model}
               onValueChange={(effort) =>
