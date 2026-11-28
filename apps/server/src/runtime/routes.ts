@@ -7,6 +7,7 @@ import { z } from "zod";
 import { isDeepStrictEqual } from "node:util";
 import { memberPermissionChoices, memberPermissionPreset } from "./member-permissions.js";
 import { badRequest, conflict, notFound } from "../errors.js";
+import { globalSkillRoutes } from "./global-skill-routes.js";
 import { TeamRuntime } from "./engine.js";
 import { completeChecks, contractIssues } from "./harness/admission.js";
 import { validateManifest } from "./harness/manifest.js";
@@ -35,7 +36,9 @@ import {
   requireAllocationTask,
 } from "./allocation.js";
 import { definitionInput, selectionInput } from "./project-history.js";
-import { key, memberInput, parse, runtimeSettings, executionRequirements } from "./validation.js";
+import { key, memberInput, parse, runtimeSettings, executionRequirements, mcpMountInput, memoryChangeInput } from "./validation.js";
+import { semanticConflicts } from "./semantic-conflicts.js";
+import { candidateReview } from "./candidate-review.js";
 import type {
   ArtifactVersion,
   Attempt,
@@ -121,6 +124,23 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
   });
   router.get("/global/capabilities", (_req, res) => res.json(runtime.catalog.capabilities.readGlobal()));
   router.put("/global/capabilities", (req, res) => res.json(runtime.catalog.capabilities.saveGlobal(parse(capabilitiesInput, req.body))));
+  router.use(globalSkillRoutes(runtime.skillMounts.global));
+  router.get("/global/mcp-services", (_req, res) => res.json(runtime.mcpMounts.list()));
+  router.post("/global/mcp-services", async (req, res) => {
+    const input = parse(z.object({ id: z.uuid().optional(), expectedRevision: z.number().int().nonnegative(),
+      name: z.string().trim().min(1).max(120), url: z.string().trim().min(1).max(2048) }).strict(), req.body);
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    res.once("close", cancel);
+    try { res.json(await runtime.mcpMounts.discover(input, controller.signal)); }
+    finally { res.off("close", cancel); }
+  });
+  router.get("/teams/:teamId/mcp-services", (req, res) => res.json(runtime.mcpMounts.list(param(req.params.teamId))));
+  router.put("/teams/:teamId/mcp-grants", (req, res) => {
+    const input = parse(mcpMountInput.omit({ generation: true }).extend({ active: z.boolean(),
+      expectedGeneration: z.number().int().nonnegative() }).strict(), req.body);
+    res.json(runtime.mcpMounts.changeGrant(param(req.params.teamId), input));
+  });
   router.put("/teams/:teamId/capability-overrides", (req, res) => res.json(runtime.catalog.capabilities.saveOverride(
     param(req.params.teamId), parse(capabilityOverridesInput, req.body),
   )));
@@ -349,6 +369,64 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       version: runtime.hostContext.epoch(teamId, branchId),
       notes: runtime.hostContext.notes(teamId, branchId),
     });
+  });
+  const memoryKind = z.enum(["note", "insight"]);
+  router.get("/teams/:teamId/branches/:branchId/memory", (req, res) => {
+    res.json(runtime.memory.entries(param(req.params.teamId), param(req.params.branchId)));
+  });
+  router.get("/teams/:teamId/branches/:branchId/semantic-conflicts", (req, res) => {
+    const teamId = param(req.params.teamId), branchId = param(req.params.branchId);
+    runtime.history.branch(teamId, branchId);
+    res.json(semanticConflicts(store, teamId, branchId));
+  });
+  router.get("/teams/:teamId/branches/:branchId/outcome", (req, res) => {
+    const teamId = param(req.params.teamId), branchId = param(req.params.branchId);
+    runtime.history.branch(teamId, branchId);
+    const input = parse(z.object({ requirementId: key.optional() }).strict(), req.query);
+    const requirement = input.requirementId
+      ? store.get<import("./types.js").Requirement>("requirements", teamId, input.requirementId)
+      : store.currentOutcome(teamId, branchId);
+    if (requirement && requirement.outcome?.branchId !== branchId) throw notFound();
+    if (!requirement) { res.json(null); return; }
+    const runs = store.list<Run>("runs", teamId)
+      .filter(run => runtime.history.forRun(run).id === branchId &&
+        store.get<import("./types.js").Requirement>("requirements", teamId, run.requirementId).outcomeRequirementId === requirement.id);
+    const workflows = runs.flatMap(run => {
+        const view = runtime.workflows.view(run);
+        return view ? [{ ...view, sourceMessageId: run.sourceMessageId, conversationId: run.conversationId, runState: run.state }] : [];
+      }).reverse();
+    const runIds = new Set(runs.map(run => run.id));
+    const conflicts = semanticConflicts(store, teamId, branchId).filter(issue => runIds.has(issue.runId));
+    res.json({ ...requirement, workflows, ...(conflicts.length ? { semanticConflicts: conflicts } : {}) });
+  });
+  router.get("/teams/:teamId/runs/:runId/workflow", (req, res) => {
+    const run = store.get<Run>("runs", param(req.params.teamId), param(req.params.runId));
+    const { revision } = parse(z.object({ revision: z.coerce.number().int().positive().optional() }).strict(), req.query);
+    const view = runtime.workflows.view(run, revision);
+    if (revision !== undefined && !view) throw notFound();
+    res.json(view);
+  });
+  router.get("/teams/:teamId/inline-edits/:editId", (req, res) => {
+    res.json(runtime.inlineEdits.read(param(req.params.teamId), param(req.params.editId)));
+  });
+  router.post("/teams/:teamId/inline-edits/:editId/resume", (req, res) => {
+    res.json(runtime.inlineEdits.resume(param(req.params.teamId), param(req.params.editId)));
+  });
+  router.get("/teams/:teamId/branches/:branchId/memory/revisions", (req, res) => {
+    const input = parse(z.object({
+      kind: memoryKind, key, before: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+    }).strict(), req.query);
+    const pageSize = 20;
+    const rows = runtime.memory.revisions(param(req.params.teamId), param(req.params.branchId), input.kind, input.key, input.before, pageSize + 1);
+    const items = rows.slice(0, pageSize);
+    res.json({ items, nextBefore: rows.length > pageSize ? items.at(-1)!.revision : null });
+  });
+  router.post("/teams/:teamId/branches/:branchId/memory", (req, res) => {
+    const {clientRequestId, ...action} = parse(z.looseObject({ clientRequestId: z.string().uuid() }), req.body);
+    const input = parse(memoryChangeInput, action);
+    const teamId = param(req.params.teamId), branchId = param(req.params.branchId);
+    res.json(store.once(`memory:${teamId}:${branchId}`, clientRequestId, { ...input, clientRequestId },
+      () => runtime.memory.change(teamId, branchId, input)));
   });
   router.post(
     "/teams/:teamId/branches/:branchId/host-context/reset",
@@ -814,8 +892,7 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       );
   });
   router.delete("/teams/:teamId/members/:memberId", (req, res) => {
-    const member = store.removeMember(param(req.params.teamId), param(req.params.memberId));
-    runtime.memberPermissions.cancel(member.teamId, member.id);
+    const member = runtime.removeMember(param(req.params.teamId), param(req.params.memberId));
     res.json({ id: member.id, removedAt: member.removedAt });
   });
   router.delete("/teams/:teamId/members/:memberId/entry", (req,res) => {
@@ -865,6 +942,36 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
     });
     res.json(member);
   });
+  router.put("/teams/:teamId/members/:memberId/session-longevity", (req, res) => {
+    const teamId = param(req.params.teamId), memberId = param(req.params.memberId);
+    const input = parse(z.object({ expectedVersion: z.number().int().min(1), mode: z.enum(["standard", "high-efficiency"]).nullable() }).strict(), req.body);
+    res.json(store.transaction(() => {
+      const member = store.activeMember(teamId, memberId);
+      if (member.kind === "host") throw badRequest("host_configuration", "Change the Host session policy through Team runtime settings.");
+      const current = member.allocationVersion ?? 1;
+      if (current !== input.expectedVersion) throw conflict("version_conflict", "Member settings changed. Read them before updating.");
+      if ((member.sessionLongevityMode ?? null) !== input.mode) {
+        if (input.mode === null) delete member.sessionLongevityMode;
+        else member.sessionLongevityMode = input.mode;
+        member.allocationVersion = current + 1;
+        store.save("members", member);
+        store.event(teamId, "member.updated", { memberId, sessionLongevityMode: input.mode });
+      }
+      return { memberId, configurationVersion: member.allocationVersion ?? current, mode: input.mode };
+    }));
+  });
+  router.get("/teams/:teamId/branches/:branchId/works/:workId/candidate-review", (req, res) => {
+    const selection = parse(z.union([
+      z.object({ nodeId: key }).strict(),
+      z.object({ candidateId: key }).strict(),
+      z.object({ reviewWorkId: key }).strict(),
+      z.object({ producerAttemptId: key }).strict(),
+      z.object({}).strict(),
+    ]), req.query);
+    res.setHeader("Cache-Control", "no-store");
+    res.json(candidateReview(runtime, parse(key, req.params.teamId), parse(key, req.params.branchId),
+      parse(key, req.params.workId), selection));
+  });
   router.get("/teams/:teamId/works/:workId", (req, res) => {
     const teamId = param(req.params.teamId),
       work = store.get<Work>("works", teamId, param(req.params.workId));
@@ -884,14 +991,46 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
       await runtime.stop(param(req.params.teamId), param(req.params.workId)),
     ),
   );
-  router.post("/teams/:teamId/works/:workId/reconcile", async (req, res) =>
-    res.json(
-      await runtime.reconcile(
-        param(req.params.teamId),
-        param(req.params.workId),
-      ),
-    ),
-  );
+  router.post("/teams/:teamId/works/:workId/reconcile", async (req, res) => {
+    const teamId = param(req.params.teamId), workId = param(req.params.workId);
+    if (req.body?.expectedRevision !== undefined) {
+      const input = parse(z.object({ expectedRevision: z.number().int().positive() }).strict(), req.body);
+      if (store.get<Work>("works", teamId, workId).revision !== input.expectedRevision)
+        throw conflict("version_conflict", "Work changed; reload before recovering.");
+    }
+    res.json(await runtime.reconcile(teamId, workId));
+  });
+  router.post("/teams/:teamId/works/:workId/publication/recover", (req, res) => {
+    const input = parse(z.object({ expectedRevision: z.number().int().positive() }).strict(), req.body);
+    res.json(runtime.records.recoverPublication(param(req.params.teamId), param(req.params.workId), input.expectedRevision));
+  });
+  router.get("/teams/:teamId/works/:workId/publication/retention", (req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.json(runtime.records.previewPublicationRetention(param(req.params.teamId), param(req.params.workId)));
+  });
+  router.post("/teams/:teamId/works/:workId/publication/retention", (req, res) => {
+    const input = parse(z.object({ expectedRevision: z.number().int().positive(),
+      expectedFingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), req.body);
+    const work = runtime.records.keepCurrentPublication(param(req.params.teamId), param(req.params.workId),
+      input.expectedRevision, input.expectedFingerprint);
+    res.json({ workId: work.id, revision: work.revision, state: work.publication?.state });
+  });
+  router.get("/teams/:teamId/works/:workId/subspaces/recovery", (req, res) => {
+    res.json(runtime.subworkspaces.recovery(param(req.params.teamId), param(req.params.workId)));
+  });
+  router.post("/teams/:teamId/works/:workId/subspaces/:subspaceId/recover", (req, res) => {
+    const body = req.body;
+    const legacy = body === undefined || body && typeof body === "object" && !Array.isArray(body) && !Object.keys(body).length;
+    const action = parse(z.discriminatedUnion("action", [
+      z.object({ action: z.literal("resume") }).strict(),
+      z.object({ action: z.literal("rollback"), expectedRevision: z.number().int().positive(),
+        expectedFingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
+    ]), legacy ? { action: "resume" } : body);
+    const teamId = param(req.params.teamId), workId = param(req.params.workId), id = param(req.params.subspaceId);
+    res.json(action.action === "rollback"
+      ? runtime.subworkspaces.rollback(teamId, workId, id, action.expectedRevision, action.expectedFingerprint)
+      : runtime.subworkspaces.resume(teamId, workId, id));
+  });
   router.post("/teams/:teamId/works/:workId/retry", async (req, res) => {
     const input = parse(
       z.object({ expectedRevision: z.number().int().positive(), fromAllocationList: z.literal(true).optional() }).strict(),
@@ -931,7 +1070,8 @@ export function runtimeRoutes(runtime: TeamRuntime): Router {
           .filter(
             (w) =>
               w.runId === run.id &&
-              ["queued", "waiting", "running"].includes(w.status),
+              ["queued", "waiting", "running"].includes(w.status) &&
+              !(w.status === "waiting" && w.continuation?.interfaceConflict),
           )
           .map((w) => w.id);
         run.state = "paused";

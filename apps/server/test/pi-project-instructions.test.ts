@@ -21,13 +21,14 @@ export const createExtensionRuntime=()=>({});
 export const loadProjectContextFiles=({cwd,agentDir})=>{console.log(JSON.stringify({type:'loader',cwd,agentDir}));const file=path.join(cwd,'AGENTS.md');return [{path:file,content:readFileSync(file,'utf8')}];};
 export const createAgentSession=async(opts)=>{
  console.log(JSON.stringify({type:'context',files:opts.resourceLoader.getAgentsFiles().agentsFiles,prompt:opts.resourceLoader.getSystemPrompt(),extensions:opts.resourceLoader.getExtensions().extensions}));
- return {session:{subscribe(){},prompt:async()=>{},messages:[{role:'assistant',stopReason:'stop'}],getLastAssistantText:()=> 'synthetic complete',dispose(){}}};
+ let listener;const message={role:'assistant',stopReason:'stop'};
+ return {session:{subscribe(fn){listener=fn},prompt:async()=>listener({type:'message_end',message}),messages:[message],getLastAssistantText:()=> 'synthetic complete',dispose(){}}};
 };
 `);
     const spec = path.join(root, "spec.json");
     writeFileSync(spec, JSON.stringify({ entry, home: path.join(root, "agent"), workspace: root,
       config: { model: "fixture", credentialEnv: "SYNTHETIC_ONLY" }, instructions: "Team coordination", tools: [] }));
-    const result = spawnSync(process.execPath, [fileURLToPath(new URL("../src/runtime/harness/pi-worker.ts", import.meta.url)), spec],
+    const result = spawnSync(process.execPath, ["--import", import.meta.resolve("tsx"), fileURLToPath(new URL("../src/runtime/harness/pi-worker.ts", import.meta.url)), spec],
       { encoding: "utf8", timeout: 10000, env: { PATH: process.env.PATH, SYNTHETIC_ONLY: "synthetic" } });
     assert.equal(result.status, 0, result.stderr);
     const events = result.stdout.trim().split("\n").map(line => JSON.parse(line));

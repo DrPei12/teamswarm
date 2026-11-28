@@ -71,7 +71,7 @@ const harnesses = [
     request.onEvent({
       type: "context.usage",
       data: {
-        inputTokens: 260900,
+        inputTokens: 38000,
         outputTokens: 100,
         contextWindowTokens: 828000,
       },
@@ -142,7 +142,7 @@ try {
     `/teams/${team.id}/capabilities`,
     {
       expectedVersion: 0,
-      enabledHarnesses: ["grok", "claude-code", "codex"],
+      enabledHarnesses: ["grok", "claude-code", "codex", "pi"],
       connections: [
         api("primary", ["qwen-plus", "deepseek-chat"]),
         api("secondary", ["qwen-plus"]),
@@ -210,79 +210,67 @@ try {
       )
       .locator(".item-label > span")
       .allTextContents();
-  const allPermissions = [
-    "Read-only",
-    "Request approval",
-    "Automatic review",
-    "Full access",
-  ];
+  const hostPermissionLabels = ["Read-only", "Approve inline edits"];
   await hostPermissions.click();
-  assert.deepEqual(await permissionLabels(), allPermissions);
-  assert.deepEqual(await permissionLabels(true), ["Read-only"]);
+  assert.deepEqual(await permissionLabels(), hostPermissionLabels);
+  assert((await permissionLabels(true)).includes("Read-only"));
   await page.keyboard.press("Escape");
-  const modelMenu = () =>
-    page.getByRole("button", { name: "Choose model", exact: true }).click();
-  await modelMenu();
-  await page.getByRole("button", { name: /^Qwen 2$/ }).waitFor();
-  assert(await page.getByRole("button", { name: /^DeepSeek 1$/ }).count());
-  await page.getByRole("button", { name: /^xAI 1$/ }).waitFor();
-  await page.getByRole("button", { name: /^Qwen 2$/ }).click();
-  const save = () =>
-    page.waitForResponse(
-      (r) =>
-        r.url().endsWith(`/host/runtime`) && r.request().method() === "PUT",
-    );
-  const saved = await Promise.all([
-    save(),
-    page
-      .getByRole("button", { name: /qwen-plus · secondary connection/ })
-      .click(),
-  ]);
-  assert.equal(saved[0].status(), 200, await saved[0].text());
-  const hostConfig = async () =>
-    (await request("/product")).executions[team.id].host.config;
-  let selectedConfig = await hostConfig();
-  assert.equal(selectedConfig.harness, "grok");
-  assert.equal(selectedConfig.provider, "secondary connection");
-  assert.equal(selectedConfig.credentialEnv, "TEST_SECONDARY");
-  assert.equal(selectedConfig.protocol, "chat-completions");
-  await page
-    .getByRole("button", { name: "Choose harness", exact: true })
-    .click();
-  const switched = await Promise.all([
-    save(),
-    page.getByRole("button", { name: "Claude Code", exact: true }).click(),
-  ]);
-  assert.equal(switched[0].status(), 200, await switched[0].text());
-  selectedConfig = await hostConfig();
-  assert.equal(selectedConfig.model, "qwen-plus");
-  assert.equal(selectedConfig.protocol, "anthropic-messages");
-  assert.equal(selectedConfig.baseUrl, "https://secondary.example/anthropic");
-  await hostPermissions.click();
-  assert.deepEqual(await permissionLabels(), allPermissions);
-  assert.deepEqual(await permissionLabels(true), allPermissions);
   assert.equal(
     await page
-      .getByText("Uses this Harness's native settings", { exact: true })
+      .getByRole("button", { name: "Choose harness", exact: true })
       .count(),
     0,
   );
+  const modelMenu = () =>
+    page.getByRole("button", { name: "Choose model", exact: true }).click();
+  const picker = page.locator(".model-picker-popover");
+  const primaryModel = picker
+    .getByRole("button", { name: /qwen-plus.*primary connection/ })
+    .filter({ hasText: /· primary connection/ });
+  const secondaryModel = picker.getByRole("button", {
+    name: /qwen-plus.*secondary connection/,
+  });
+  const enterProvider = (name) =>
+    picker.getByRole("button", { name: new RegExp(`^${name} \\d+$`) }).click();
+  const backToProviders = () =>
+    picker
+      .getByRole("button", { name: "Back to providers", exact: true })
+      .click();
+  await modelMenu();
+  await enterProvider("DeepSeek");
+  await picker
+    .getByRole("button", { name: /deepseek-chat.*primary connection/ })
+    .waitFor();
+  await backToProviders();
+  await enterProvider("xAI");
+  await picker.getByRole("button", { name: /grok fixture/ }).waitFor();
+  await backToProviders();
+  await enterProvider("Qwen");
+  await primaryModel.waitFor();
+  const save = () =>
+    page.waitForResponse(
+      (r) =>
+        r.url().endsWith("/host/runtime") && r.request().method() === "PUT",
+    );
+  const saved = await Promise.all([save(), secondaryModel.click()]);
+  assert.equal(saved[0].status(), 200, await saved[0].text());
+  const hostConfig = async () =>
+    (await request("/product")).executions[team.id].host.config;
+  const selectedConfig = await hostConfig();
+  assert.equal(selectedConfig.model, "qwen-plus");
+  assert.equal(selectedConfig.harness, "pi");
+  assert.equal(selectedConfig.provider, "secondary connection");
+  assert.equal(selectedConfig.credentialEnv, "TEST_SECONDARY");
+  assert.equal(selectedConfig.protocol, "chat-completions");
+  assert.equal(selectedConfig.baseUrl, "https://secondary.example/v1");
+  await hostPermissions.click();
+  assert.deepEqual(await permissionLabels(), hostPermissionLabels);
   await page.keyboard.press("Escape");
   await page.reload();
   await modelMenu();
-  await page.getByRole("button", { name: /^Qwen 2$/ }).click();
-  assert.equal(
-    await page
-      .getByRole("button", { name: /qwen-plus · secondary connection/ })
-      .getAttribute("aria-pressed"),
-    "true",
-  );
-  assert.equal(
-    await page
-      .getByRole("button", { name: /qwen-plus · primary connection/ })
-      .getAttribute("aria-pressed"),
-    "false",
-  );
+  await enterProvider("Qwen");
+  assert.equal(await secondaryModel.getAttribute("aria-pressed"), "true");
+  assert.equal(await primaryModel.getAttribute("aria-pressed"), "false");
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
   // Reopening warmed menus must neither recheck native Harnesses nor move the
@@ -290,12 +278,7 @@ try {
   await page.waitForTimeout(250);
   const warmedRequests = catalogRequests;
   const menuGeometry = [];
-  for (const name of [
-    "Choose harness",
-    "Choose model",
-    "Choose effort",
-    "Choose model",
-  ]) {
+  for (const name of ["Choose model", "Choose effort", "Choose model"]) {
     const selector =
       name === "Choose model" ? ".model-picker-popover" : ".runtime-popover";
     await page.keyboard.press("Escape");
@@ -341,18 +324,6 @@ try {
       0,
     );
     menuGeometry.push({ name, rect: samples.at(-1) });
-    if (name === "Choose harness") {
-      assert.equal(
-        await page
-          .locator(".runtime-popover > .menu-heading + .separator")
-          .count(),
-        1,
-      );
-      await page.screenshot({
-        path: path.join(root, "harness-menu.png"),
-        animations: "disabled",
-      });
-    }
     if (name === "Choose model")
       await page.screenshot({
         path: path.join(root, "model-menu.png"),
@@ -570,9 +541,9 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 50));
   assert(requests.length, "Local fixture did not receive the Host execution");
   assert.equal(requests[0].model, "qwen-plus");
-  assert.equal(requests[0].harness, "claude-code");
+  assert.equal(requests[0].harness, "pi");
   assert.equal(requests[0].credentialEnv, "TEST_SECONDARY");
-  assert.equal(requests[0].baseUrl, "https://secondary.example/anthropic");
+  assert.equal(requests[0].baseUrl, "https://secondary.example/v1");
   const contextRing = page.getByRole("button", {
     name: "Context window",
     exact: true,
@@ -582,7 +553,10 @@ try {
   await contextDetail
     .getByText("31% used (69% left)", { exact: true })
     .waitFor();
-  assert.match(await contextDetail.innerText(), /261k of 828k tokens used/);
+  assert.match(await contextDetail.innerText(), /38k of 123k tokens used/);
+  await contextDetail
+    .getByText("Next turn: 787k tokens available", { exact: true })
+    .waitFor();
   await page
     .locator(".context-details")
     .screenshot({ path: path.join(root, "context-window.png") });
@@ -643,25 +617,6 @@ try {
     .screenshot({ path: path.join(root, "context-window-zh.png") });
   await request("/product/preferences", { language: "en" }, "PATCH");
   await page.reload();
-  const chooseHarness = page.getByRole("button", {
-    name: "Choose harness",
-    exact: true,
-  });
-  const harnessMenu = page.getByRole("dialog", {
-    name: "Harness",
-    exact: true,
-  });
-  await chooseHarness.click();
-  await harnessMenu.getByRole("button", { name: "Claude Code" }).waitFor();
-  assert.equal(
-    await harnessMenu.getByRole("button", { name: "Pi" }).count(),
-    0,
-  );
-  await harnessMenu.getByRole("button", { name: "Team capabilities" }).click();
-  await page
-    .getByRole("dialog", { name: "Global capabilities", exact: true })
-    .waitFor();
-  await page.keyboard.press("Escape");
   await page
     .getByRole("button", {
       name: "Team options for Composer regression",
@@ -685,21 +640,22 @@ try {
   await teamCapabilities.getByText("Saved", { exact: true }).waitFor();
   await page.keyboard.press("Escape");
   await teamCapabilities.waitFor({ state: "hidden" });
-  await chooseHarness.click();
-  await harnessMenu
-    .getByText("The current Harness is disabled for this team.")
-    .waitFor();
-  await harnessMenu.getByRole("button", { name: "Codex" }).waitFor();
+  await modelMenu();
+  await enterProvider("OpenAI");
+  await picker.getByRole("button", { name: /codex fixture/ }).waitFor();
+  await backToProviders();
   assert.equal(
-    await harnessMenu.getByRole("button", { name: "Claude Code" }).count(),
+    await picker.getByRole("button", { name: /^Anthropic \d+$/ }).count(),
     0,
   );
-  assert.equal((await hostConfig()).harness, "claude-code");
+  assert.equal((await hostConfig()).harness, "pi");
   await page.reload();
-  await chooseHarness.click();
-  await harnessMenu.getByRole("button", { name: "Codex" }).waitFor();
+  await modelMenu();
+  await enterProvider("OpenAI");
+  await picker.getByRole("button", { name: /codex fixture/ }).waitFor();
+  await backToProviders();
   assert.equal(
-    await harnessMenu.getByRole("button", { name: "Claude Code" }).count(),
+    await picker.getByRole("button", { name: /^Anthropic \d+$/ }).count(),
     0,
   );
   const legacyTeam = await request("/product/teams", {
@@ -716,7 +672,34 @@ try {
     },
     "PUT",
   );
-  await page.goto(base + `/#/team/${legacyTeam.id}/agent`);
+  await request(
+    `/teams/${legacyTeam.id}/capabilities`,
+    {
+      expectedVersion: 0,
+      enabledHarnesses: ["codex", "grok", "claude-code"],
+      connections: [
+        ...["codex", "grok", "claude-code"].map((harness) => ({
+          id: harness,
+          name: harness === "grok" ? "Grok account" : harness,
+          enabled: true,
+          kind: "subscription",
+          subscriptionHarness: harness,
+          models: [],
+          endpoints: {},
+          credentialEnv: null,
+        })),
+      ],
+      preferences: {
+        priority: "balanced",
+        preferSubscription: true,
+        instructions: "",
+      },
+    },
+    "PUT",
+  );
+  await page.goto(
+    base + `/?fixture=isolated-catalog#/team/${legacyTeam.id}/agent`,
+  );
   await page
     .getByRole("heading", { name: "Legacy catalog regression", exact: true })
     .waitFor();
@@ -727,11 +710,21 @@ try {
     true,
   );
   await modelMenu();
-  await page.getByRole("button", { name: /^OpenAI 1$/ }).waitFor();
-  await page.getByRole("button", { name: /^Anthropic 1$/ }).waitFor();
-  await page.getByRole("button", { name: /^xAI 1$/ }).waitFor();
+  await enterProvider("OpenAI");
+  await picker.getByRole("button", { name: /codex fixture/ }).waitFor();
+  await backToProviders();
+  await enterProvider("Anthropic");
+  await picker.getByRole("button", { name: /claude-code fixture/ }).waitFor();
+  await backToProviders();
+  await enterProvider("xAI");
+  await picker.getByRole("button", { name: /grok fixture/ }).waitFor();
+  await backToProviders();
+  await picker
+    .getByRole("textbox", { name: "Search models" })
+    .fill("qwen-plus");
+  await picker.getByText("No matching models", { exact: true }).waitFor();
   assert.equal(
-    await page.getByRole("button", { name: /^Qwen/ }).count(),
+    await picker.getByRole("button", { name: /qwen-plus/ }).count(),
     0,
     "Another team's model connections leaked into this directory",
   );
@@ -985,10 +978,10 @@ try {
         capabilityGeometry,
         uiFonts,
         checks: [
-          "Grok cross-provider directory",
+          "Unified Host directory includes API and native sources",
           "Duplicate model connection identity",
           "Persist endpoint and credential",
-          "Harness protocol switch",
+          "Host route chooses the configured protocol without a Harness selector",
           "Reload selected connection",
           "1230/1024/760/390 layout",
           "Resolved configuration reaches local execution fixture",
@@ -1003,7 +996,7 @@ try {
           "Pasted image thumbnail, full preview, reload persistence and removal",
           "No default-model placeholder option",
           "Effort disabled until a specific model is selected",
-          "Member Harness, model and effort share Host menus and persist separately",
+          "Member Harness, model and effort remain separately configurable",
           "Member controls visible at 1440/1000/760/390 widths",
           "Member and file panes share the workspace at 1440/1100; graph returns and both unsaved editors survive pane changes",
         ],

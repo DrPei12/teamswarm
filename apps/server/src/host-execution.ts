@@ -6,7 +6,7 @@ import { redact } from "./runtime/redact.js";
 
 /** Read execution facts without writing synthetic assistant speech or changing ownership. */
 export function hostExecution(runtime: TeamRuntime, work: Work, run: Run, attempt?: Attempt): HostExecution {
-  const status = attempt?.status ?? work.status;
+  const status = attempt ? runtime.store.attemptWorkStatus(work, attempt) : work.status;
   const facts = attempt ? runtime.store.db.prepare(
     "SELECT type,data FROM runtime_events WHERE attempt_id=? AND type LIKE 'work.%' ORDER BY sequence",
   ).all(attempt.id).map(row => ({ type: String(row.type), data: JSON.parse(String(row.data)) })) : [];
@@ -17,15 +17,17 @@ export function hostExecution(runtime: TeamRuntime, work: Work, run: Run, attemp
   const last = typeof rawLast === "string" && rawLast ? rawLast : undefined;
   const error = stoppingError ?? last;
   const trouble = ["failed", "interrupted", "recovery_required", "rejected", "superseded"].includes(status);
+  const infrastructureFault = facts.find(f => f.type === "work.infra_blocked")?.data.cause as HostExecution["infrastructureFault"];
   return {
     workId: work.id,
-    ...(attempt ? { attemptId: attempt.id } : {}),
+    ...(attempt ? { attemptId: attempt.id, executionStatus: attempt.status } : {}),
     sourceMessageId: run.sourceMessageId,
     status,
     startedAt: attempt?.startedAt ?? work.updatedAt ?? work.createdAt,
     ...(attempt?.finishedAt ? { finishedAt: attempt.finishedAt } : {}),
     ...(trouble && error ? { error: redact(error, attempt?.config.credentialEnv ?? null) } : {}),
     ...(trouble && last && error !== last ? { detail: redact(last, attempt?.config.credentialEnv ?? null) } : {}),
+    ...(infrastructureFault ? { infrastructureFault } : {}),
   };
 }
 
@@ -59,7 +61,7 @@ export function projectHostExecutions(input: {
       const output = runtime.store.db.prepare(
         "SELECT data FROM runtime_events WHERE attempt_id=? AND type='execution.partial_output' ORDER BY sequence DESC LIMIT 1",
       ).get(attempt.id);
-      const text = output ? String(JSON.parse(String(output.data)).text ?? "") : items.filter(i => i.kind === "message" && i.phase !== "commentary").map(i => i.text).join("\n\n");
+      const text = output ? String(JSON.parse(String(output.data)).text ?? "") : items.filter(i => !i.nativeThreadId && i.kind === "message" && i.phase !== "commentary").map(i => i.text).join("\n\n");
       const deltas = !items.length && !text ? runtime.store.db.prepare(
         "SELECT data FROM runtime_events WHERE attempt_id=? AND type='message.delta' ORDER BY sequence",
       ).all(attempt.id).map(row => String(JSON.parse(String(row.data)).delta ?? "")).join("") : "";
@@ -72,7 +74,7 @@ export function projectHostExecutions(input: {
         createdAt: Date.parse(attempt.startedAt),
         pending: ["running", "stopping"].includes(attempt.status),
         execution,
-        activity: items.filter(i => i.kind !== "message" || i.phase === "commentary"),
+        activity: items.filter(i => !!i.nativeThreadId || i.kind !== "message" || i.phase === "commentary"),
       });
     }
     if (!work.attemptId) {
@@ -98,14 +100,16 @@ const clip = (value: string, limit: number) =>
 export function unfinishedHostTurns(runtime: TeamRuntime, run: Run, currentAttemptId: string, limit = 2) {
   const store = runtime.store;
   const hosts = new Set(store.list<Member>("members", run.teamId).filter(m => m.kind === "host").map(m => m.id));
-  const runs = new Map(store.list<Run>("runs", run.teamId).filter(r => r.conversationId === run.conversationId).map(r => [r.id, r]));
+  const activeMessages = new Set(store.db.prepare("SELECT id FROM messages WHERE conversation_id=? AND retired_by IS NULL").all(run.conversationId).map(row=>String(row.id)));
+  const runs = new Map(store.list<Run>("runs", run.teamId).filter(r => r.conversationId === run.conversationId && activeMessages.has(r.sourceMessageId)).map(r => [r.id, r]));
   const works = new Map(store.list<Work>("works", run.teamId)
     .filter(w => runs.has(w.runId) && hosts.has(w.memberId) && w.kind !== "host-followup" && w.kind !== "collaboration")
     .map(w => [w.id, w]));
   const attempts = store.list<Attempt>("attempts", run.teamId).filter(a => works.has(a.workId) && a.id !== currentAttemptId);
-  const replied = attempts.map(a => ["submitted", "accepted", "self_checked"].includes(a.status)).lastIndexOf(true);
+  const reply = store.db.prepare("SELECT 1 FROM messages WHERE conversation_id=? AND client_request_id=?");
+  const replied = attempts.map(a => !!reply.get(run.conversationId, `runtime:${a.id}`)).lastIndexOf(true);
   return attempts.slice(replied + 1)
-    .filter(a => ["failed", "interrupted", "recovery_required"].includes(a.status))
+    .filter(a => ["failed", "interrupted", "recovery_required"].includes(store.attemptWorkStatus(works.get(a.workId)!, a)))
     .slice(-limit)
     .map(attempt => {
       const work = works.get(attempt.workId)!, source = runs.get(work.runId)!;
@@ -115,7 +119,7 @@ export function unfinishedHostTurns(runtime: TeamRuntime, run: Run, currentAttem
         "SELECT data FROM runtime_events WHERE attempt_id=? AND type='execution.partial_output' ORDER BY sequence DESC LIMIT 1",
       ).get(attempt.id);
       const text = output ? String(JSON.parse(String(output.data)).text ?? "")
-        : items.filter(i => i.kind === "message").map(i => i.text).join("\n\n");
+        : items.filter(i => !i.nativeThreadId && i.kind === "message").map(i => i.text).join("\n\n");
       const commands = items.filter(i => i.kind === "command");
       const unsuccessful = (i: typeof commands[number]) => i.status !== "completed" || (i.exitCode != null && i.exitCode !== 0);
       const files = [...new Set(items.flatMap(i => i.changes?.map(c => c.path) ?? []))];

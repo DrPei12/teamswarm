@@ -37,9 +37,20 @@ const globals = globalThis as typeof globalThis & { [key]?: Set<string> };
 export const ownedRuntimeLocks = globals[key] ??= new Set<string>();
 
 export function processStartedAfterFile(identity: string | null, modifiedAt: number): boolean {
-  if (!identity?.startsWith("windows:")) return false;
-  const startedAt = Number(BigInt(identity.slice(8)) / 10_000n - 62_135_596_800_000n);
+  if (!Number.isFinite(modifiedAt) || !identity) return false;
+  let startedAt = Number.NaN;
+  const windows = /^windows:(\d{1,20})$/.exec(identity);
+  const darwin = /^darwin:(\d{1,12})\.(\d{6})$/.exec(identity);
+  if (windows) {
+    startedAt = Number(BigInt(windows[1]) / 10_000n - 62_135_596_800_000n);
+  } else if (darwin) {
+    startedAt = Number(darwin[1]) * 1000 + Number(darwin[2]) / 1000;
+  } else if (identity.startsWith("darwin:")) {
+    // Keep the identity used by existing lock files stable across an upgrade.
+    const legacy = /\b(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4}$/.exec(identity);
+    if (legacy) startedAt = Date.parse(legacy[0]);
+  }
   // Legacy locks have no creation identity. Only a clearly newer process is
   // positive evidence of PID reuse; unavailable/ambiguous evidence stays held.
-  return Number.isFinite(modifiedAt) && startedAt > modifiedAt + 1000;
+  return Number.isFinite(startedAt) && startedAt > modifiedAt + 1000;
 }

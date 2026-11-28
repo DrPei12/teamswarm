@@ -1225,8 +1225,9 @@ test("deleteResource is blocked only by live references and keeps terminal histo
       supersededEdge.id,
     );
 
-    // Ending the work makes it terminal history: its reference no longer locks the
-    // resource, while the frozen snapshot and the old selection stay untouched.
+    const executionDone = (runtime as any).active.get(work.id).done as Promise<void>;
+    release?.();
+    await executionDone;
     store.setStatus(store.get<Work>("works", team.id, work.id), "accepted");
     const deleted = deleteResource(deps, team.id, frozenEdge.id);
     assert.deepEqual(deleted, { id: frozenEdge.id, deleted: true });
@@ -1242,7 +1243,7 @@ test("deleteResource is blocked only by live references and keeps terminal histo
     assert.equal(keptAttempt.allocation?.selection?.resourceId, frozenEdge.id);
     assert.equal(keptAttempt.allocation?.selection?.resourceVersion, 1);
     assert.equal(keptAttempt.allocation?.config.access, "workspace-write");
-    assert.equal(keptAttempt.status, "accepted");
+    assert.equal(keptAttempt.status, "completed");
 
     const shutdown = runtime.close();
     release?.();

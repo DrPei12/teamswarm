@@ -561,8 +561,9 @@ test("large definitions remain fully retrievable through indexed pages and a cha
         app.team.id,
         first.attemptId!,
       ).status,
-      "submitted",
+      "completed",
     );
+    assert.equal(app.service.runtime.store.get<Work>("works", app.team.id, first.id).status, "submitted");
   } finally {
     await app.close();
   }
@@ -678,6 +679,8 @@ test("Host follow-ups retain source messages whose content differs from work ins
   try {
     const source = "Keep the report in JSON.";
     const work = await app.send(source);
+    // The source of this assignment has aged out of the latest five completed pairs.
+    for (let index = 0; index < 5; index++) await app.send(`Completed report discussion ${index}.`);
     const runtime = app.service.runtime;
     const run = runtime.store.get<any>("runs", app.team.id, work.runId);
     const attempt = runtime.store.get<Attempt>(
@@ -712,7 +715,7 @@ test("Host follow-ups retain source messages whose content differs from work ins
   }
 });
 
-test("Host follow-ups use available capacity beyond eight messages without rewriting conversation history", async () => {
+test("Host follow-ups do not treat unprocessed conversation messages as dialogue", async () => {
   const app = await setup();
   try {
     const work = await app.send("Generate the report.");
@@ -744,10 +747,14 @@ test("Host follow-ups use available capacity beyond eight messages without rewri
       undefined,
       { sourceMessageId: run.sourceMessageId },
     );
-    assert.ok(input.history.length > 8);
-    for (const message of messages.filter(m => m.content.startsWith("Report update")))
-      assert.ok(input.history.some((m: any) => m.id === message.id));
-    assert.equal(input.historyAccess.omittedMessages, messages.length - input.history.length);
+    assert.deepEqual(input.dialogueBridge.map((pair: any) => pair.user.id), [run.sourceMessageId]);
+    assert.deepEqual(input.history, []);
+    for (const message of messages.filter(m => m.content.startsWith("Report update"))) {
+      assert(!JSON.stringify(input.dialogueBridge).includes(message.id));
+      const original = runtime.hostContext.read(run, { kind: "messages", messageId: message.id, query: "", offset: 0, limit: 1 }) as any;
+      assert.equal(original.content, message.content);
+    }
+    assert.equal(input.historyAccess.omittedMessages, messages.length - input.history.length - input.dialogueBridge.length * 2);
     assert.deepEqual(
       app.service.store.getConversationDetail(app.team.id, app.chat.id)
         .messages,

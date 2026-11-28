@@ -2,14 +2,14 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 export const name = "teamswarm-native-observer";
-export async function apply(ctx: any, config: { permissionUrl: string }) {
+export async function apply(ctx: any, config: { permissionUrl: string; rootSessionId?: string }) {
   const inputs = new Map<string, unknown>();
   let sequence = 0;
   const sdk = await import(pathToFileURL(createRequire(process.argv[1]).resolve("@deepseek-ai/dsh-llm")).href);
   // Use DSH's public stream interceptor. Yield each original chunk unchanged so
   // native reconstruction, tool execution and cancellation remain authoritative.
   ctx.on("llm/stream", (options: any, next: () => AsyncIterable<any>) => {
-    if (!sdk.isAgentLoopRequest(options)) return next();
+    if (!sdk.isAgentLoopRequest(options) || config.rootSessionId && options.sessionId !== config.rootSessionId) return next();
     const id = `${options.sessionId ?? "session"}:${++sequence}`;
     const notify = (type: string, text?: string) => process.stdout.write(JSON.stringify({
       jsonrpc: "2.0", method: "teamswarm.transcript", params: { id, type, ...(text ? { text } : {}) },

@@ -5,6 +5,7 @@ import type {
   Work,
   Run,
   Attempt,
+  ModelRequestReceipt,
   ProjectNode,
   ProjectBranch,
   ProjectDocument,
@@ -14,7 +15,7 @@ import type {
 export type { ProjectNode, ProjectBranch, ProjectDocument } from "./runtime";
 import type { ResourceSelection } from "./allocation";
 export type TeamExecution = {
-  host?: { nextContextWindow?: ContextWindowPlan; config: ExecutionConfig; configurationVersion: number; runningConfig?: ExecutionConfig; permissionVersion: number; memberId: string; branchId: string; selection?: ResourceSelection | null; selectionCurrent?: boolean };
+  host?: { nextContextWindow?: ContextWindowPlan; config: ExecutionConfig; hostProbeConfig?: ExecutionConfig | null; configurationVersion: number; runningConfig?: ExecutionConfig; permissionVersion: number; memberId: string; branchId: string; selection?: ResourceSelection | null; selectionCurrent?: boolean };
   settings: RuntimeSettings | null;
   works: Work[];
   allocationTaskIds?: string[];
@@ -33,12 +34,14 @@ export type HostExecution = {
   attemptId?: string;
   sourceMessageId: string;
   status: Work["status"];
+  executionStatus?: Attempt["status"];
   startedAt: string;
   finishedAt?: string;
   /** Primary stop/failure cause, not a model-authored reply. */
   error?: string;
   /** Subsequent observation, for example confirmed process-tree termination. */
   detail?: string;
+  infrastructureFault?: ModelRequestReceipt["fault"];
 };
 export type Message = {
   id: string;
@@ -52,7 +55,7 @@ export type Message = {
   pending?: boolean;
   role?: "user" | "host";
   runtime?: RuntimeConfig;
-  references?: { id: string; kind: string; label: string }[];
+  references?: ComposerReference[];
   activity?: TranscriptItem[];
   execution?: HostExecution;
 };
@@ -63,6 +66,9 @@ export type Chat = {
   messages: Message[];
   /** Opaque record ID for fetching the next older message page. */
   historyBefore?: string;
+  historyHead?: string | null;
+  historyRevision?: string;
+  hasRevisions?: boolean;
   createdAt: number;
   starred: boolean;
   archived?: boolean;
@@ -105,6 +111,7 @@ export type Member = {
   /** Frozen configuration of the current Attempt, if one is executing. */
   runningExecutionConfig?: ExecutionConfig;
   configurationVersion?: number;
+  sessionLongevityMode?: SessionLongevityMode;
   sessionId?: string;
   x?: number;
   y?: number;
@@ -146,6 +153,9 @@ export type Exchange = {
 };
 export type TranscriptItem = {
   id: string;
+  nativeThreadId?: string;
+  parentThreadId?: string;
+  toolName?: string;
   kind: "message" | "reasoning" | "command" | "tool" | "file" | "status";
   text: string;
   title?: string;
@@ -155,6 +165,15 @@ export type TranscriptItem = {
   changes?: { path: string; kind: string; diff?: string }[];
   exitCode?: number | null;
   truncated?: boolean;
+};
+export type SessionLongevityMode = "standard" | "high-efficiency";
+export type SessionRotationSummary = {
+  generation: number;
+  reason: string;
+  previousAttemptId: string;
+  changedFileCount?: number;
+  checkCount?: number;
+  hotPaths?: string[];
 };
 export type ConversationEntry = {
   id: string;
@@ -167,6 +186,14 @@ export type ConversationEntry = {
   error?: string;
   /** Original failed delivery; retry reuses its existing work instead of resending. */
   retryWorkId?: string;
+  publication?: {
+    workId: string;
+    revision: number;
+    state: "pending" | "published" | "conflict" | "recovery_required" | "kept_current";
+    appliedPaths: string[];
+    error?: string;
+    keepCurrentAllowed?: boolean;
+  };
   deliveryHistory?: { id: string; createdAt: number; status: "failed" | "delivered"; error?: string }[];
   items?: TranscriptItem[];
   elapsedMs?: number;
@@ -177,11 +204,13 @@ export type ConversationEntry = {
   readByRecipient?: boolean;
   late?: boolean;
   runtime?: RuntimeConfig;
+  sessionRotation?: SessionRotationSummary;
 };
 export type MemberConversation = {
   workId?: string;
   memberId: string;
   entries: ConversationEntry[];
+  context?: ContextWindowUsage;
   canSend: boolean;
   before?: number;
   hasMore: boolean;
@@ -236,6 +265,9 @@ export type ContextWindowUsage = {
   limitSource?: "reported" | "configured" | "estimate";
   rawLimit?: number;
   nextLimit?: number;
+  sessionGeneration?: number;
+  sessionLongevityMode?: SessionLongevityMode;
+  compactionCount?: number;
 };
 export type Team = {
   independent?: boolean;
@@ -259,11 +291,12 @@ export type Skill = {
   name: string;
   instructions: string;
 };
+export type ComposerReference = { id: string; kind: string; label: string; revision?: number; generation?: number };
 export type Draft = {
   text: string;
   files: Attachment[];
   skillId?: string;
-  references?: { id: string; kind: string; label: string }[];
+  references?: ComposerReference[];
 };
 export type Workspace = {
   outputs?: import("./runtime").ProjectOutput[];
@@ -272,6 +305,8 @@ export type Workspace = {
   name: string;
   theme: "light" | "dark" | "system";
   contextWindowPreset?: ContextWindowPreset;
+  sendKey?: "enter" | "mod-enter";
+  codeWrap?: boolean;
   language: "en" | "zh-CN";
   teams: Team[];
   chats: Chat[];
@@ -284,7 +319,7 @@ export type Workspace = {
   updates?: Delivery[];
   plugins: Plugin[];
   eventIds?: string[];
-  service?: { revision: number; migrated: boolean; manualResourceConfiguration?: boolean };
+  service?: { revision: number; migrated: boolean; version?: string; build?: { commit: string; sourceSha256: string }; manualResourceConfiguration?: boolean };
   executions?: Record<string, TeamExecution>;
   projectNodes?: ProjectNode[];
   projectBranches?: ProjectBranch[];

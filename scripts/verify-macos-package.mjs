@@ -61,6 +61,8 @@ try {
       zipApp = app;
       run(process.execPath, ['scripts/smoke-service.mjs', product]);
       report.checks.packagedService = true;
+      run(path.join(product, 'runtime/node'), ['test/native/darwin-supervisor.mjs', product]);
+      report.checks.ownedProcessSupervision = true;
     } else {
       run('/usr/bin/hdiutil', ['detach', mount]);
       mounted = false;

@@ -20,7 +20,7 @@ import { stream as responses } from "@earendil-works/pi-ai/api/openai-responses"
 import { stream as completions } from "@earendil-works/pi-ai/api/openai-completions";
 import { stream as anthropic } from "@earendil-works/pi-ai/api/anthropic-messages";
 import type { ConnectionProtocol } from "@team/contracts/allocation";
-import type { ExecutionConfig, Harness, HarnessRequest, ModelRequestReceipt } from "./types.js";
+import type { ExecutionConfig, Harness, HarnessRequest, ModelRequestReceipt, NativeModelTurnProtocol, NativeScopeResolver, NativeToolScope } from "./types.js";
 import { isDeepStrictEqual } from "node:util";
 import { qwenTeamReview, usesTeamSwarmReview } from "./automatic-permission.js";
 import { teamReadTools } from "./harness/native-support.js";
@@ -28,6 +28,7 @@ import { antigravityWireModel, geminiEvent, geminiRequest } from "./gemini-wire.
 import { ChatGPTAccounts } from "./model-auth.js";
 import {
   decodeRequest,
+  flattenToolNamespaces,
   encodeResponse,
   WireStream,
   chatGPTPayload,
@@ -37,10 +38,44 @@ import {
   harnessProtocol,
   needsModelRoute,
   modelRouteIssues,
+  supportsPiSubspaces,
 } from "./model-routing.js";
-import { ModelMetadata } from "./model-metadata.js";
+import { ModelMetadataTree } from "./model-metadata.js";
+import { consumeModelTurn } from "./harness/model-turn.js";
+import { piProbeOutputTokens, piProbeRequestBytes } from "./harness/pi-probe-authority.js";
+import { piChildOutputTokens, piChildRequestBytes, piChildTools } from "./harness/pi-subspace-contract.js";
+import { openCodeReceiptArgument } from "./harness/opencode-probe-authority.js";
+import { findCompletionsFolds, findMessagesFolds } from "./tool-history.js";
+import { hash } from "./store.js";
 export { harnessProtocol, needsModelRoute } from "./model-routing.js";
 
+const nativeSessionHeaders: Record<string, string> = {
+  grok: "x-grok-session-id",
+  opencode: "x-opencode-session-id",
+  "deepseek-harness": "x-deepseek-harness-session-id",
+  "claude-code": "x-claude-code-session-id",
+  pi: "x-teamswarm-pi-actor",
+};
+
+function stripOpenCodeProbeReceipts(body: any) {
+  if (Array.isArray(body.tools)) for (const tool of body.tools) {
+    const parameters = tool?.function?.parameters;
+    if (parameters?.properties) delete parameters.properties[openCodeReceiptArgument];
+  }
+  if (Array.isArray(body.messages)) for (const message of body.messages) {
+    if (!Array.isArray(message?.tool_calls)) continue;
+    for (const call of message.tool_calls) {
+      const tool = call?.function;
+      if (typeof tool?.name !== "string" || !tool.name.startsWith("teamswarm_") ||
+          typeof tool.arguments !== "string" || !tool.arguments.includes(openCodeReceiptArgument)) continue;
+      const args = JSON.parse(tool.arguments);
+      if (args && typeof args === "object" && Object.hasOwn(args, openCodeReceiptArgument)) {
+        delete args[openCodeReceiptArgument];
+        tool.arguments = JSON.stringify(args);
+      }
+    }
+  }
+}
 const apis = {
   responses: "openai-responses",
   "chat-completions": "openai-completions",
@@ -112,21 +147,57 @@ function nativeConfig(
   };
 }
 type Route = {
+  id: string;
+  generation: number;
+  accepting: boolean;
+  drained: Promise<void>;
+  finishDrain: () => void;
   contextWindow?:ContextWindowPlan;
   config: ExecutionConfig;
   token: string;
   controllers: Set<AbortController>;
   active: number;
-  metadata: ModelMetadata;
+  metadata: ModelMetadataTree;
   sessionId?: string;
+  turnProtocol?: NativeModelTurnProtocol;
+  nativeTurnId?: string;
+  nativeSessionId?: string;
+  priorToolReads?: HarnessRequest["priorToolReads"];
+  onScope?: Parameters<NonNullable<NonNullable<HarnessRequest["modelRoute"]>["bindRequestScope"]>>[0];
+  beforeForward?: (scope: NativeToolScope) => void;
+  nativeScope?: NativeScopeResolver;
+  piSubspaces: boolean;
   onRequest?: (receipt: ModelRequestReceipt) => void;
-  onUsage?: (data:{inputTokens:number;outputTokens:number})=>void;
+  onUsage?: (data:{inputTokens:number;outputTokens:number} & Pick<ModelRequestReceipt, "nativeThreadId" | "nativeTurnId" | "nativeRootSessionId" | "parentThreadId">)=>void;
   onPermission?: HarnessRequest["onPermission"];
   approvedCalls: Map<string, { tool: string; input: unknown }>;
   teamReadTools: Set<string>;
+  antigravityInlineEditAllowed: boolean;
+  onReadOnlyToolDenied?: (tool: string) => void;
   qwenTools: Set<string>;
   declined: boolean;
 };
+interface ModelLease {
+  config: ExecutionConfig;
+  token: string;
+  valid(): boolean;
+  assertCurrent(): void;
+  permission(handler: HarnessRequest["onPermission"], tools?: HarnessRequest["tools"],
+    onReadOnlyToolDenied?: (tool: string) => void): void;
+  approved(id: string, tool: string, input: unknown): boolean;
+  declined(): boolean;
+  rejectGrant(id: string): boolean;
+  observeUsage(observer: NonNullable<Route["onUsage"]>): void;
+  observe(observer: NonNullable<Route["onRequest"]>): void;
+  bindRequestScope(handler: NonNullable<Route["onScope"]>): void;
+  bindBeforeForward(handler: NonNullable<Route["beforeForward"]>): void;
+  bindNativeSessionScope(resolver: NativeScopeResolver): void;
+  bindNativeTurn(turnId: string, nativeSessionId?: string): void;
+  bindPriorToolReads(read: HarnessRequest["priorToolReads"]): void;
+  acquire(): Promise<ModelLease>;
+  session(sessionId: string, workspace: string): void;
+  release(): Promise<void>;
+}
 function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
     const abort = () => reject(new Error("Model request cancelled."));
@@ -147,9 +218,12 @@ export class ModelGateway {
   private server?: Server;
   private opening?: Promise<string>;
   private routes = new Map<string, Route>();
+  private scopes = new Set<Route>();
+  private accountGenerations = new Map<string, number>();
+  private disconnecting = new Map<string, ReturnType<ChatGPTAccounts["signOut"]>>();
   private active = 0;
   private closed = false;
-  constructor(private readonly directory: string) {
+  constructor(private readonly directory: string, private readonly modelRequestLimit: () => number = () => 32) {
     this.accounts = new ChatGPTAccounts(directory);
   }
   state() {
@@ -178,15 +252,21 @@ export class ModelGateway {
       if (!final || final.stopReason === "length") throw new Error("Suggestion did not finish.");
       const text = final.content.filter(c => c.type === "text").map(c => c.text).join("");
       return { text, model: config.model!, usage: final.usage };
-    } finally { lease.release(); }
+    } finally { await lease.release(); }
   }
   async disconnect(accountId: string) {
-    for (const [id, route] of this.routes)
-      if (route.config.chatgptAccountId === accountId) {
-        this.routes.delete(id);
-        for (const controller of route.controllers) controller.abort();
-      }
-    return this.accounts.signOut(accountId);
+    const existing = this.disconnecting.get(accountId);
+    if (existing) return existing;
+    const operation = (async () => {
+      this.accountGenerations.set(accountId, (this.accountGenerations.get(accountId) ?? 0) + 1);
+      await Promise.all([...this.scopes]
+        .filter(route => route.config.chatgptAccountId === accountId)
+        .map(route => this.releaseRoute(route)));
+      return this.accounts.signOut(accountId);
+    })();
+    this.disconnecting.set(accountId, operation);
+    try { return await operation; }
+    finally { if (this.disconnecting.get(accountId) === operation) this.disconnecting.delete(accountId); }
   }
   private open() {
     if (this.closed) throw new Error("Model connection service is closing.");
@@ -204,65 +284,182 @@ export class ModelGateway {
       );
     }));
   }
-  async lease(config: ExecutionConfig, contextWindow?:ContextWindowPlan) {
+  private releaseRoute(route: Route): Promise<void> {
+    route.accepting = false;
+    if (this.routes.get(route.id) === route) this.routes.delete(route.id);
+    route.approvedCalls.clear();
+    for (const controller of route.controllers) controller.abort();
+    this.finishDrain(route);
+    return route.drained;
+  }
+  private finishDrain(route: Route): void {
+    if (route.accepting || route.active) return;
+    this.scopes.delete(route);
+    route.onScope = undefined;
+    route.beforeForward = undefined;
+    route.nativeScope = undefined;
+    route.onReadOnlyToolDenied = undefined;
+    route.finishDrain();
+  }
+  async lease(
+    config: ExecutionConfig,
+    contextWindow?: ContextWindowPlan,
+    turnProtocol?: NativeModelTurnProtocol,
+    piSubspaces = false,
+  ): Promise<ModelLease> {
+    if (piSubspaces && (turnProtocol || !supportsPiSubspaces(config)))
+      throw new Error("Isolated Pi work requires a supported DeepSeek Chat Completions route.");
     const base = await this.open(),
       id = randomUUID();
     if (this.closed) throw new Error("Model connection service is closing.");
-    const route: Route = {
-      config: structuredClone(config),
-      contextWindow,
-      token: randomBytes(32).toString("base64url"),
-      controllers: new Set(),
-      approvedCalls: new Map(),
-      teamReadTools: new Set(),
-      qwenTools: new Set(),
-      declined: false,
-      active: 0,
-      metadata: new ModelMetadata(),
+    const frozenConfig = structuredClone(config);
+    const frozenWindow = contextWindow
+      ? structuredClone(contextWindow)
+      : undefined;
+    const token = randomBytes(32).toString("base64url");
+    const accountGeneration = frozenConfig.chatgptAccountId
+      ? (this.accountGenerations.get(frozenConfig.chatgptAccountId) ?? 0)
+      : 0;
+    let generation = 0;
+    let current: Route;
+    let metadata = new ModelMetadataTree();
+    let sessionId: string | undefined;
+    const valid = () =>
+      !this.closed &&
+      (!frozenConfig.chatgptAccountId ||
+        !this.disconnecting.has(frozenConfig.chatgptAccountId) && (this.accountGenerations.get(frozenConfig.chatgptAccountId) ?? 0) ===
+          accountGeneration);
+    const create = (): ModelLease => {
+      if (!valid()) throw new Error("The model session authorization has ended.");
+      let finishDrain!: () => void;
+      const drained = new Promise<void>((resolve) => {
+        finishDrain = resolve;
+      });
+      const route: Route = {
+        id,
+        generation: ++generation,
+        accepting: true,
+        drained,
+        finishDrain,
+        config: frozenConfig,
+        piSubspaces,
+        turnProtocol,
+        contextWindow: frozenWindow,
+        token,
+        controllers: new Set(),
+        approvedCalls: new Map(),
+        teamReadTools: new Set(),
+        antigravityInlineEditAllowed: false,
+        qwenTools: new Set(),
+        declined: false,
+        active: 0,
+        metadata,
+        sessionId,
+      };
+      current = route;
+      this.routes.set(id, route);
+      this.scopes.add(route);
+      const configure = () => {
+        if (!valid() || !route.accepting || current !== route)
+          throw new Error("The model execution lease has ended.");
+      };
+      return {
+        config: nativeConfig(structuredClone(frozenConfig), `${base}/${id}/v1`),
+        token,
+        valid,
+        assertCurrent: configure,
+        permission: (
+          handler: HarnessRequest["onPermission"],
+          tools: HarnessRequest["tools"] = [],
+          onReadOnlyToolDenied?: (tool: string) => void,
+        ) => {
+          configure();
+          route.onPermission = handler;
+          route.antigravityInlineEditAllowed = route.config.harness === "antigravity" && route.config.access === "read-only" &&
+            tools.some(tool => tool.name === "team_host_inline_edit");
+          route.onReadOnlyToolDenied = onReadOnlyToolDenied;
+          route.teamReadTools = new Set(
+            tools
+              .filter((tool) => teamReadTools.has(tool.name) ||
+                route.config.harness === "antigravity" && ["team_skill_list", "team_skill_read"].includes(tool.name))
+              .map((tool) => "mcp_teamswarm_" + tool.name),
+          );
+          route.qwenTools = new Set(
+            tools
+              .filter(
+                (tool) =>
+                  teamReadTools.has(tool.name) ||
+                  ["team_write_file", "team_edit_file"].includes(tool.name),
+              )
+              .map((tool) => "mcp__teamswarm__" + tool.name),
+          );
+        },
+        approved: (id: string, tool: string, input: unknown) => {
+          if (!route.accepting || current !== route) return false;
+          const grant = route.approvedCalls.get(id);
+          if (
+            !grant ||
+            tool !== grant.tool ||
+            !isDeepStrictEqual(input, grant.input)
+          )
+            return false;
+          return route.approvedCalls.delete(id);
+        },
+        declined: () => route.declined,
+        rejectGrant: (id: string) => route.approvedCalls.delete(id),
+        observeUsage: (observer: NonNullable<Route["onUsage"]>) => {
+          configure();
+          route.onUsage = observer;
+        },
+        observe: (observer: (receipt: ModelRequestReceipt) => void) => {
+          configure();
+          route.onRequest = observer;
+        },
+        bindRequestScope: (handler: NonNullable<Route["onScope"]>) => {
+          configure();
+          route.onScope = handler;
+        },
+        bindBeforeForward: handler => { configure(); route.beforeForward = handler; },
+        bindNativeSessionScope: resolver => { configure(); route.nativeScope = resolver; },
+        bindNativeTurn: (turnId, nativeSessionId) => {
+          configure();
+          if (!route.turnProtocol || route.active || route.nativeTurnId) throw new Error("Model turn cannot be bound to this lease.");
+          route.nativeTurnId = turnId;
+          route.nativeSessionId = nativeSessionId;
+        },
+        bindPriorToolReads: read => {
+          configure();
+          route.priorToolReads = read;
+        },
+        acquire: async () => {
+          if (!valid())
+            throw new Error("The model session authorization has ended.");
+          if (route.accepting || current !== route)
+            throw new Error("Native model session is busy.");
+          await route.drained;
+          if (!valid())
+            throw new Error("The model session authorization has ended.");
+          if (current !== route || this.routes.has(id))
+            throw new Error("Native model session is busy.");
+          return create();
+        },
+        session: (nativeSessionId: string, workspace: string) => {
+          configure();
+          if (sessionId !== nativeSessionId) {
+            if (route.active)
+              throw new Error(
+                "Model session identity cannot change while requests are active.",
+              );
+            metadata = new ModelMetadataTree(this.directory, frozenConfig, nativeSessionId, workspace);
+            sessionId = nativeSessionId;
+            route.metadata = metadata;
+            route.sessionId = nativeSessionId;
+          }
+        },
+        release: () => this.releaseRoute(route),
+      };
     };
-    this.routes.set(id, route);
-    return {
-      config: nativeConfig(config, `${base}/${id}/v1`),
-      token: route.token,
-      permission: (handler: HarnessRequest["onPermission"], tools: HarnessRequest["tools"] = []) => {
-        route.onPermission = handler;
-        route.teamReadTools = new Set(tools.filter(tool => teamReadTools.has(tool.name)).map(tool => "mcp_teamswarm_" + tool.name));
-        route.qwenTools = new Set(tools.filter(tool => teamReadTools.has(tool.name) ||
-          ["team_write_file", "team_edit_file"].includes(tool.name)).map(tool => "mcp__teamswarm__" + tool.name));
-      },
-      approved: (id: string, tool: string, input: unknown) => {
-        const grant = route.approvedCalls.get(id);
-        if (!grant || tool !== grant.tool || !isDeepStrictEqual(input, grant.input)) return false;
-        return route.approvedCalls.delete(id);
-      },
-      declined: () => route.declined,
-      rejectGrant: (id: string) => route.approvedCalls.delete(id),
-      observeUsage: (observer: NonNullable<Route["onUsage"]>) => {route.onUsage=observer;},
-      observe: (observer: (receipt: ModelRequestReceipt) => void) => { route.onRequest = observer; },
-      acquire: () => {
-        if (this.closed) throw new Error("Model connection service is closing.");
-        if (this.routes.has(id)) throw new Error("Native model session is busy.");
-        this.routes.set(id, route);
-      },
-      session: (sessionId: string, workspace: string) => {
-        if (route.sessionId !== sessionId) {
-          route.metadata = new ModelMetadata(this.directory, [
-            config,
-            sessionId,
-            workspace,
-          ]);
-          route.sessionId = sessionId;
-        }
-      },
-      release: () => {
-        route.onRequest = undefined;
-        route.onUsage = undefined;
-        route.onPermission = undefined;
-        route.approvedCalls.clear();
-        this.routes.delete(id);
-        for (const controller of route.controllers) controller.abort();
-      },
-    };
+    return create();
   }
   private async key(config: ExecutionConfig) {
     if (config.chatgptAccountId)
@@ -277,6 +474,8 @@ export class ModelGateway {
       controller: AbortController | undefined,
       acquired = false,
       releaseMetadata: (() => void) | undefined;
+    const releaseScopedBodies: Array<() => void> = [];
+    let networkFailed = false;
     const sendError = (
       status: number,
       message: string,
@@ -313,7 +512,7 @@ export class ModelGateway {
           "",
       );
       if (
-        !route ||
+        !route || !route.accepting ||
         req.headers.origin ||
         Buffer.byteLength(auth) !== Buffer.byteLength(route.token) ||
         !timingSafeEqual(Buffer.from(auth), Buffer.from(route.token))
@@ -321,11 +520,43 @@ export class ModelGateway {
         sendError(403, "Model route unavailable.");
         return;
       }
+      const onRequest = route.onRequest;
+      const onUsage = route.onUsage;
+      const onPermission = route.onPermission;
+      const readTools = route.teamReadTools;
+      const qwenTools = route.qwenTools;
+      const metadata = route.metadata;
+      const onScope = route.onScope;
+      const beforeForward = route.beforeForward;
+      const nativeScope = route.nativeScope;
+      const nativeTurnId = route.nativeTurnId;
+      const nativeSessionId = route.nativeSessionId ?? route.sessionId;
+      const turnProtocol = route.turnProtocol;
+      const sessionId = route.sessionId;
+      const signedOpenCode = route.config.harness === "opencode" && (route.config.nativeReadProbes === true || !!nativeScope);
+      if (turnProtocol && !nativeTurnId) {
+        sendError(403, "There is no active native model turn.", "execution_scope_ended");
+        return;
+      }
+      const identity: Pick<ModelRequestReceipt, "nativeThreadId" | "nativeTurnId" | "nativeRootSessionId" | "parentThreadId"> = {};
+      if (route.config.harness === "codex") {
+        try {
+          const raw = req.headers["x-codex-turn-metadata"];
+          const native = typeof raw === "string" ? JSON.parse(raw) : undefined;
+          const identifier = (v: unknown): v is string => typeof v === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(v);
+          if (native?.session_id === route.sessionId && identifier(native.thread_id) && identifier(native.turn_id)) {
+            identity.nativeRootSessionId = native.session_id;
+            identity.nativeThreadId = native.thread_id;
+            identity.nativeTurnId = native.turn_id;
+            if (identifier(native.parent_thread_id)) identity.parentThreadId = native.parent_thread_id;
+          }
+        } catch { /* Missing native identity leaves the request at its session scope. */ }
+      }
       if (req.method !== "POST") {
         sendError(405, "Use POST.");
         return;
       }
-      if (this.active >= 32 || route.active >= 8) {
+      if (this.active >= this.modelRequestLimit() || route.active >= 8) {
         res.setHeader("retry-after", "1");
         sendError(
           429,
@@ -339,22 +570,112 @@ export class ModelGateway {
       acquired = true;
       controller = new AbortController();
       route.controllers.add(controller);
-      const signal = AbortSignal.any([
+      controller.signal.addEventListener("abort", () => {
+        if (!req.complete) req.destroy();
+      }, { once: true });
+      let signal = AbortSignal.any([
         controller.signal,
         AbortSignal.timeout(600000),
       ]);
+      const bindActorSignal = (actorSignal?: AbortSignal) => {
+        if (!actorSignal) return;
+        const abortBody = () => { if (!req.complete) req.destroy(); };
+        actorSignal.addEventListener("abort", abortBody, { once: true });
+        releaseScopedBodies.push(() => actorSignal.removeEventListener("abort", abortBody));
+        signal = AbortSignal.any([signal, actorSignal]);
+        if (actorSignal.aborted) abortBody();
+      };
       res.once("close", () => controller!.abort());
+      if ((route.config.nativeReadProbes || route.piSubspaces) && !nativeScope) {
+        sendError(403, "There is no active scoped native model route.", "execution_scope_ended");
+        return;
+      }
+      let piChildPaths: readonly string[] | undefined;
+      if (nativeScope) {
+        const header = nativeSessionHeaders[route.config.harness];
+        let actor = header && req.headers[header];
+        const parent = signedOpenCode ? req.headers["x-opencode-parent-session-id"] : undefined;
+        if (route.config.harness === "claude-code") {
+          if (!sessionId || actor !== sessionId) {
+            sendError(403, "The native model request does not belong to the active Claude session.", "execution_scope_ended");
+            return;
+          }
+          actor = req.headers["x-claude-code-agent-id"] ?? sessionId;
+        }
+        const scope = typeof actor === "string" && (parent === undefined || typeof parent === "string")
+          ? await nativeScope(actor, signal, parent) : undefined;
+        const expectedRoot = signedOpenCode ? parent ?? actor : sessionId;
+        if (!scope || !expectedRoot || scope.sessionId !== expectedRoot || !scope.threadId || !scope.turnId ||
+            (!route.piSubspaces && scope.threadId !== actor) ||
+            (route.piSubspaces && (scope.threadId === expectedRoot
+              ? scope.parentThreadId !== undefined || scope.piSubspacePaths !== undefined
+              : scope.parentThreadId !== expectedRoot || !scope.piSubspacePaths?.length)) ||
+            signedOpenCode && (scope.parentThreadId !== parent || parent === actor)) {
+          sendError(403, "The native model request does not belong to the active execution.", "execution_scope_ended");
+          return;
+        }
+        identity.nativeRootSessionId = scope.sessionId;
+        identity.nativeThreadId = scope.threadId;
+        identity.nativeTurnId = scope.turnId;
+        identity.parentThreadId = scope.parentThreadId;
+        if (route.piSubspaces) piChildPaths = scope.piSubspacePaths;
+        bindActorSignal(scope.signal);
+        signal.throwIfAborted();
+      }
+      if (onScope) {
+        const scope = await abortable(Promise.resolve(onScope({ sessionId: identity.nativeRootSessionId,
+          threadId: identity.nativeThreadId, turnId: identity.nativeTurnId, parentThreadId: identity.parentThreadId }, signal)), signal);
+        if (!scope || typeof scope === "object" && (scope.sessionId !== identity.nativeRootSessionId ||
+            scope.threadId !== identity.nativeThreadId || scope.turnId !== identity.nativeTurnId ||
+            scope.parentThreadId !== identity.parentThreadId)) {
+          sendError(403, "The native model request does not belong to the active execution.", "execution_scope_ended");
+          return;
+        }
+        if (typeof scope === "object") bindActorSignal(scope.signal);
+        signal.throwIfAborted();
+      }
       const chunks: Buffer[] = [];
+      const scopedReadProbe = !!identity.parentThreadId && !route.piSubspaces &&
+        (signedOpenCode || route.config.harness === "pi" || route.config.harness === "claude-code");
+      const inputLimit = piChildPaths ? piChildRequestBytes : scopedReadProbe ? piProbeRequestBytes : 8 * 1024 * 1024;
       let bytes = 0;
       for await (const chunk of req) {
         bytes += chunk.length;
-        if (bytes > 8 * 1024 * 1024) {
-          sendError(413, "Model input exceeds 8 MiB.");
+        if (bytes > inputLimit) {
+          sendError(413, piChildPaths ? "Pi child input exceeds 256 KiB." : scopedReadProbe ? "Read-only probe input exceeds 48 KiB." : "Model input exceeds 8 MiB.");
           return;
         }
         chunks.push(chunk);
       }
+      signal.throwIfAborted();
       const raw = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      let folds: ReturnType<typeof findMessagesFolds> | undefined;
+      if (nativeTurnId && turnProtocol) {
+        const header = nativeSessionHeaders[route.config.harness];
+        const matchesProtocol = turnProtocol === "messages" ? match?.[2].startsWith("messages") :
+          match?.[2] === "chat/completions";
+        const boundaries = matchesProtocol ? consumeModelTurn(raw?.messages, nativeTurnId, turnProtocol) : undefined;
+        const grokIndex = req.headers["x-grok-turn-idx"];
+        const correlatedTurn = turnProtocol !== "grok-chat-completions" ||
+          typeof grokIndex === "string" && /^[1-9][0-9]*$/.test(grokIndex);
+        if (!sessionId || !header || req.headers[header] !== nativeSessionId || !boundaries || !correlatedTurn) {
+          sendError(403, "The model request does not belong to the active native turn.", "execution_scope_ended");
+          return;
+        }
+        identity.nativeRootSessionId = sessionId;
+        identity.nativeThreadId = sessionId;
+        identity.nativeTurnId = nativeTurnId;
+        if (turnProtocol === "messages" && ["claude-code", "deepseek-harness"].includes(route.config.harness) && route.priorToolReads) {
+          const receipts = route.priorToolReads([...boundaries.values()].filter(turn => turn !== nativeTurnId));
+          if (receipts.length) folds = findMessagesFolds(raw.messages, boundaries, receipts);
+        }
+        const completionsHarness = turnProtocol === "chat-completions" && route.config.harness === "opencode" ? "opencode" :
+          turnProtocol === "grok-chat-completions" && route.config.harness === "grok" ? "grok" : undefined;
+        if (completionsHarness && route.priorToolReads) {
+          const receipts = route.priorToolReads([...boundaries.values()].filter(turn => turn !== nativeTurnId));
+          if (receipts.length) folds = findCompletionsFolds(raw.messages, boundaries, receipts, completionsHarness);
+        }
+      }
       const c = route.config;
       const qwenAuto = qwenTeamReview(c);
 
@@ -364,9 +685,10 @@ export class ModelGateway {
       }
       // agy may ask for a title through its own helper model. Reject that
       // separate model request rather than charging the selected connection.
-      const body = gemini ? geminiRequest(raw, c.model!, true) : raw;
+      let body = gemini ? geminiRequest(raw, c.model!, true) : raw;
+      if (signedOpenCode) stripOpenCodeProbeReceipts(body);
       if (qwenAuto && Array.isArray(body.tools)) {
-        const allowedTools = route.qwenTools;
+        const allowedTools = qwenTools;
         body.tools = body.tools.filter((tool: any) => {
           const name = tool.function?.name;
           return allowedTools.has(name) || name === "tool_search" || name === "tool_call";
@@ -386,9 +708,42 @@ export class ModelGateway {
           : "chat-completions";
       const source: ConnectionProtocol = c.chatgptAccountId ? "responses" : c.protocol ??
         (new URL(c.baseUrl!).pathname.startsWith("/anthropic") ? "anthropic-messages" : "chat-completions");
+      const scopedProbeTool = signedOpenCode ? "teamswarm_team_read_file" :
+        c.harness === "claude-code" ? "mcp__teamswarm__team_read_file" : "team_read_file";
+      if (scopedReadProbe && body.tools !== undefined && (!Array.isArray(body.tools) || body.tools.some((tool: any) =>
+        (tool?.function?.name ?? tool?.name) !== scopedProbeTool))) {
+        sendError(403, "The probe may only request its scoped file tool.", "permission_denied");
+        return;
+      }
+      if (route.piSubspaces && (wire !== "chat-completions" || source !== wire)) {
+        sendError(403, "Isolated Pi work uses the Chat Completions route.", "permission_denied");
+        return;
+      }
+      if (piChildPaths) {
+        const expected = piChildTools(piChildPaths);
+        if (!Array.isArray(body.tools) || body.tools.length !== expected.length || expected.some(spec =>
+            body.tools.filter((tool: any) => tool?.type === "function" && tool.function?.name === spec.name &&
+              isDeepStrictEqual(tool.function.parameters, spec.inputSchema)).length !== 1) ||
+            body.tool_choice !== undefined && !["auto", "none", "required"].includes(body.tool_choice)) {
+          sendError(403, "The Pi child may only request its assigned file and submission tools.", "permission_denied");
+          return;
+        }
+      }
+      const outputFields = ["max_tokens", "max_completion_tokens", "max_output_tokens"];
+      const scopedOutput = piChildPaths ? piChildOutputTokens : scopedReadProbe ? piProbeOutputTokens : undefined;
+      const boundedProbeOutput = scopedOutput ? Math.min(scopedOutput, c.maxOutputTokens ?? scopedOutput,
+        ...outputFields.map(key => body[key]).filter((value: unknown): value is number =>
+          typeof value === "number" && Number.isSafeInteger(value) && value > 0)) : undefined;
+      const applyProbeOutput = (payload: Record<string, unknown>) => {
+        if (boundedProbeOutput === undefined) return;
+        for (const key of outputFields) delete payload[key];
+        payload[source === "responses" ? "max_output_tokens" : "max_tokens"] = boundedProbeOutput;
+      };
       // Read the final serialized payload at the transport boundary. Never retain
       // prompts, tools, endpoints, account IDs, headers or credential material.
+      let foldedToolResults = 0;
       const observeRequest = (payload: any) => {
+        signal.throwIfAborted();
         const policy = apiEffortPolicy(c);
         const thinkingOff = !!policy && source === "anthropic-messages" && payload.thinking?.type === "disabled";
         const parameter = thinkingOff ? "thinking.type" : source === "responses" ? "reasoning.effort"
@@ -397,8 +752,10 @@ export class ModelGateway {
           : source === "chat-completions" ? payload.reasoning_effort : payload.output_config?.effort;
         const receipt: ModelRequestReceipt = {
           id: randomUUID(), at: new Date().toISOString(), source: "model_gateway",
+          routeGeneration: route!.generation, ...identity,
           harness: c.harness, nativeProtocol: gemini ? "gemini-generate-content" : wire, protocol: source,
           model: typeof payload.model === "string" ? payload.model : null,
+          ...(foldedToolResults ? { foldedToolResults } : {}),
           effort: typeof effort === "string" ? effort : null,
           effortParameter: typeof effort === "string" ? parameter : null,
           ...(policy ? {
@@ -408,9 +765,54 @@ export class ModelGateway {
           } : {}),
           status: "prepared",
         };
-        route!.onRequest?.(receipt);
-        return (response: Response) => route!.onRequest?.({ ...receipt,
-          status: response.ok ? "accepted" : "rejected", httpStatus: response.status });
+        onRequest?.(receipt);
+        return async (url: Parameters<typeof fetch>[0], init: RequestInit) => {
+          signal.throwIfAborted();
+          beforeForward?.({ sessionId: identity.nativeRootSessionId, threadId: identity.nativeThreadId,
+            turnId: identity.nativeTurnId, parentThreadId: identity.parentThreadId });
+          let response: Response;
+          try {
+            response = await fetch(url, { ...init, signal: init.signal ? AbortSignal.any([signal, init.signal]) : signal });
+          }
+          catch (error) {
+            const code = error instanceof Error && error.cause && typeof error.cause === "object" && "code" in error.cause
+              ? String(error.cause.code) : "";
+            if (!signal.aborted && /^(EAI_AGAIN|ECONNREFUSED|ECONNRESET|ENETUNREACH|ENOTFOUND|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET)$/.test(code)) {
+              networkFailed = true;
+              onRequest?.({ ...receipt, status: "rejected", fault: "provider_network" });
+            }
+            throw error;
+          }
+          signal.throwIfAborted();
+          const status = response.status;
+          const fault: ModelRequestReceipt["fault"] = status === 401 || status === 403 ? "provider_access"
+            : status === 402 ? "provider_quota"
+            : status === 429 ? "provider_rate_limit"
+            : status === 408 || status >= 500 ? "provider_unavailable" : undefined;
+          onRequest?.({ ...receipt, status: response.ok ? "accepted" : "rejected", httpStatus: status, ...(fault ? { fault } : {}) });
+          if (!response.ok || !response.body) return response;
+          const reader = response.body.getReader();
+          let cancelled = false;
+          const guarded = new ReadableStream<Uint8Array>({
+            async pull(output) {
+              let chunk: ReadableStreamReadResult<Uint8Array>;
+              try { chunk = await reader.read(); }
+              catch (error) {
+                if (!cancelled && !signal.aborted && !init.signal?.aborted) {
+                  networkFailed = true;
+                  onRequest?.({ ...receipt, status: "rejected", httpStatus: status, fault: "provider_network" });
+                }
+                if (!cancelled) output.error(error);
+                return;
+              }
+              if (cancelled) return;
+              if (chunk.done) output.close();
+              else output.enqueue(chunk.value);
+            },
+            cancel(reason) { cancelled = true; return reader.cancel(reason); },
+          });
+          return new Response(guarded, { headers: response.headers, status, statusText: response.statusText });
+        };
       };
       if (match?.[2] === "messages/count_tokens") {
         // Claude uses this optional endpoint for context budgeting. Do not invent token counts.
@@ -435,6 +837,15 @@ export class ModelGateway {
         res.write(chunk);
       };
       if (!gemini && !qwenAuto && source === wire && (!c.chatgptAccountId || body.stream === true)) {
+        for (const fold of folds?.values() ?? []) {
+          if (wire === "chat-completions") body.messages[fold.message].content = fold.text;
+          else {
+            const output = body.messages[fold.message].content[fold.block];
+            if (typeof output.content === "string") output.content = fold.text;
+            else output.content[0].text = fold.text;
+          }
+          foldedToolResults++;
+        }
         const suffix =
           wire === "responses"
             ? "/responses"
@@ -464,8 +875,8 @@ export class ModelGateway {
           chatGPTPayload(payload);
         }
         applyProviderEffort(payload, c, source);
-        const accepted = observeRequest(payload);
-        const upstream = await fetch(url, {
+        applyProbeOutput(payload);
+        const upstream = await observeRequest(payload)(url, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -477,7 +888,6 @@ export class ModelGateway {
           signal,
           redirect: "error",
         });
-        accepted(upstream);
         if (!upstream.ok) {
           const data = await errorBody(upstream);
           sendError(
@@ -507,6 +917,8 @@ export class ModelGateway {
         res.end();
         return;
       }
+      const flattened = wire === "responses" ? flattenToolNamespaces(body) : undefined;
+      if (flattened) body = flattened.body;
       const model: Model<any> = {
         id: c.model!,
         name: c.model!,
@@ -520,19 +932,35 @@ export class ModelGateway {
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: route.contextWindow?.rawTokens ?? c.contextWindowTokens ?? 128000,
-        maxTokens: c.maxOutputTokens ?? 32768,
+        maxTokens: boundedProbeOutput ?? c.maxOutputTokens ?? 32768,
       };
       const decoded = decodeRequest(wire, body, model);
-      const journal = route.metadata.restore(decoded);
+      const byOrdinal = new Map([...folds?.entries() ?? []].map(([toolId, fold]) => [fold.ordinal, { ...fold, toolId }]));
+      // Metadata replay may restore provider call IDs. Check the native IDs
+      // from the original decoded payload, before that restoration.
+      const nativeIds = byOrdinal.size ? decoded.messages.flatMap(message =>
+        message.role === "toolResult" ? [message.toolCallId] : []) : [];
+      const journal = metadata.restore(decoded, identity);
       releaseMetadata = journal.release;
-      const context = normalizeContext(decoded);
+      let toolOrdinal = 0;
+      const messages = byOrdinal.size ? decoded.messages.map(message => {
+        if (message.role !== "toolResult") return message;
+        const ordinal = toolOrdinal++;
+        const fold = byOrdinal.get(ordinal);
+        const text = message.content[0];
+        if (!fold || fold.toolId !== nativeIds[ordinal] || message.isError || message.content.length !== 1 ||
+            text?.type !== "text" || hash(text.text) !== fold.sha256) return message;
+        foldedToolResults++;
+        return { ...message, content: [{ ...text, text: fold.text }] };
+      }) : decoded.messages;
+      const context = normalizeContext({ ...decoded, messages });
       const options: StreamOptions & Record<string, any> = {
         apiKey,
         signal,
         maxRetries: 0,
         timeoutMs: 600000,
         maxTokens:
-          c.maxOutputTokens ??
+          boundedProbeOutput ?? c.maxOutputTokens ??
           body.max_tokens ??
           body.max_output_tokens ??
           32768,
@@ -582,6 +1010,7 @@ export class ModelGateway {
           }
           requestOptions(source, body, payload);
           applyProviderEffort(payload, c, source);
+          applyProbeOutput(payload);
           return c.chatgptAccountId ? chatGPTPayload(payload) : payload;
         },
       };
@@ -591,9 +1020,7 @@ export class ModelGateway {
         { status: number; body: unknown; requestId: string | null } | undefined;
       let upstreamId: string | null = null;
       options.fetch = async (input: any, init: any) => {
-        const accepted = observeRequest(JSON.parse(init.body));
-        const response = await fetch(input, { ...init, redirect: "error" });
-        accepted(response);
+        const response = await observeRequest(JSON.parse(init.body))(input, { ...init, redirect: "error" });
         upstreamStatus = response.status;
         upstreamId = response.headers.get("x-request-id");
         if (!response.ok) {
@@ -642,10 +1069,11 @@ export class ModelGateway {
           .filter((t: any) => t.type === "custom")
           .map((t: any) => t.name),
       );
-      const encoder = new WireStream(wire, write, custom);
+      const encoder = new WireStream(wire, write, custom, flattened?.namespaces);
       let final: AssistantMessage | undefined;
       const qwenCalls: Extract<AssistantMessageEvent, { type: "toolcall_end" }>[] = [];
       for await (const event of stream) {
+        signal.throwIfAborted();
         if (event.type === "error") {
           const detail = (
             event.error.errorMessage ?? `Model stream failed. ${upstreamCode}`
@@ -653,7 +1081,7 @@ export class ModelGateway {
           const code =
             detail.match(
               /\b(subscription_sharing_[a-z_]+|chatpass_v2_[a-z_]+)\b/,
-            )?.[1] ?? upstreamCode;
+            )?.[1] ?? (networkFailed ? "upstream_network" : upstreamCode);
           sendError(
             upstreamStatus >= 400 ? upstreamStatus : 502,
             detail,
@@ -671,13 +1099,13 @@ export class ModelGateway {
         }
         if (qwenAuto && event.type === "toolcall_end") {
           const call = event.toolCall;
-          const allowed = route.qwenTools.has(call.name) || call.name === "tool_search" ||
-            call.name === "tool_call" && typeof call.arguments.name === "string" && route.qwenTools.has(call.arguments.name);
+          const allowed = qwenTools.has(call.name) || call.name === "tool_search" ||
+            call.name === "tool_call" && typeof call.arguments.name === "string" && qwenTools.has(call.arguments.name);
           if (!allowed) {
-            await route.onPermission?.({
+            await abortable(Promise.resolve(onPermission?.({
               nativeId: call.id, tool: "qwen_native_tool",
               input: { name: call.name === "tool_call" ? call.arguments.name : call.name },
-            }, signal);
+            }, signal)), signal);
             route.declined = true;
             sendError(403, "The requested operation was declined.", "permission_denied");
             return;
@@ -685,6 +1113,8 @@ export class ModelGateway {
           qwenCalls.push(event);
         }
         if (qwenAuto && (event.type === "toolcall_start" || event.type === "toolcall_delta" || event.type === "toolcall_end")) continue;
+        if (["toolcall_end", "text_end", "thinking_end"].includes(event.type) && "contentIndex" in event)
+          journal.record({ ...event.partial, content: event.partial.content.slice(0, event.contentIndex + 1) });
         if (event.type === "done") journal.record(event.message);
         if (body.stream) {
           if (!res.headersSent)
@@ -703,17 +1133,19 @@ export class ModelGateway {
           if (gemini) {
             if (event.type === "toolcall_end") {
               const call = event.toolCall;
-              const teamRead = route.teamReadTools.has(call.name);
-              if (c.access === "read-only" && call.name !== "read_file" && !teamRead) {
+              const teamRead = readTools.has(call.name);
+              const teamInlineEdit = route.antigravityInlineEditAllowed && call.name === "mcp_teamswarm_team_host_inline_edit";
+              if (c.access === "read-only" && call.name !== "read_file" && !teamRead && !teamInlineEdit) {
                 route.declined = true;
+                if (/^[a-zA-Z0-9_]{1,128}$/.test(call.name)) route.onReadOnlyToolDenied?.(call.name);
                 sendError(403, "This operation requires write access.", "permission_denied");
                 return;
               }
               if (!teamRead && c.access !== "read-only" &&
                 (usesTeamSwarmReview(c) || c.permissions?.mode === "default" && call.name !== "read_file")) {
-                const decision = await route.onPermission?.({
+                const decision = await abortable(Promise.resolve(onPermission?.({
                   nativeId: call.id, tool: call.name, input: call.arguments, reason: "Antigravity tool request",
-                }, signal);
+                }, signal)), signal);
                 if (decision !== "allow" || signal.aborted) {
                   if (!signal.aborted) {
                     route.declined = true;
@@ -722,7 +1154,7 @@ export class ModelGateway {
                   return;
                 }
                 route.approvedCalls.set(call.id, { tool: call.name, input: call.arguments });
-              } else if (teamRead) {
+              } else if (teamRead || teamInlineEdit) {
                 route.approvedCalls.set(call.id, { tool: call.name, input: call.arguments });
               }
             }
@@ -734,21 +1166,23 @@ export class ModelGateway {
       }
       if (!final) throw new Error("The model stream ended before completion.");
       const inputTokens=final.usage.input+final.usage.cacheRead+final.usage.cacheWrite;
-      if(Number.isFinite(inputTokens)&&inputTokens>0)route.onUsage?.({inputTokens,outputTokens:final.usage.output});
+      if(Number.isFinite(inputTokens)&&inputTokens>0)onUsage?.({inputTokens,outputTokens:final.usage.output,...identity});
       if (!body.stream) {
         res.writeHead(200, {
           "content-type": "application/json",
           "cache-control": "no-store",
         });
-        write(JSON.stringify(encodeResponse(wire, final, undefined, custom)));
+        write(JSON.stringify(encodeResponse(wire, final, undefined, custom, flattened?.namespaces)));
       }
       res.end();
     } catch (error) {
       sendError(
-        400,
-        error instanceof Error ? error.message : "Model connection failed.",
+        networkFailed ? 502 : 400,
+        networkFailed ? "Model provider connection failed." : error instanceof Error ? error.message : "Model connection failed.",
+        networkFailed ? "upstream_network" : undefined,
       );
     } finally {
+      for (const release of releaseScopedBodies) release();
       releaseMetadata?.();
       if (controller) {
         controller.abort();
@@ -757,6 +1191,7 @@ export class ModelGateway {
       if (acquired) {
         this.active--;
         route!.active--;
+        this.finishDrain(route!);
       }
     }
   }
@@ -815,19 +1250,35 @@ export class ModelGateway {
           };
         if (key === "execute")
           return async (request: HarnessRequest) => {
-            if (!needsModelRoute(request.config))
+            const required = needsModelRoute(request.config);
+            if (request.piSubspaces && !supportsPiSubspaces(request.config))
+              throw new Error("Isolated Pi work requires a supported DeepSeek Chat Completions route.");
+            const eligibleGrokConnection = target.id === "grok" && !!request.config.baseUrl;
+            const turnScope = required || eligibleGrokConnection ? target.retainModelEndpoint?.(request) : undefined;
+            if (!required && !turnScope)
               return target.execute(request);
-            const reusable = target.id === "codex" && !request.verificationDirectory;
+            const reusable = target.id === "codex" && !request.verificationDirectory || !!turnScope;
             const binding = JSON.stringify([request.workspace, request.config, windowBinding(request.contextWindow)]);
-            const previous = reusable && request.sessionId ? sessions.get(request.sessionId) : undefined;
+            let previous = reusable && request.sessionId ? sessions.get(request.sessionId) : undefined;
+            if (previous && !previous.lease.valid()) {
+              sessions.delete(request.sessionId!);
+              request = { ...request, sessionId: undefined, input: request.onContextRebuild?.() ?? request.input };
+              previous = undefined;
+            }
             if (previous && previous.binding !== binding)
               throw new Error("Session configuration or workspace changed.");
-            const lease = previous?.lease ?? await gateway.lease(request.config,request.contextWindow);
-            if (previous) lease.acquire();
-            lease.permission(request.onPermission, target.id === "antigravity" || qwenTeamReview(request.config) ? request.tools : []);
-            lease.observeUsage(data => request.onEvent({type:"context.usage",data}));
-            lease.observe(receipt => request.onEvent({ type: "model.request", data: { ...receipt } }));
+            const lease = previous ? await previous.lease.acquire() : await gateway.lease(request.config, request.contextWindow, turnScope, !!request.piSubspaces);
+            if (request.priorToolReads) lease.bindPriorToolReads(request.priorToolReads);
+            if (target.id === "codex") lease.bindRequestScope(() => false);
+            if (target.id === "opencode" && request.signedRootReview) lease.bindNativeSessionScope(async () => undefined);
+            if (previous && request.sessionId) sessions.set(request.sessionId, { ...previous, lease });
+            lease.permission(request.onPermission, target.id === "antigravity" || qwenTeamReview(request.config) ? request.tools : [],
+              target.id === "antigravity" ? tool => request.onEvent({ type: "native.permission_denied", data: { tool, reason: "read-only" } }) : undefined);
+            const childRequest = (data: { nativeThreadId?: string; nativeRootSessionId?: string }) => !!data.nativeThreadId && data.nativeThreadId !== data.nativeRootSessionId;
+            lease.observeUsage(data => request.onEvent({type:childRequest(data)?"subagent.usage":"context.usage",data:{...data,source:"model_gateway"}}));
+            lease.observe(receipt => request.onEvent({ type: childRequest(receipt) ? "subagent.model.request" : "model.request", data: { ...receipt } }));
             let resourceId: unknown;
+            let nativeSessionId: string | undefined;
             if (request.sessionId)
               lease.session(request.sessionId, request.workspace);
             const config = ["claude-code", "deepseek-harness"].includes(
@@ -847,6 +1298,11 @@ export class ModelGateway {
                 await target.execute({
                   ...request,
                   config,
+                  ...(request.admitProcess ? { admitProcess: candidate => {
+                    // A CPU wait can outlive the route generation acquired for preparation.
+                    lease.assertCurrent();
+                    return request.admitProcess!(candidate);
+                  } } : {}),
                   onPermission: target.id === "antigravity" ? async (approval, signal) => {
                     if (signal?.aborted) return "deny";
                     if (lease.approved(approval.nativeId, approval.tool, approval.input)) return "allow";
@@ -861,6 +1317,11 @@ export class ModelGateway {
                   modelRoute: {
                     token: lease.token,
                     sourceConfig: request.config,
+                    bindRequestScope: handler => lease.bindRequestScope(handler),
+                    bindBeforeForward: handler => lease.bindBeforeForward(handler),
+                    bindNativeSessionScope: resolver => lease.bindNativeSessionScope(resolver),
+                    release: () => lease.release(),
+                    ...(turnScope ? { bindNativeTurn: (turn, nativeSession) => lease.bindNativeTurn(turn, nativeSession) } : {}),
                   },
                   onEvent: (event) => {
                     if (target.id === "antigravity" && event.type === "native.event") {
@@ -868,7 +1329,10 @@ export class ModelGateway {
                       if (update?.toolCallId && ["completed", "failed", "cancelled"].includes(update.status ?? ""))
                         lease.rejectGrant(update.toolCallId);
                     }
-                    if (event.type === "resource.acquired") resourceId = event.data.id;
+                    if (event.type === "resource.acquired") {
+                      resourceId = event.data.id;
+                      if (reusable && nativeSessionId) sessions.set(nativeSessionId, { binding, resourceId, lease });
+                    }
                     if (["resource.released", "resource.unconfirmed"].includes(event.type))
                       for (const [id, cached] of sessions)
                         if (cached.resourceId === event.data.id) sessions.delete(id);
@@ -876,6 +1340,7 @@ export class ModelGateway {
                   },
                   onSession: (id, actual) => {
                     lease.session(id, request.workspace);
+                    nativeSessionId = id;
                     if (reusable) {
                       if (request.sessionId && request.sessionId !== id) sessions.delete(request.sessionId);
                       sessions.set(id, {binding, resourceId, lease});
@@ -888,7 +1353,7 @@ export class ModelGateway {
                 ? { status: "failed", text: "", error: "The requested operation was declined." }
                 : result;
             } finally {
-              lease.release();
+              await lease.release();
             }
           };
         if (key === "close") return async () => {
@@ -901,8 +1366,7 @@ export class ModelGateway {
   }
   async close() {
     this.closed = true;
-    for (const route of this.routes.values())
-      for (const controller of route.controllers) controller.abort();
+    const draining = [...this.scopes].map(route => this.releaseRoute(route));
     this.routes.clear();
     await this.accounts.close();
     await this.opening?.catch(() => {});
@@ -910,5 +1374,6 @@ export class ModelGateway {
       this.server.closeAllConnections();
       await new Promise<void>((resolve) => this.server!.close(() => resolve()));
     }
+    await Promise.all(draining);
   }
 }

@@ -8,13 +8,17 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { badRequest, conflict, notFound } from "../errors.js";
+import { badRequest, conflict, notFound, ServiceError } from "../errors.js";
 import { RuntimeStore, activeStates, hash, overlaps } from "./store.js";
-import { WorkspaceAccess } from "./workspace-access.js";
+import { WorkspaceAccess, sameWorkspace, workspaceIdentity } from "./workspace-access.js";
+import { isConfirmedInsight, type MemoryGovernance } from "./memory-governance.js";
+import { applyFileWriteSet, canKeepCurrentPublication } from "./file-write-set.js";
 import type {
   ArtifactVersion,
   Member,
   ProjectInsight,
+  PublicationRetention,
+  PublicationRetentionPreview,
   ProjectOutput,
   ProjectOutputRevision,
   Run,
@@ -39,12 +43,14 @@ export const insightInput = z
 
 export const threadOf = (work: Work) => work.threadId ?? work.id;
 export const deliverable = (work: Work) =>
-  work.status === "accepted" ||
-  (work.status === "self_checked" && work.verification === "self-check");
+  work.publication?.state !== "kept_current" &&
+  (work.status === "accepted" ||
+    (work.status === "self_checked" && work.verification === "self-check"));
 
 /** Platform-owned records survive native session changes. Bodies and provenance stay separate. */
 export class CollaborationRecords {
-  constructor(readonly store: RuntimeStore) {
+  constructor(readonly store: RuntimeStore, private memory?: MemoryGovernance,
+    private assertWorkflowCurrent?: (work: Work) => void) {
     store.db.exec(`CREATE TABLE IF NOT EXISTS project_outputs (
       id TEXT PRIMARY KEY, team_id TEXT NOT NULL REFERENCES teams(id), data TEXT NOT NULL CHECK(json_valid(data)));
       CREATE INDEX IF NOT EXISTS outputs_team ON project_outputs(team_id);
@@ -59,7 +65,7 @@ export class CollaborationRecords {
     for (const team of store.teams.listTeams())
       for (const work of store.list<Work>("works", team.id))
         if (deliverable(work) && work.sourceSnapshotId && !work.reviewOf &&
-            (!work.publication || work.publication.state === "pending")) this.publishOutputs(work);
+            (!work.publication || ["pending", "recovery_required"].includes(work.publication.state))) this.publishOutputs(work);
   }
   private rows<T>(table: "outputs" | "insights", teamId: string): T[] {
     return this.store.db
@@ -99,13 +105,97 @@ export class CollaborationRecords {
   }
   bindOutputs(work: Work) {
     if (work.outputHeads) return;
+    work.outputHeads = this.outputHeads(work);
+    this.store.save("works", work);
+  }
+  outputHeads(work: Work) {
     const branch = this.store.history!.forRun(
       this.store.get<Run>("runs", work.teamId, work.runId),
     );
-    work.outputHeads = Object.fromEntries(
+    return Object.fromEntries(
       this.outputs(work.teamId, branch.id).map((o) => [o.path, o.current.id]),
     );
-    this.store.save("works", work);
+  }
+  integratedLineage(teamId: string) {
+    return this.store.db.prepare(`WITH RECURSIVE
+      members(id, data) AS (SELECT id, data FROM runtime_works WHERE team_id=?),
+      lineage(id) AS (
+        SELECT j.value FROM members w, json_each(w.data, '$.integratesWorkIds') j
+          WHERE json_extract(w.data, '$.publication.state')='published' OR
+            (coalesce(json_extract(w.data, '$.workspaceMode'),'shared')='shared' AND
+             (json_extract(w.data, '$.status')='accepted' OR
+              (json_extract(w.data, '$.status')='self_checked' AND json_extract(w.data, '$.verification')='self-check')) AND
+             EXISTS(SELECT 1 FROM project_outputs o WHERE o.team_id=? AND json_extract(o.data,'$.workId')=w.id))
+        UNION
+        SELECT json_extract(w.data, '$.continuationOf') FROM members w JOIN lineage l ON l.id=w.id
+          WHERE json_extract(w.data, '$.continuationOf') IS NOT NULL
+        UNION
+        SELECT w.id FROM members w, json_each(w.data,'$.supersededByWorkIds') j JOIN lineage l ON l.id=j.value
+      )
+      SELECT w.id, json_extract(w.data, '$.runId') AS run_id FROM members w JOIN lineage l ON l.id=w.id
+    `).all(teamId, teamId).map(row => ({ id: String(row.id), runId: String(row.run_id) }));
+  }
+  integrationFiles(work: Work, run: Run): ArtifactVersion[] {
+    const branch = this.store.history!.forRun(run);
+    const target = workspaceIdentity(run.settings.workspace);
+    const inputs = new Set(work.inputs);
+    const files: ArtifactVersion[] = [];
+    for (const id of new Set(work.integratesWorkIds)) {
+      const source = this.store.get<Work>("works", work.teamId, id);
+      const sourceRun = this.store.get<Run>("runs", work.teamId, source.runId);
+      if (source.integratesWorkIds?.length && source.publication?.state !== "published")
+        throw conflict("integration_pending", "Continue integration with the original source versions before consuming its output.");
+      if (!deliverable(source) || source.invalidatedByNodeId || source.supersededByWorkIds?.length ||
+          source.workspaceMode !== "isolated" || !source.sourceWorkspace || !source.attemptId ||
+          this.store.history!.forRun(sourceRun).id !== branch.id ||
+          !sameWorkspace(source.sourceWorkspaceIdentity ?? workspaceIdentity(source.sourceWorkspace), target) ||
+          !source.artifactIds.every(input => inputs.has(input)) || !work.dependsOn.includes(id))
+        throw conflict("integration_inputs", "Bind accepted source work, its exact artifact versions, and its dependency in the same project workspace.");
+      const artifacts = this.store.verifyFrozenArtifacts(source);
+      const sourceFiles = artifacts.filter(a => a.path !== "@result");
+      if (!sourceFiles.length)
+        throw conflict("integration_inputs", "Each integration source must contain project files.");
+      files.push(...sourceFiles);
+    }
+    return files;
+  }
+  integrationDelivers(integration: Work, source: Work, workspace: string) {
+    if (!deliverable(integration) || !integration.integratesWorkIds?.includes(source.id) ||
+        !source.artifactIds.every(id => integration.inputs.includes(id))) return false;
+    const outputPaths = this.store.currentArtifacts(source).filter(a => a.path !== "@result").map(a => a.path);
+    if (!outputPaths.length) return false;
+    if (integration.workspaceMode === "isolated") {
+      const publication = integration.publication;
+      if (publication?.state !== "published" || !publication.plan ||
+          !outputPaths.every(file => publication.appliedPaths.some(applied => WorkspaceAccess.overlaps(applied, file)))) return false;
+      try { return sameWorkspace(publication.plan.workspace, workspaceIdentity(workspace)); }
+      catch (error) {
+        if (["ENOENT", "ENOTDIR", "EACCES", "EPERM", "workspace_identity"].includes((error as { code?: string }).code ?? ""))
+          return false;
+        throw error;
+      }
+    }
+    if (this.store.workspace(integration) !== workspace) return false;
+    const revisions = this.rows<ProjectOutputRevision>("outputs", integration.teamId);
+    return outputPaths.every(file => revisions.some(r =>
+      r.workId === integration.id && integration.artifactIds.includes(r.artifactId) && WorkspaceAccess.overlaps(r.path, file)));
+  }
+  integrationComparison(work: Work, artifact: ArtifactVersion) {
+    if (work.workspaceMode !== "isolated" || !work.integratesWorkIds?.includes(artifact.workId) ||
+        !work.inputs.includes(artifact.id) || artifact.path === "@result")
+      return undefined;
+    const source = this.store.get<Work>("works", work.teamId, artifact.workId);
+    if (!source.sourceSnapshotId || !work.sourceSnapshotId)
+      throw conflict("integration_baseline", "Prepare both the source candidate and target workspace before comparing versions.");
+    const snapshots = this.store.history!.snapshots;
+    const planned = source.publication?.plan?.files.find(f => f.artifactId === artifact.id);
+    const base = planned ? planned.before :
+      Object.entries(source.sourceFileHeads ?? {}).find(([file]) => WorkspaceAccess.overlaps(file, artifact.path))?.[1] ??
+      snapshots.fileHash(source.sourceSnapshotId, artifact.path);
+    const current = snapshots.fileHash(work.sourceSnapshotId, artifact.path);
+    const candidate = artifact.sha256;
+    return { base, current, candidate, decision: current === candidate ? "converged" :
+      current === base ? "apply_candidate" : candidate === base ? "keep_current" : "resolve_conflict" };
   }
   publishOutputs(work: Work) {
     if (!deliverable(work)) return;
@@ -114,54 +204,172 @@ export class CollaborationRecords {
         this.store.afterCommit(() => this.publishWorkingCopy(this.store.get<Work>("works", work.teamId, work.id)));
       return;
     }
+    this.assertWorkflowCurrent?.(work);
     this.publishRevisions(work);
   }
-  private publishWorkingCopy(work: Work) {
-    if (work.publication?.state === "published" || work.publication?.state === "conflict") return;
+  recoverPublication(teamId: string, workId: string, expectedRevision: number) {
+    const work = this.store.get<Work>("works", teamId, workId);
+    if (work.revision !== expectedRevision) throw conflict("version_conflict", "The work changed. Open its current result before retrying publication.");
+    if (work.publication?.state === "published") return work;
+    if (!deliverable(work) || !work.publication || !["pending", "recovery_required"].includes(work.publication.state))
+      throw conflict("publication_state", "This publication cannot be resumed. Continue from the current project version.");
+    this.publishOutputs(work);
+    return this.store.get<Work>("works", teamId, workId);
+  }
+  private observePublicationRetention(work: Work) {
+    const publication = work.publication, plan = publication?.plan;
+    if (!publication || !plan || !canKeepCurrentPublication(publication) || !work.sourceWorkspace ||
+        work.reviewOf || activeStates.has(work.status) || ["queued", "waiting"].includes(work.status))
+      throw conflict("publication_state", "Only a stopped publication with a partially applied plan can keep the current files.");
     const branch = this.store.history!.forRun(this.store.get<Run>("runs", work.teamId, work.runId));
-    const priorApplied = work.publication?.appliedPaths ?? [];
-    work.publication = { state: "pending", artifactIds: [...work.artifactIds], appliedPaths: priorApplied };
-    this.store.save("works", work);
+    const assertRoot = () => {
+      let current: ReturnType<typeof workspaceIdentity>;
+      try { current = workspaceIdentity(work.sourceWorkspace!); }
+      catch (error) {
+        if (!(error instanceof ServiceError) && !["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+        throw conflict("publication_workspace_changed", "The original publication directory is unavailable.");
+      }
+      if (plan.branchId !== branch.id || !sameWorkspace(plan.workspace, current) ||
+          work.sourceWorkspaceIdentity && !sameWorkspace(work.sourceWorkspaceIdentity, current))
+        throw conflict("publication_workspace_changed", "The original publication directory changed.");
+      return current;
+    };
+    const root = assertRoot();
+    const plannedPaths = new Set(plan.files.map(file => file.path));
+    if (plan.candidateSnapshotId !== work.candidateSnapshotId || !plan.files.length || plannedPaths.size !== plan.files.length ||
+        !publication.appliedPaths.every(file => plannedPaths.has(file)) ||
+        publication.preparedPath && !plannedPaths.has(publication.preparedPath))
+      throw conflict("publication_candidate_changed", "The saved publication progress does not match its candidate plan.");
+    const access = new WorkspaceAccess(root.path, [], [this.store.teams.dataDir]);
+    const files = plan.files.map(file => {
+      try { return { path: file.path, sha256: access.readBytes(file.path).sha256 }; }
+      catch (error) {
+        if (!(error instanceof ServiceError) || error.code !== "file_missing") throw error;
+        return { path: file.path, sha256: null };
+      }
+    });
+    assertRoot();
+    const planSha256 = hash(JSON.stringify(plan));
+    const fingerprint = hash(JSON.stringify({ teamId: work.teamId, workId: work.id, revision: work.revision, planSha256,
+      appliedPaths: publication.appliedPaths, preparedPath: publication.preparedPath, files }));
+    return { plan, files, planSha256, fingerprint };
+  }
+  previewPublicationRetention(teamId: string, workId: string): PublicationRetentionPreview {
+    const work = this.store.get<Work>("works", teamId, workId);
+    const { plan, files, fingerprint } = this.observePublicationRetention(work);
+    return { workId, revision: work.revision, fingerprint, files: files.map(({ path, sha256 }, index) => ({ path,
+      version: sha256 === null ? "missing" : sha256 === plan.files[index].after ? "candidate" :
+        sha256 === plan.files[index].before ? "base" : "changed",
+    })) };
+  }
+  keepCurrentPublication(teamId: string, workId: string, expectedRevision: number, expectedFingerprint: string) {
+    return this.store.transaction(() => {
+      const work = this.store.get<Work>("works", teamId, workId);
+      if (work.publication?.state === "kept_current" && work.publication.retention?.fingerprint === expectedFingerprint &&
+          work.publication.retention.workRevision === expectedRevision) return work;
+      if (work.revision !== expectedRevision)
+        throw conflict("version_conflict", "The work changed. Review the current project files again.");
+      const { files, planSha256, fingerprint } = this.observePublicationRetention(work);
+      if (fingerprint !== expectedFingerprint)
+        throw conflict("publication_preview_changed", "The publication or its files changed. Review the current files again.");
+      const retention: PublicationRetention = { files, planSha256, fingerprint, workRevision: work.revision, keptAt: new Date().toISOString() };
+      work.publication!.retention = retention;
+      work.publication!.state = "kept_current";
+      work.revision++;
+      work.updatedAt = retention.keptAt;
+      this.store.save("works", work);
+      this.store.event(teamId, "work.publication_kept_current", { ...retention, actor: "user", candidateSnapshotId: work.candidateSnapshotId }, work);
+      return work;
+    });
+  }
+  private publishWorkingCopy(work: Work) {
+    if (work.publication && ["published", "conflict", "kept_current"].includes(work.publication.state)) return;
+    const run = this.store.get<Run>("runs", work.teamId, work.runId);
+    const branch = this.store.history!.forRun(run);
+    const publication = work.publication ??= { state: "pending", artifactIds: [...work.artifactIds], appliedPaths: [] };
     try {
-      const artifacts = this.store.verifyArtifacts(work).filter(a => a.path !== "@result");
-      const baseline = this.store.history!.snapshots.manifest(work.sourceSnapshotId!);
-      const expected = new Map(baseline.files.map(f => [process.platform === "win32" ? f.path.toLowerCase() : f.path, f.hash]));
-      for (const [file, value] of Object.entries(work.sourceFileHeads ?? {}))
-        expected.set(process.platform === "win32" ? file.toLowerCase() : file, value);
-      const access = new WorkspaceAccess(work.sourceWorkspace!, work.writePaths ?? artifacts.map(a => a.path),
+      this.assertWorkflowCurrent?.(work);
+      if (!this.store.history!.matchesDefinitionScope(work))
+        throw conflict("definition_scope_changed", "The selected definition changed before publication. Continue the candidate against the current definition.");
+      if (JSON.stringify(publication.artifactIds) !== JSON.stringify(work.artifactIds))
+        throw conflict("publication_candidate_changed", "The publication artifacts changed.");
+      const artifacts = new Map(this.store.currentArtifacts(work).filter(a => a.path !== "@result").map(a => [a.id, a]));
+      const root = workspaceIdentity(work.sourceWorkspace!);
+      if (work.sourceWorkspaceIdentity && !sameWorkspace(work.sourceWorkspaceIdentity, root))
+        throw conflict("publication_workspace_changed", "The project directory changed identity after preparing this work.");
+      if (work.integratesWorkIds?.length) {
+        const files = this.integrationFiles(work, run);
+        if (!files.every(source => [...artifacts.values()].some(a => WorkspaceAccess.overlaps(a.path, source.path))))
+          throw conflict("integration_files", "Submit the resolution for every source file.");
+      }
+      if (!publication.plan) {
+        if (!work.candidateSnapshotId) this.store.verifyArtifacts(work);
+        const snapshots = this.store.history!.snapshots;
+        const base = snapshots.manifest(work.sourceSnapshotId!);
+        const key = (file: string) => process.platform === "win32" ? file.toLowerCase() : file;
+        const expected = new Map(base.files.map(f => [key(f.path), f.hash]));
+        for (const [file, value] of Object.entries(work.sourceFileHeads ?? {})) expected.set(key(file), value);
+        const frozen = work.candidateSnapshotId ? snapshots.manifest(work.candidateSnapshotId) : undefined;
+        publication.plan = {
+          branchId: branch.id,
+          candidateSnapshotId: work.candidateSnapshotId,
+          workspace: root,
+          files: [...artifacts.values()].map(artifact => {
+            if (frozen && !frozen.files.some(entry => entry.path === artifact.path && entry.hash === artifact.sha256))
+              throw conflict("publication_candidate_changed", `The frozen candidate does not contain ${artifact.path}.`);
+            return { path: artifact.path, artifactId: artifact.id, before: expected.get(key(artifact.path)) ?? null,
+              after: artifact.sha256, outputHead: work.outputHeads?.[artifact.path] ?? null };
+          }),
+        };
+      }
+      const plan = publication.plan;
+      if (plan.branchId !== branch.id || !sameWorkspace(plan.workspace, root) || plan.candidateSnapshotId !== work.candidateSnapshotId)
+        throw conflict("publication_workspace_changed", "The publication target or candidate changed.");
+      const access = new WorkspaceAccess(root.path, work.writePaths ?? plan.files.map(f => f.path),
         [this.store.teams.dataDir], bytes => this.store.history!.snapshots.preserveFile(bytes));
       const outputs = this.outputs(work.teamId, branch.id);
-      // Validate the complete set before the first write. Never publish a stale
-      // candidate just because it happens to produce the same final bytes.
-      for (const artifact of artifacts) {
-        const current = outputs.find(o => o.path === artifact.path)?.current;
-        if (current?.artifactId !== artifact.id && (work.outputHeads?.[artifact.path] ?? null) !== (current?.id ?? null))
-          throw conflict("output_conflict", `The current result for ${artifact.path} changed. Continue from its current version before publishing.`);
-        const before = access.read(artifact.path).sha256;
-        const original = expected.get(process.platform === "win32" ? artifact.path.toLowerCase() : artifact.path) ?? null;
-        if (before !== original && before !== artifact.sha256)
-          throw conflict("file_changed", `Project file ${artifact.path} changed while this member was working. Its working copy has been preserved.`);
-      }
-      for (const artifact of artifacts) {
-        const original = expected.get(process.platform === "win32" ? artifact.path.toLowerCase() : artifact.path) ?? null;
-        if (access.read(artifact.path).sha256 !== artifact.sha256) access.write(artifact.path, artifact.content, original);
-        if (!work.publication.appliedPaths.includes(artifact.path)) work.publication.appliedPaths.push(artifact.path);
-        this.store.save("works", work);
-      }
+      const verified = plan.files.map(file => {
+        const artifact = artifacts.get(file.artifactId);
+        const current = outputs.find(output => output.path === file.path)?.current;
+        if ((current?.id ?? null) !== file.outputHead)
+          throw conflict("output_conflict", `The current result for ${file.path} changed. Continue from its current version before publishing.`);
+        if (!artifact || artifact.path !== file.path || artifact.sha256 !== file.after || hash(artifact.content) !== file.after)
+          throw conflict("artifact_corrupt", `The publication artifact failed verification: ${file.path}.`);
+        return { ...file, artifact };
+      });
+      publication.state = "pending";
+      delete publication.error;
+      this.store.save("works", work);
+      applyFileWriteSet(verified, publication, {
+        checkRoot: () => {
+          if (!sameWorkspace(workspaceIdentity(work.sourceWorkspace!), root))
+            throw conflict("publication_workspace_changed", "The publication target changed.");
+        },
+        readHash: file => access.read(file).sha256,
+        write: file => { access.write(file.path, file.artifact.content, file.before); },
+        save: () => this.store.save("works", work),
+        allowConvergence: true,
+      });
       this.store.transaction(() => {
-        this.publishRevisions(work);
-        work.publication!.state = "published";
+        this.publishRevisions(work, [...artifacts.values()]);
+        publication.state = "published";
         this.store.save("works", work);
         this.store.event(work.teamId, "work.files_published", { paths: work.publication!.appliedPaths, workspace: work.sourceWorkspace }, work);
       });
     } catch (error) {
-      work.publication.state = "conflict";
-      work.publication.error = error instanceof Error ? error.message : String(error);
-      this.store.save("works", work);
-      this.store.event(work.teamId, "work.publication_conflict", { error: work.publication.error, appliedPaths: work.publication.appliedPaths }, work);
+      this.store.transaction(() => {
+        publication.state = error instanceof ServiceError ? "conflict" : "recovery_required";
+        publication.error = error instanceof Error ? error.message : String(error);
+        this.store.save("works", work);
+        this.store.event(work.teamId, publication.state === "conflict" ? "work.publication_conflict" : "work.publication_interrupted", { error: publication.error, appliedPaths: publication.appliedPaths }, work);
+      });
     }
   }
-  private publishRevisions(work: Work) {
+  publishInlineOutputs(work: Work, versions: ArtifactVersion[], heads: Record<string, string>, inlineEditId?: string) {
+    this.publishRevisions({ ...work, artifactIds: versions.map(version => version.id), outputHeads: heads },
+      versions, inlineEditId);
+  }
+  private publishRevisions(work: Work, frozen?: ArtifactVersion[], inlineEditId?: string) {
     this.store.transaction(() => {
       const branch = this.store.history!.forRun(
         this.store.get<Run>("runs", work.teamId, work.runId),
@@ -191,9 +399,7 @@ export class CollaborationRecords {
         })
       )
         return;
-      for (const artifact of this.store
-        .verifyArtifacts(work)
-        .filter((a) => a.path !== "@result")) {
+      for (const artifact of (frozen ?? this.store.verifyArtifacts(work)).filter(a => a.path !== "@result")) {
         const name = artifact.path.replaceAll("\\", "/");
         const current = this.outputs(work.teamId, branch.id).find(
           (o) => o.path === name,
@@ -211,6 +417,7 @@ export class CollaborationRecords {
           path: name,
           artifactId: artifact.id,
           workId: work.id,
+          ...(inlineEditId ? { inlineEditId } : {}),
           parentId: current?.id ?? null,
           createdAt: new Date().toISOString(),
         };
@@ -384,6 +591,10 @@ export class CollaborationRecords {
       ? rows
       : [...new Map(rows.map((n) => [`${n.branchId}:${n.key}`, n])).values()];
   }
+  activeInsights(teamId: string, branchId: string) {
+    const archived = this.memory?.archiveKeys(teamId, branchId, "insight");
+    return this.insights(teamId, branchId).filter(insight => !archived?.has(insight.key));
+  }
   saveInsight(
     teamId: string,
     branchId: string,
@@ -393,6 +604,7 @@ export class CollaborationRecords {
   ) {
     return this.store.transaction(() => {
       this.store.history!.branch(teamId, branchId);
+      this.memory?.assertActive(teamId, branchId, "insight", input.key);
       const previous = this.insights(teamId, branchId).find(
         (n) => n.key === input.key,
       );
@@ -401,6 +613,9 @@ export class CollaborationRecords {
           "insight_conflict",
           "This idea or decision changed. Read the current version first.",
         );
+      const wasConfirmed = isConfirmedInsight(previous);
+      if (wasConfirmed && author !== "user")
+        throw conflict("memory_authority", "Update this adopted decision in project records or request a memory change.");
       if (author === "member" && input.status !== "proposed")
         throw conflict(
           "host_required",
@@ -441,11 +656,16 @@ export class CollaborationRecords {
         reason: note.reason,
       }).id;
       this.insert("insights", note);
+      const confirmed = isConfirmedInsight(note);
+      const epoch = confirmed || wasConfirmed ? this.memory?.advance(teamId, branchId) : undefined;
       this.store.event(teamId, "insight.saved", {
         insightId: note.id,
         key: note.key,
         revision: note.revision,
         status: note.status,
+        author: note.author,
+        branchId,
+        ...(epoch !== undefined ? { epoch, contentSha256: hash(note.content) } : {}),
       });
       return note;
     });

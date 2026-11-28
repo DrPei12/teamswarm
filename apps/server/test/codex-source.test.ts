@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,8 +31,12 @@ test("a Windows source checkout finds and executes its installed Codex package",
   const root = path.resolve(fileURLToPath(new URL("../../../", import.meta.url)));
   const profile = mkdtempSync(path.join(tmpdir(), "teamswarm-codex-discovery-"));
   try {
+    const globalRoot = path.join(profile, "npm");
+    const globalEntry = path.join(globalRoot, "node_modules", "@openai", "codex", "bin", "codex.js");
+    mkdirSync(path.dirname(globalEntry), { recursive: true });
+    writeFileSync(globalEntry, 'throw new Error("platform package missing");');
     const env = { ...process.env, USERPROFILE: profile, HOME: profile, APPDATA: profile,
-      LOCALAPPDATA: profile, PATH: path.join(root, "node_modules", ".bin") };
+      LOCALAPPDATA: profile, PATH: [globalRoot, path.join(root, "node_modules", ".bin")].join(path.delimiter) };
     for (const key of Object.keys(env))
       if (/^TEAM_CODEX_|^TEAM_NATIVE_TOOLS_DIR$|^CODEX_HOME$/i.test(key)) delete env[key];
     const moduleUrl = new URL("../src/runtime/harness/codex.ts", import.meta.url).href;

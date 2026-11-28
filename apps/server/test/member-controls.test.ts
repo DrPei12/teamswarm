@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { createApp } from "../src/app.js";
@@ -217,7 +217,45 @@ test("full device access reaches shared native execution without a workspace san
 });
 
 
-test("Host permissions save per branch, survive model changes, and apply only to the next native turn",async()=>{
+test("explicit read-only Codex sandbox permits only bounded Team file writes for an isolated member", async () => {
+  const f = await setup();
+  try {
+    const { store } = f.service.runtime;
+    const config = executionConfig.parse({ harness: "codex", model: "fixture-model", access: "workspace-write",
+      permissions: { harness: "codex", approvalPolicy: "on-request", sandbox: "read-only" } });
+    const member = store.createMember(f.team.id, "Bounded worker", "Write the assigned file", config, f.branch.id);
+    let assigned: string | undefined;
+    const criterion = "Publish the owned file.";
+    f.action = async request => {
+      const work = store.get<Work>("works", f.team.id, JSON.parse(request.input).work.id);
+      if (work.memberId !== member.id) {
+        if (assigned) return;
+        store.publishRequirement(work, "Publish the owned file.", []);
+        const delegated = await tool(request, "team_delegate", { memberId: member.id, title: "Write owned file", instructions: criterion,
+          workspaceMode: "isolated", writePaths: ["owned.txt"], inputArtifactIds: [], dependsOn: [],
+          verification: "self-check", acceptanceCriteria: [criterion], acceptanceEvidence: [{ criterion, evidenceType: "review_judgment" }] });
+        assigned = delegated.id;
+        return;
+      }
+      assert.deepEqual(request.workspaceBoundary?.writePaths, ["owned.txt"]);
+      assert.equal(request.config.permissions?.sandbox, "read-only");
+      assert.equal(request.verificationDirectory, undefined);
+      await assert.rejects(tool(request, "team_write_file", { path: "peer.txt", text: "Unexpected", expectedSha256: null }), { code: "write_scope_denied" });
+      await tool(request, "team_write_file", { path: "owned.txt", text: "Owned result", expectedSha256: null });
+      await tool(request, "team_submit_result", { summary: "Owned result", files: ["owned.txt"], usedArtifactIds: [],
+        selfChecks: [{ criterion, evidence: "Read the owned result." }] });
+    };
+    await f.send("Publish just the owned file.");
+    for (let i = 0; i < 150 && (!assigned || store.get<Work>("works", f.team.id, assigned).publication?.state !== "published"); i++)
+      await new Promise(resolve => setTimeout(resolve, 20));
+    assert(assigned);
+    const finished = store.get<Work>("works", f.team.id, assigned);
+    assert.equal(finished.status, "self_checked");
+    assert.equal(finished.publication?.state, "published");
+  } finally { await f.close(); }
+});
+
+test("Host inline eligibility follows the selected branch while the native turn stays read-only",async()=>{
  const f=await setup();try{
  const rt=f.service.runtime,store=rt.store,endpoint=`/product/teams/${f.team.id}/branches/${f.branch.id}/host/permission-preset`;
  const host=()=>store.list<Member>("members",f.team.id).find(m=>m.kind==='host')!;
@@ -233,15 +271,55 @@ test("Host permissions save per branch, survive model changes, and apply only to
  assert.equal(reloaded.host.configurationVersion,2);
  const changed=await f.api(`/product/teams/${f.team.id}/branches/${f.branch.id}/host/runtime`,{expectedVersion:2,config:{...current.config,effort:'high'}},'PUT');assert.equal(changed.status,200);
  f.action=async r=>{
-  assert.equal(r.config.access,'workspace-write');assert.equal(r.config.permissions?.sandbox,'danger-full-access');assert.equal(r.workspaceBoundary,undefined);
+  assert.equal(r.config.access,'read-only');
+  assert.equal(r.config.permissions?.sandbox,'read-only');
+  assert.equal(r.tools.some(t=>t.name==='team_host_inline_edit'),true);
+  assert.equal(r.tools.some(t=>t.name==='team_write_file'||t.name==='team_edit_file'),false);
   const own=JSON.parse(r.input).work,attempt=store.get<Attempt>('attempts',f.team.id,store.get<Work>('works',f.team.id,own.id).attemptId!);
+  assert.equal(attempt.hostInlineEdits,true);
   const readonly=await f.api(endpoint,{expectedVersion:3,preset:'read-only'},'PUT');assert.equal(readonly.status,200);
   assert.deepEqual(store.get<Attempt>('attempts',f.team.id,attempt.id).config,attempt.config);
   assert.equal(rt.catalog.memberExecution(f.team.id,f.branch.id,host()).config.access,'read-only');
+  const run=store.get<Run>('runs',f.team.id,own.runId);
+  await assert.rejects(tool(r,'team_host_inline_edit',{sourceMessageId:run.sourceMessageId,
+    edits:[{path:'owned.txt',expectedSha256:'0'.repeat(64),oldText:'old',newText:'new'}]}),{code:'inline_user_request'});
  };
  await f.send('Check selected full permission configuration.');
- f.action=async r=>{assert.equal(r.config.access,'read-only');assert.notEqual(r.config.permissions?.sandbox,'danger-full-access');};
+ f.action=async r=>{
+  assert.equal(r.config.access,'read-only');
+  assert.equal(r.config.permissions?.sandbox,'read-only');
+  assert.equal(r.tools.some(t=>t.name==='team_host_inline_edit'),false);
+ };
  await f.send('Check the next read-only turn.');
  assert.equal((await f.api(endpoint,{expectedVersion:3,preset:'full-access'},'PUT')).status,409);
  }finally{await f.close();}
+});
+
+test("legacy full-access runtime configuration cannot write through Host's generic file tools", async () => {
+  const f = await setup();
+  try {
+    const workspace = path.join(f.root, "project");
+    const filename = path.join(workspace, "owned.txt");
+    writeFileSync(filename, "original");
+    const { status } = await f.api(`/teams/${f.team.id}/runtime`, { expectedVersion: 1, workspace,
+      config: { harness: "codex", model: "fixture-model", access: "workspace-write",
+        permissions: { harness: "codex", approvalPolicy: "never", sandbox: "danger-full-access" } } }, "PUT");
+    assert.equal(status, 200);
+    const { store } = f.service.runtime;
+    f.action = async request => {
+      const work = store.get<Work>("works", f.team.id, JSON.parse(request.input).work.id);
+      const attempt = store.get<Attempt>("attempts", f.team.id, work.attemptId!);
+      assert.equal(attempt.hostInlineEdits, true);
+      assert.equal(request.config.access, "read-only");
+      assert.equal(request.config.permissions?.sandbox, "read-only");
+      const existing = await tool(request, "team_read_file", { path: "owned.txt" });
+      assert.equal(existing.text, "original");
+      await assert.rejects(tool(request, "team_edit_file", { path: "owned.txt", expectedSha256: existing.sha256,
+        oldText: "original", newText: "unexpected" }), { code: "read_only_work" });
+      await assert.rejects(tool(request, "team_write_file", { path: "new.txt", expectedSha256: null, text: "unexpected" }),
+        { code: "read_only_work" });
+    };
+    await f.send("Inspect the owned file.");
+    assert.equal(readFileSync(filename, "utf8"), "original");
+  } finally { await f.close(); }
 });

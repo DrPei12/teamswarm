@@ -40,7 +40,7 @@ export function createHarness(context) {
       const mode = config.permissions?.approvalMode;
       const auto = config.access === 'workspace-write' && (mode === 'teamswarm-auto' || mode === 'auto');
       if (auto && !request.modelRoute) throw new Error('Qwen Code automatic review requires the TeamSwarm model gateway.');
-      const teamTools = request.tools.filter(tool => context.runtime.teamReadTools.includes(tool.name) ||
+      const teamTools = request.tools.filter(tool => context.runtime.teamReadTools.includes(tool.name) || tool.name === 'team_host_inline_edit' ||
         auto && (tool.name === 'team_write_file' || tool.name === 'team_edit_file'));
 
       for (const key of Object.keys(env)) if (/^QWEN_/i.test(key)) delete env[key];

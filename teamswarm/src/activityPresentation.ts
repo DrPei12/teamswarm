@@ -3,7 +3,7 @@ import type { TranscriptItem } from "@team/contracts/product";
 type RecordValue = Record<string, unknown>;
 export type ActivityGroup = {
   id: string;
-  kind: "context" | "delegation" | "commands" | "item";
+  kind: "context" | "delegation" | "commands" | "subagent" | "item";
   items: TranscriptItem[];
 };
 const contextTools = new Set([
@@ -76,18 +76,33 @@ export function canExpandActivity(item: TranscriptItem) {
       "Bash",
       "bash",
       "shell_command",
-    ].includes(item.title ?? "")
+    ].includes(item.toolName ?? item.title ?? "")
   );
 }
 
 export function groupActivity(items: TranscriptItem[]): ActivityGroup[] {
   const groups: ActivityGroup[] = [];
+  const subagents = new Map<string, ActivityGroup>();
   let context: ActivityGroup | undefined;
   let delegation: ActivityGroup | undefined;
   // Consecutive commands share one collapsible row. Context reads and member
   // assignments already merge into their own rows, so they do not split a run.
   let commands: ActivityGroup | undefined;
   for (const item of items) {
+    if (item.nativeThreadId) {
+      let group = subagents.get(item.nativeThreadId);
+      if (!group) {
+        group = {
+          id: `subagent:${item.nativeThreadId}`,
+          kind: "subagent",
+          items: [],
+        };
+        subagents.set(item.nativeThreadId, group);
+        groups.push(group);
+      }
+      group.items.push(item);
+      continue;
+    }
     // Older transcripts emitted this placeholder on every turn, including resumes.
     if (
       item.kind === "status" &&
@@ -96,13 +111,19 @@ export function groupActivity(items: TranscriptItem[]): ActivityGroup[] {
       (item.status === "running" || item.status === "completed")
     )
       continue;
-    if (item.kind === "tool" && contextTools.has(item.title ?? "")) {
+    if (
+      item.kind === "tool" &&
+      contextTools.has(item.toolName ?? item.title ?? "")
+    ) {
       if (!context) {
         context = { id: item.id, kind: "context", items: [] };
         groups.push(context);
       }
       context.items.push(item);
-    } else if (item.kind === "tool" && delegationTools.has(item.title ?? "")) {
+    } else if (
+      item.kind === "tool" &&
+      delegationTools.has(item.toolName ?? item.title ?? "")
+    ) {
       if (!delegation) {
         delegation = { id: item.id, kind: "delegation", items: [] };
         groups.push(delegation);
@@ -134,7 +155,9 @@ export function delegationRows(
     assignments: TranscriptItem[];
   }[] = [];
   const names = new Map(members.map((m) => [m.id, m.name]));
-  for (const item of items.filter((i) => i.title === "team_add_member")) {
+  for (const item of items.filter(
+    (i) => (i.toolName ?? i.title) === "team_add_member",
+  )) {
     const args = toolValue(item.text),
       result = toolValue(item.output);
     const id = field(result, "id") || item.id;
@@ -148,7 +171,9 @@ export function delegationRows(
       assignments: [],
     });
   }
-  for (const item of items.filter((i) => i.title === "team_delegate")) {
+  for (const item of items.filter(
+    (i) => (i.toolName ?? i.title) === "team_delegate",
+  )) {
     const args = toolValue(item.text),
       id = field(args, "memberId");
     let row = rows.find(

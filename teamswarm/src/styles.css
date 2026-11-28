@@ -202,7 +202,7 @@ svg {
   color: var(--secondary);
   margin-left: 0;
 }
-.workspace-switch:hover,
+button.workspace-switch:hover,
 .icon-button:hover,
 .chat-switch:hover,
 .skills-trigger:hover {

@@ -3,65 +3,359 @@ import { test } from "node:test";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import type { AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
-import { ModelMetadata } from "../src/runtime/model-metadata.js";
-import { decodeRequest, encodeResponse, wireCallId, zeroUsage } from "../src/runtime/model-wire.js";
+import {
+  ModelMetadata,
+  ModelMetadataTree,
+} from "../src/runtime/model-metadata.js";
+import {
+  decodeRequest,
+  encodeResponse,
+  wireCallId,
+  zeroUsage,
+} from "../src/runtime/model-wire.js";
 
-const model: Model<"openai-responses"> = {id:"fixture",name:"fixture",api:"openai-responses",provider:"openai",baseUrl:"https://fixture.test",reasoning:true,input:["text"],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:100000,maxTokens:1000};
-const user = (text:string): Context => ({messages:[{role:"user",content:[{type:"text",text}],timestamp:0}]});
-const reply = (content:AssistantMessage["content"]):AssistantMessage => ({role:"assistant",content,api:model.api,provider:model.provider,model:model.id,usage:zeroUsage(),stopReason:"stop",timestamp:0});
-function native(message:AssistantMessage,prompt:string):Context {
-  return decodeRequest("anthropic-messages",{messages:[{role:"user",content:prompt},{role:"assistant",content:encodeResponse("anthropic-messages",message).content}]},model);
+const model: Model<"openai-responses"> = {
+  id: "fixture",
+  name: "fixture",
+  api: "openai-responses",
+  provider: "openai",
+  baseUrl: "https://fixture.test",
+  reasoning: true,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 100000,
+  maxTokens: 1000,
+};
+const user = (text: string): Context => ({
+  messages: [{ role: "user", content: [{ type: "text", text }], timestamp: 0 }],
+});
+const reply = (content: AssistantMessage["content"]): AssistantMessage => ({
+  role: "assistant",
+  content,
+  api: model.api,
+  provider: model.provider,
+  model: model.id,
+  usage: zeroUsage(),
+  stopReason: "stop",
+  timestamp: 0,
+});
+function native(message: AssistantMessage, prompt: string): Context {
+  return decodeRequest(
+    "anthropic-messages",
+    {
+      messages: [
+        { role: "user", content: prompt },
+        {
+          role: "assistant",
+          content: encodeResponse("anthropic-messages", message).content,
+        },
+      ],
+    },
+    model,
+  );
 }
-test("opaque metadata survives native session reload without copying conversation text",()=>{
-  const root=mkdtempSync(path.join(process.cwd(),".test-model-metadata-"));
+test("opaque metadata survives native session reload without copying conversation text", () => {
+  const root = mkdtempSync(path.join(process.cwd(), ".test-model-metadata-"));
   try {
-    const journal=new ModelMetadata(root,"session-one"), original=reply([
-      {type:"thinking",thinking:"calculation",thinkingSignature:'{"encrypted_content":"opaque-value"}',redacted:false},
-      {type:"text",text:"private visible text",textSignature:'{"id":"msg_one","phase":"commentary"}'},
-      {type:"toolCall",id:"call_"+"a".repeat(80)+"|fc_original",name:"Read",arguments:{z:1,a:2}}
-    ]);
-    const request=journal.restore(user("read a file"));request.record(original);request.release();
-    const context=native(original,"read a file"), assistant=context.messages[1] as AssistantMessage;
-    const tool=assistant.content[2];assert.equal(tool.type,"toolCall");
-    if(tool.type!=="toolCall")return;
-    assert.match(tool.id,/^[-a-zA-Z0-9_]{1,64}$/);tool.arguments={a:2,z:1};
-    context.messages.push({role:"toolResult",toolCallId:tool.id,toolName:"Read",content:[{type:"text",text:"private file content"}],isError:false,timestamp:0});
-    const loaded=new ModelMetadata(root,"session-one");const restored=loaded.restore(context);restored.release();
-    assert.deepEqual(assistant.content,original.content);
-    assert.equal((context.messages[2] as any).toolCallId,(original.content[2] as any).id);
-    const saved=readFileSync(path.join(root,"model-sessions",readdirSync(path.join(root,"model-sessions"))[0]),"utf8");
-    assert.ok(!saved.includes("private visible text"));assert.ok(!saved.includes("private file content"));
-  }finally{rmSync(root,{recursive:true,force:true});}
+    const journal = new ModelMetadata(root, "session-one"),
+      original = reply([
+        {
+          type: "thinking",
+          thinking: "calculation",
+          thinkingSignature: '{"encrypted_content":"opaque-value"}',
+          redacted: false,
+        },
+        {
+          type: "text",
+          text: "private visible text",
+          textSignature: '{"id":"msg_one","phase":"commentary"}',
+        },
+        {
+          type: "toolCall",
+          id: "call_" + "a".repeat(80) + "|fc_original",
+          name: "Read",
+          arguments: { z: 1, a: 2 },
+        },
+      ]);
+    const request = journal.restore(user("read a file"));
+    request.record(original);
+    request.release();
+    const context = native(original, "read a file"),
+      assistant = context.messages[1] as AssistantMessage;
+    const tool = assistant.content[2];
+    assert.equal(tool.type, "toolCall");
+    if (tool.type !== "toolCall") return;
+    assert.match(tool.id, /^[-a-zA-Z0-9_]{1,64}$/);
+    tool.arguments = { a: 2, z: 1 };
+    context.messages.push({
+      role: "toolResult",
+      toolCallId: tool.id,
+      toolName: "Read",
+      content: [{ type: "text", text: "private file content" }],
+      isError: false,
+      timestamp: 0,
+    });
+    const loaded = new ModelMetadata(root, "session-one");
+    const restored = loaded.restore(context);
+    restored.release();
+    assert.deepEqual(assistant.content, original.content);
+    assert.equal(
+      (context.messages[2] as any).toolCallId,
+      (original.content[2] as any).id,
+    );
+    const saved = readFileSync(
+      path.join(
+        root,
+        "model-sessions",
+        readdirSync(path.join(root, "model-sessions"))[0],
+      ),
+      "utf8",
+    );
+    assert.ok(!saved.includes("private visible text"));
+    assert.ok(!saved.includes("private file content"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
-test("parallel identical tool arguments retain the originating call and result",()=>{
-  const journal=new ModelMetadata();
-  for(const id of ["call_main|fc_main","call_aux|fc_aux"]){
-    const request=journal.restore(user("read file"));request.record(reply([{type:"toolCall",id,name:"Read",arguments:{file:"same.txt"}}]));request.release();
+test("parallel identical tool arguments retain the originating call and result", () => {
+  const journal = new ModelMetadata();
+  for (const id of ["call_main|fc_main", "call_aux|fc_aux"]) {
+    const request = journal.restore(user("read file"));
+    request.record(
+      reply([
+        { type: "toolCall", id, name: "Read", arguments: { file: "same.txt" } },
+      ]),
+    );
+    request.release();
   }
-  const original=reply([{type:"toolCall",id:"call_main|fc_main",name:"Read",arguments:{file:"same.txt"}}]);
-  const context=native(original,"read file");context.messages.push({role:"toolResult",toolCallId:wireCallId("call_main|fc_main"),toolName:"Read",content:[{type:"text",text:"main-result"}],isError:false,timestamp:0});
+  const original = reply([
+    {
+      type: "toolCall",
+      id: "call_main|fc_main",
+      name: "Read",
+      arguments: { file: "same.txt" },
+    },
+  ]);
+  const context = native(original, "read file");
+  context.messages.push({
+    role: "toolResult",
+    toolCallId: wireCallId("call_main|fc_main"),
+    toolName: "Read",
+    content: [{ type: "text", text: "main-result" }],
+    isError: false,
+    timestamp: 0,
+  });
   journal.restore(context).release();
-  assert.equal((context.messages[1] as any).content[0].id,"call_main|fc_main");
-  assert.equal((context.messages[2] as any).toolCallId,"call_main|fc_main");
+  assert.equal((context.messages[1] as any).content[0].id, "call_main|fc_main");
+  assert.equal((context.messages[2] as any).toolCallId, "call_main|fc_main");
 });
 
-test("text phases follow request ancestry; ambiguous compacted history is rejected",()=>{
-  const journal=new ModelMetadata();
-  for(const prompt of ["main-task","aux-task"]){
-    const request=journal.restore(user(prompt));request.record(reply([{type:"text",text:"same text",textSignature:JSON.stringify({id:prompt,phase:"commentary"})}]));request.release();
+test("text phases follow request ancestry; ambiguous compacted history is rejected", () => {
+  const journal = new ModelMetadata();
+  for (const prompt of ["main-task", "aux-task"]) {
+    const request = journal.restore(user(prompt));
+    request.record(
+      reply([
+        {
+          type: "text",
+          text: "same text",
+          textSignature: JSON.stringify({ id: prompt, phase: "commentary" }),
+        },
+      ]),
+    );
+    request.release();
   }
-  const context=native(reply([{type:"text",text:"same text"}]),"main-task");journal.restore(context).release();
-  assert.equal(JSON.parse((context.messages[1] as any).content[0].textSignature).id,"main-task");
-  const compacted=native(reply([{type:"text",text:"same text"}]),"compacted-summary");
-  assert.throws(()=>journal.restore(compacted),/ambiguous/);
+  const context = native(
+    reply([{ type: "text", text: "same text" }]),
+    "main-task",
+  );
+  journal.restore(context).release();
+  assert.equal(
+    JSON.parse((context.messages[1] as any).content[0].textSignature).id,
+    "main-task",
+  );
+  const compacted = native(
+    reply([{ type: "text", text: "same text" }]),
+    "compacted-summary",
+  );
+  assert.throws(() => journal.restore(compacted), /ambiguous/);
 });
 
-test("metadata capacity refusal preserves mappings still referenced by native history",()=>{
-  const journal=new ModelMetadata(),original=reply([{type:"toolCall",id:"call_original|fc_original",name:"Read",arguments:{file:"source.txt"}}]);
-  const first=journal.restore(user("main-task"));first.record(original);first.release();
-  const auxiliary=journal.restore(user("aux-task"));
-  assert.throws(()=>auxiliary.record(reply([{type:"thinking",thinking:"",thinkingSignature:"x".repeat(17*1024*1024)}])),/exceeds 16 MiB/);auxiliary.release();
-  const context=native(original,"main-task");journal.restore(context).release();
-  assert.equal((context.messages[1] as any).content[0].id,"call_original|fc_original");
+test("metadata capacity refusal preserves mappings still referenced by native history", () => {
+  const journal = new ModelMetadata(),
+    original = reply([
+      {
+        type: "toolCall",
+        id: "call_original|fc_original",
+        name: "Read",
+        arguments: { file: "source.txt" },
+      },
+    ]);
+  const first = journal.restore(user("main-task"));
+  first.record(original);
+  first.release();
+  const auxiliary = journal.restore(user("aux-task"));
+  assert.throws(
+    () =>
+      auxiliary.record(
+        reply([
+          {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: "x".repeat(17 * 1024 * 1024),
+          },
+        ]),
+      ),
+    /exceeds 16 MiB/,
+  );
+  auxiliary.release();
+  const context = native(original, "main-task");
+  journal.restore(context).release();
+  assert.equal(
+    (context.messages[1] as any).content[0].id,
+    "call_original|fc_original",
+  );
+});
+
+test("native threads with identical messages and different roles retain their own signatures", () => {
+  const tree = new ModelMetadataTree(undefined, {}, "root", "workspace");
+  for (const thread of ["root", "child-a", "child-b"]) {
+    const context = { ...user("same request"), systemPrompt: `Role ${thread}` };
+    const journal = tree.restore(context, {
+      nativeThreadId: thread,
+      parentThreadId: "root",
+    });
+    journal.record(
+      reply([
+        { type: "text", text: "OK", textSignature: `signature-${thread}` },
+      ]),
+    );
+    journal.release();
+  }
+  for (const thread of ["root", "child-a", "child-b"]) {
+    const context = native(
+      reply([{ type: "text", text: "OK" }]),
+      "same request",
+    );
+    tree
+      .restore(context, { nativeThreadId: thread, parentThreadId: "root" })
+      .release();
+    assert.equal(
+      (context.messages[1] as any).content[0].textSignature,
+      `signature-${thread}`,
+    );
+  }
+});
+
+test("forks persist the actual parent prefix and remain independent of later parent writes and mutable stream blocks", () => {
+  const directory = mkdtempSync(
+    path.join(process.cwd(), ".test-fork-metadata-"),
+  );
+  const parentIdentity = { nativeThreadId: "root" };
+  const childIdentity = { nativeThreadId: "child", parentThreadId: "root" };
+  const first = {
+    type: "toolCall" as const,
+    id: "first|provider-first",
+    name: "read",
+    arguments: { file: "source" },
+    thoughtSignature: "original-signature",
+  };
+  const unfinished = {
+    type: "toolCall" as const,
+    id: "second|provider-second",
+    name: "read",
+    arguments: {},
+    thoughtSignature: "unfinished",
+  };
+  try {
+    const tree = new ModelMetadataTree(directory, {}, "root", "workspace");
+    const parent = tree.restore(user("inspect"), parentIdentity);
+    const partial = reply([first, unfinished]);
+    parent.record({ ...partial, content: partial.content.slice(0, 1) });
+    const input = native(reply([first]), "inspect");
+    tree.restore(input, childIdentity).release();
+    assert.equal((input.messages[1] as any).content[0].id, first.id);
+    assert.equal(
+      (input.messages[1] as any).content[0].thoughtSignature,
+      "original-signature",
+    );
+    unfinished.arguments = { file: "later" };
+    first.thoughtSignature = "changed-after-publication";
+    parent.release(); // The upstream stream fails without a final response.
+    const later = tree.restore(user("inspect"), parentIdentity);
+    later.record(reply([first]));
+    later.record(reply([first, unfinished]));
+    later.release();
+    const reloaded = new ModelMetadataTree(directory, {}, "root", "workspace");
+    const resumed = native(
+      reply([{ ...first, thoughtSignature: undefined }]),
+      "inspect",
+    );
+    reloaded.restore(resumed, childIdentity).release();
+    assert.equal(
+      (resumed.messages[1] as any).content[0].thoughtSignature,
+      "original-signature",
+    );
+    const absent = native(reply([unfinished]), "inspect");
+    reloaded.restore(absent, childIdentity).release();
+    assert.equal(
+      (absent.messages[1] as any).content[0].thoughtSignature,
+      undefined,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an empty fork snapshot survives restart without importing later parent signatures", () => {
+  const directory = mkdtempSync(path.join(process.cwd(), ".test-empty-fork-"));
+  const identity = { nativeThreadId: "child", parentThreadId: "root" };
+  try {
+    const tree = new ModelMetadataTree(directory, {}, "root", "workspace");
+    tree.restore(user("same task"), identity).release();
+    const parent = tree.restore(user("same task"));
+    parent.record(
+      reply([{ type: "text", text: "later", textSignature: "parent-only" }]),
+    );
+    parent.release();
+    const restarted = new ModelMetadataTree(directory, {}, "root", "workspace");
+    const input = native(reply([{ type: "text", text: "later" }]), "same task");
+    restarted.restore(input, identity).release();
+    assert.equal(
+      (input.messages[1] as any).content[0].textSignature,
+      undefined,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an explicit signature disambiguates repeated visible content in the parent snapshot", () => {
+  const journal = new ModelMetadata();
+  for (const signature of ["first", "second"]) {
+    const call = journal.restore(user("repeat"));
+    call.record(
+      reply([{ type: "text", text: "OK", textSignature: signature }]),
+    );
+    call.release();
+  }
+  const input = {
+    messages: [
+      ...user("repeat").messages,
+      reply([{ type: "text", text: "OK", textSignature: "first" }]),
+    ],
+  };
+  const child = journal.fork(undefined, "child", input);
+  const continued = native(reply([{ type: "text", text: "OK" }]), "repeat");
+  child.restore(continued).release();
+  assert.equal(
+    (continued.messages[1] as any).content[0].textSignature,
+    "first",
+  );
+  assert.throws(
+    () =>
+      journal.restore(native(reply([{ type: "text", text: "OK" }]), "repeat")),
+    /ambiguous/,
+  );
 });

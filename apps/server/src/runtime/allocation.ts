@@ -1,6 +1,7 @@
 import { memberPermissions, hostPermissions } from "./permission-options.js";
-import { readOnlyExecution } from "./harness/permissions.js";
+import { readOnlyExecution, readOnlyPermissions, scopeNativeReadProbes } from "./harness/permissions.js";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { conflict, notFound } from "../errors.js";
 import {
@@ -18,8 +19,8 @@ import {
   previewPortableImport,
 } from "./allocation-portable.js";
 import { executionConfig } from "./validation.js";
-import { readOnlyPermissions } from "./harness/permissions.js";
 import { allocationTaskIds, historicalAllocationWork } from "./allocation-tasks.js";
+import { isCurrentAttempt } from "./execution-status.js";
 import type { TeamCatalog } from "./catalog.js";
 import type { RuntimeStore } from "./store.js";
 import type { Attempt, ExecutionConfig, Member, Requirement, Run, Work, WorkStatus } from "./types.js";
@@ -136,7 +137,7 @@ export function deleteResource(
       .some(
         (a) =>
           a.allocation?.selection?.resourceId === resourceId &&
-          ACTIVE_ATTEMPT_STATES.includes(a.status),
+          isCurrentAttempt(a),
       );
     if (usedByMember || usedByOpenWork || usedByActiveAttempt)
       throw conflict(
@@ -213,7 +214,8 @@ export function setHostAllocation(deps: AllocationDeps, teamId: string, branchId
     if (!host) throw notFound();
     if ((host.hostSelections?.[branchId]?.revision ?? 1) !== expectedRevision)
       throw conflict("version_conflict", "Host selection changed. Reload before saving.");
-    host.hostSelections = { ...host.hostSelections, [branchId]: { permissionPreset:host.hostSelections?.[branchId]?.permissionPreset, revision: expectedRevision + 1, selection,
+    host.hostSelections = { ...host.hostSelections, [branchId]: { permissionPreset:host.hostSelections?.[branchId]?.permissionPreset,
+      hostProbeConfig: host.hostSelections?.[branchId]?.hostProbeConfig, revision: expectedRevision + 1, selection,
       ...(selection ? {selectionSource, config:{...deps.catalog.resource(teamId,selection.resourceId).config}} : {}) } };
     deps.store.save("members", host);
     deps.store.event(teamId, "host.allocation", { branchId, selection, revision: expectedRevision + 1 });
@@ -222,7 +224,7 @@ export function setHostAllocation(deps: AllocationDeps, teamId: string, branchId
 }
 
 /** A composer edit replaces only this branch's future Host configuration. */
-export function setHostConfiguration(deps: AllocationDeps, teamId: string, branchId: string, expectedRevision: number, config: ExecutionConfig) {
+export function setHostConfiguration(deps: AllocationDeps, teamId: string, branchId: string, expectedRevision: number, primary?: ExecutionConfig, hostProbeConfig?: ExecutionConfig | null) {
   deps.catalog.history.branch(teamId, branchId);
   return deps.store.transaction(() => {
     const host = deps.store.list<Member>("members", teamId).find(m => m.kind === "host");
@@ -230,13 +232,23 @@ export function setHostConfiguration(deps: AllocationDeps, teamId: string, branc
     const current = deps.catalog.memberExecution(teamId, branchId, host);
     if (current.allocationRevision !== expectedRevision)
       throw conflict("version_conflict", "Host configuration changed. Reload before saving.");
+    const config = primary ?? current.config;
+    if (hostProbeConfig && !(config.chatgptAccountId || config.baseUrl && config.credentialEnv))
+      throw conflict("host_probe_connection", "Choose a direct primary model before setting a Host probe model.");
     if (config.access !== current.config.access)
       throw conflict("access_escalation", "Keep Host's existing file access when changing its model.");
     const previousPreset = host.hostSelections?.[branchId]?.permissionPreset;
     const permissionPreset = config.harness === "antigravity" && previousPreset === "auto" &&
       !config.baseUrl && !config.chatgptAccountId ? "manual" : previousPreset;
+    const previous = host.hostSelections?.[branchId];
+    const preserveSelection = isDeepStrictEqual(current.config, config);
     host.hostSelections = { ...host.hostSelections, [branchId]: {
-      revision: expectedRevision + 1, selection: null, config: { ...config }, permissionPreset,
+      ...(preserveSelection ? previous : {}),
+      revision: expectedRevision + 1,
+      selection: preserveSelection ? previous?.selection ?? null : null,
+      ...(!preserveSelection ? { config: { ...config } } : {}),
+      permissionPreset,
+      hostProbeConfig: hostProbeConfig === undefined ? previous?.hostProbeConfig : hostProbeConfig,
     } };
     deps.store.save("members", host);
     deps.store.event(teamId, "host.configuration", { branchId, revision: expectedRevision + 1 });
@@ -371,6 +383,7 @@ export function setAllocationListVisibility(deps: AllocationDeps, teamId: string
 export interface ResolvedExecution {
   config: ExecutionConfig;
   selection: ResourceSelection | null;
+  inlineEdits?: boolean;
   /** Set when a pinned selection can no longer be honoured; callers must not run silently. */
   conflict: string | null;
 }
@@ -399,21 +412,23 @@ export function resolveExecution(
       (r) => r.id === effective.selection!.resourceId,
     );
     const retained = effective.selection.resourceId.startsWith("cap_") && memberChoice?.resourceId === effective.selection.resourceId && memberChoice.resourceVersion === effective.selection.resourceVersion ? hostChoice?.config : undefined;
-    if ((!resource || resource.version !== effective.selection.resourceVersion) && retained)
-      return { config: hostPermissions(retained, member, branchId!, deps.catalog.harnesses), selection: {...effective.selection}, conflict: null };
-    if (!resource)
+    if ((!resource || resource.version !== effective.selection.resourceVersion) && retained) {
+      config = { ...retained };
+    } else if (!resource) {
       return {
         config,
         selection: null,
         conflict: `Execution resource ${effective.selection.resourceId} no longer exists; reassign this work before it runs.`,
       };
-    if (resource.version !== effective.selection.resourceVersion)
+    } else if (resource.version !== effective.selection.resourceVersion) {
       return {
         config,
         selection: null,
         conflict: `Execution resource ${resource.id} changed to version ${resource.version} after assignment; reassign this work before it runs.`,
       };
-    config = { ...resource.config };
+    } else {
+      config = { ...resource.config };
+    }
     selection = { ...effective.selection };
   }
   config = member.kind === "host" ? hostPermissions(config,member,branchId!,deps.catalog.harnesses) : memberPermissions(config, member);
@@ -424,13 +439,35 @@ export function resolveExecution(
       return { config, selection, conflict: "Select a native permission policy for the chosen Harness." };
     config = { ...config, permissions };
   }
+  const scopeProbes = (candidate: ExecutionConfig) => scopeNativeReadProbes(
+    candidate.nativeReadProbes && (work.executionRequirements?.nativeCommands ||
+      candidate.harness !== "deepseek-harness" && (work.reviewOf || Object.values(work.executionRequirements ?? {}).some(Boolean)))
+      ? { ...candidate, nativeReadProbes: undefined }
+      : candidate,
+  );
+  if (member.kind === "host") {
+    const inlineEdits = config.access === "workspace-write" && !work.reviewOf && !work.interaction &&
+      work.kind !== "collaboration" && work.kind !== "host-followup" && work.verification !== "independent" &&
+      !Object.values(work.executionRequirements ?? {}).some(Boolean) &&
+      !work.acceptanceEvidence?.some(entry => entry.evidenceType === "native_check");
+    config = scopeProbes(hostReadOnlyConfig(config));
+    return { config, selection, inlineEdits, conflict: null };
+  }
   if (work.reviewOf || work.interaction || work.kind === "collaboration")
     config = readOnlyPermissions({ ...config, permissions: workPermissions });
-  else if (member.kind !== "host" && member.config.access === "read-only")
+  else if (member.config.access === "read-only")
     config = readOnlyPermissions(config);
-  if (member.kind !== "host" && !deps.catalog.capabilities.allowed(teamId,config))
+  config = scopeProbes(config);
+  if (!deps.catalog.capabilities.allowed(teamId,config))
     return {config,selection,conflict:"This Harness or model connection is no longer enabled for the Team. Ask Host to choose an enabled combination."};
   return { config, selection, conflict: null };
+}
+
+export function hostReadOnlyConfig(config: ExecutionConfig): ExecutionConfig {
+  const permissions: ExecutionConfig["permissions"] = config.harness === "claude-code"
+    ? { harness: "claude-code", mode: "dontAsk" }
+    : config.harness === "codex" ? { harness: "codex", approvalPolicy: "on-request", sandbox: "read-only" } : undefined;
+  return scopeNativeReadProbes(readOnlyPermissions({ ...config, permissions }));
 }
 
 /** Persist the frozen snapshot on the Attempt. Called once, at start. */
@@ -440,6 +477,7 @@ export function applyAttemptAllocation(
   resolved: ResolvedExecution,
 ): Attempt {
   attempt.allocation = snapshotExecution(resolved.config, resolved.selection);
+  if (resolved.inlineEdits !== undefined) attempt.hostInlineEdits = resolved.inlineEdits;
   store.save("attempts", attempt);
   return attempt;
 }
@@ -452,10 +490,7 @@ const KNOWN_HARNESSES = new Set([
   "opencode",
 ]);
 
-/** Contract gate for the five-Harness product: any Harness/model/protocol/access
- * change, or deepseek-harness itself, forbids native-session reuse. Extension
- * adapters fall back to exact-configuration equality so existing sessions are
- * never silently rebound to a different configuration. */
+/** Native sessions reuse the same execution configuration and adapter capability. */
 export function canReuseSession(
   previous: ExecutionConfig,
   next: ExecutionConfig,

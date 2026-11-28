@@ -5,9 +5,143 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { spawnOwned } from "../src/runtime/harness/owned-process.js";
 import { terminateNative } from "../src/runtime/harness/native-support.js";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import { Writable } from "node:stream";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { grokSession, type GrokSpec } from "../src/runtime/harness/grok-worker.js";
+import type { HarnessResult } from "../src/runtime/types.js";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+test("Retained Grok rebinds its route after close and drains the old approval", { timeout: 10000 }, async () => {
+  const workspace = mkdtempSync(path.join(tmpdir(), "teamswarm-grok-retained-"));
+  const seenApproval = deferred<void>();
+  const permissionServer = createServer((_req, _res) => seenApproval.resolve());
+  permissionServer.listen(0, "127.0.0.1");
+  await once(permissionServer, "listening");
+  const address = permissionServer.address();
+  assert(address && typeof address === "object");
+  const spec: GrokSpec = {
+    entry: process.execPath, home: workspace, workspace,
+    bridge: "http://127.0.0.1:1234/initial", permissionUrl: `http://127.0.0.1:${address.port}/permission`,
+    instructions: "Read the assigned facts.", input: "Report the facts.",
+    config: { harness: "grok", access: "read-only", model: "fixture-model", provider: null, baseUrl: null,
+      credentialEnv: null, effort: null, permissions: { harness: "grok", mode: "default" } },
+    tools: [{ name: "read_fact" }], nativeCommands: false, resume: false,
+  };
+  const sessionId = "retained-native-session";
+  const init = { protocolVersion: 1, agentCapabilities: { loadSession: true,
+    sessionCapabilities: { close: {} }, mcpCapabilities: { http: true } } };
+  let initialState: Record<string, any> | undefined;
+  let id = 0;
+  let turn = 0;
+  let active: ReturnType<typeof grokSession>;
+  const requests: any[] = [];
+  const order: string[] = [];
+  const firstPrompt = deferred<number>();
+  const firstClose = deferred<number>();
+  const send = (message: unknown) => active.receive(message);
+  const answer = (id: number, result: unknown) => send({ jsonrpc: "2.0", id, result });
+  const update = (update: unknown) => send({ method: "session/update", params: { sessionId, update } });
+  const catalog = () => update({ sessionUpdate: "available_commands_update",
+    _meta: { tools: ["read_file", "grep", "list_dir", "teamswarm__read_fact"] } });
+  const stream = new Writable({
+    write(chunk, _encoding, callback) {
+      const message = JSON.parse(chunk.toString());
+      requests.push(message);
+      callback();
+      queueMicrotask(() => {
+        switch (message.method) {
+          case "initialize":
+            answer(message.id, init);
+            break;
+          case "session/new":
+          case "session/load":
+            if (message.method === "session/load")
+              update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "OLD ANSWER" } });
+            answer(message.id, { sessionId, models: { currentModelId: "fixture-model" } });
+            catalog();
+            break;
+          case "session/prompt":
+            order.push(`prompt-${turn}`);
+            update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: `Answer ${turn}` } });
+            if (turn === 1) {
+              firstPrompt.resolve(message.id);
+              send({ id: "approval-1", method: "session/request_permission", params: { sessionId,
+                toolCall: { rawInput: { variant: "UseTool", tool_name: "teamswarm__read_fact" } },
+                options: [{ kind: "allow_once", optionId: "once" }] } });
+            } else answer(message.id, { stopReason: "end_turn" });
+            break;
+          case "session/close":
+            if (turn === 1) firstClose.resolve(message.id);
+            else if (turn === 2) answer(message.id, {});
+            else send({ id: message.id, error: { code: -32000, message: "close refused" } });
+            break;
+          default:
+            if (message.id === "approval-1") order.push("approval-1");
+        }
+      });
+    },
+  });
+  const child = { stdin: stream } as ChildProcessWithoutNullStreams;
+  const run = async () => {
+    const current = ++turn;
+    const completed = deferred<HarnessResult>();
+    active = grokSession(child, { ...spec, bridge: `http://127.0.0.1:1234/turn-${current}`, resume: current > 1 },
+      "read_file,grep,list_dir", () => {}, result => { order.push(`result-${current}`); completed.resolve(result); },
+      () => order.push(`dispatch-${current}`),
+      { initialState, onInitialize: state => { initialState = state; }, nextRequestId: () => ++id,
+        onNativeSession: actual => { assert.equal(actual, sessionId); order.push(`bind-${current}`); },
+        onPromptTerminal: () => { order.push(`revoke-${current}`); } });
+    void active.start();
+    return completed.promise;
+  };
+  try {
+    const first = run();
+    await seenApproval.promise;
+    answer(await firstPrompt.promise, { stopReason: "end_turn" });
+    const closing = await firstClose.promise;
+    assert(order.includes("revoke-1"));
+    assert(!order.includes("result-1"));
+    answer(closing, {});
+    assert.deepEqual(await first, { status: "completed", text: "Answer 1", error: undefined });
+    assert.deepEqual(requests.find(message => message.id === "approval-1")?.result,
+      { outcome: { outcome: "cancelled" } });
+    assert(order.indexOf("approval-1") < order.indexOf("result-1"));
+    assert.deepEqual(await run(), { status: "completed", text: "Answer 2", error: undefined });
+    const failedClose = await run();
+    assert.equal(failedClose.status, "unknown");
+    assert.match(failedClose.error ?? "", /close was not confirmed.*close refused/);
+    const calls = requests.filter(message => typeof message.id === "number");
+    assert.deepEqual(calls.map(message => message.id), calls.map((_, index) => index + 1));
+    assert.deepEqual(calls.map(message => message.method), [
+      "initialize", "session/new", "session/prompt", "session/close",
+      "session/load", "session/prompt", "session/close",
+      "session/load", "session/prompt", "session/close",
+    ]);
+    assert.deepEqual(calls.filter(message => ["session/new", "session/load"].includes(message.method))
+      .map(message => message.params.mcpServers[0].url),
+    ["http://127.0.0.1:1234/turn-1", "http://127.0.0.1:1234/turn-2", "http://127.0.0.1:1234/turn-3"]);
+    for (const n of [1, 2, 3]) {
+      assert(order.indexOf(`bind-${n}`) < order.indexOf(`dispatch-${n}`));
+      assert(order.indexOf(`dispatch-${n}`) < order.indexOf(`prompt-${n}`));
+      assert.equal(order.filter(item => item === `revoke-${n}`).length, 1);
+    }
+  } finally {
+    active?.close();
+    stream.end();
+    permissionServer.closeAllConnections();
+    await new Promise<void>((resolve, reject) => permissionServer.close(error => error ? reject(error) : resolve()));
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
 
 test("Grok ACP permits only an exact tool in the current attempt, once", () => {
   const tools = [{ name: "read_fact" }];
@@ -238,9 +372,22 @@ test(
       config: { access: "read-only" },
       tools: [{ name: "read_fact" }],
     };
-    const worker = fileURLToPath(
-      new URL("../src/runtime/harness/grok-worker.ts", import.meta.url),
-    );
+    const worker = path.join(root, "driver.mts");
+    writeFileSync(worker, `
+      import {readFileSync} from 'node:fs';
+      import {spawn} from 'node:child_process';
+      import {createInterface} from 'node:readline';
+      import {grokSession,prepareGrok} from ${JSON.stringify(new URL("../src/runtime/harness/grok-worker.ts", import.meta.url).href)};
+      const spec=JSON.parse(readFileSync(process.argv[2],'utf8'));
+      const {args,tools}=prepareGrok(spec);
+      const child=spawn(process.execPath,[spec.entry,...args],{cwd:spec.workspace,windowsHide:true,stdio:'pipe'});
+      const emit=value=>console.log(JSON.stringify(value));
+      const acp=grokSession(child,spec,tools,emit,result=>{emit({type:'result',...result});child.stdin.end();});
+      createInterface({input:child.stdout}).on('line',line=>acp.receive(JSON.parse(line)));
+      child.on('exit',()=>acp.close());
+      child.stderr.resume();child.stdin.on('error',()=>{});
+      await acp.start();
+    `);
     try {
       const cases = [
         ...["missing-shell", "missing-editor"].flatMap((scenario) =>

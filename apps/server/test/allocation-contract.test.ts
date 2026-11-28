@@ -132,6 +132,8 @@ test("session config gate never reuses across Harness/model/access/protocol chan
     assert.equal(canReuseNativeSession(c, { ...c, ...patch }), false);
   const deepseek = config({ harness: "deepseek-harness" });
   assert.equal(canReuseNativeSession(deepseek, deepseek), false);
+  const acp = config({ harness: "deepseek-harness", access: "read-only", protocol: "chat-completions", model: "deepseek-flash", baseUrl: "https://api.deepseek.com" });
+  assert.equal(canReuseNativeSession(acp, { ...acp }), true);
 });
 
 test("output budget survives portable resources and only compatible harnesses accept it", () => {

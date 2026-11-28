@@ -11,6 +11,7 @@ import { RuntimeStore, overlaps } from "../src/runtime/store.js";
 import { loadHarnesses } from "../src/runtime/harness/registry.js";
 import {
   HarnessTransportError,
+  type Attempt,
   type ExecutionConfig,
   type Harness,
   type HarnessRequest,
@@ -71,7 +72,7 @@ class FixtureHarness implements Harness {
     }
   }
   recoveryStatus: "interrupted" | "unknown" = "interrupted";
-  async reconcile() {
+  async reconcile(): Promise<HarnessResult> {
     return { status: this.recoveryStatus, text: "" };
   }
   async close() {
@@ -130,11 +131,11 @@ async function setup(harness: FixtureHarness) {
     team,
     conversation,
     messageRoute,
-    async close() {
+    async close(preserveData = false) {
       await service.close();
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      rmSync(root, { recursive: true, force: true });
+      if (!preserveData) rmSync(root, { recursive: true, force: true });
     },
   };
 }
@@ -302,13 +303,22 @@ test("durable delegation, artifact receipt and independent acceptance over real 
   }
 });
 
-test("a Host provider failure cannot complete a run", async () => {
+for (const httpStatus of [402, 503]) for (const late of [false, true]) test(`a Host failure ${late ? "ignores an older request fault" : "reports the current provider fault without completing a Run"} (${httpStatus})`, async () => {
+  const id = randomUUID();
+  const fault = httpStatus === 402 ? "provider_quota" : "provider_unavailable";
   const app = await setup(
-    new FixtureHarness(async () => ({
-      status: "failed",
-      text: "",
-      error: "Provider unavailable.",
-    })),
+    new FixtureHarness(async (request) => {
+      const data = { id, at: new Date().toISOString(), source: "model_gateway", harness: "fixture", model: null,
+        nativeProtocol: "chat-completions", protocol: "chat-completions", effort: null, effortParameter: null };
+      request.onEvent({ type: "model.request", data: { ...data, status: "prepared" } });
+      if (late) {
+        const next = { ...data, id: randomUUID() };
+        request.onEvent({ type: "model.request", data: { ...next, status: "prepared" } });
+        request.onEvent({ type: "model.request", data: { ...next, status: "accepted", httpStatus: 200 } });
+      }
+      request.onEvent({ type: "model.request", data: { ...data, status: "rejected", httpStatus, fault } });
+      return { status: "failed", text: "", error: "Execution failed." };
+    }),
   );
   try {
     await app.request(app.messageRoute, {
@@ -326,6 +336,11 @@ test("a Host provider failure cannot complete a run", async () => {
         .some((e) => e.type === "run.completed"),
       false,
     );
+    const events = app.service.runtime.store.events(app.team.id);
+    const alert = events.find(event => event.type === "work.infra_blocked");
+    assert.deepEqual(alert?.data, late ? undefined : { cause: fault, requestId: id, httpStatus });
+    assert(events.some(event => event.type === "model.request" && event.data.id === id && event.data.status === "rejected"));
+    assert(!events.some(event => event.type === "context.compacted"));
   } finally {
     await app.close();
   }
@@ -385,6 +400,31 @@ for (const mode of ["unknown", "throw"] as const)
       await app.close();
     }
   });
+
+test("review process recovery requires the release receipt for its own attempt", async () => {
+  const id = randomUUID();
+  const harness = new FixtureHarness(async request => {
+    request.onEvent({ type: "review.command_runner_started", data: { id } });
+    return { status: "unknown", text: "", error: "Native confirmation was interrupted." };
+  });
+  const app = await setup(harness);
+  try {
+    const sent = await app.request(app.messageRoute, { content: "Continue the review", clientRequestId: "review-recovery" });
+    const store = app.service.runtime.store;
+    const read = () => store.get<Work>("works", app.team.id, sent.body.workId);
+    await until(() => read().status === "recovery_required");
+    const work = read();
+    const route = `/teams/${app.team.id}/works/${work.id}/reconcile`;
+    store.event(app.team.id, "review.command_runner_released", { id: randomUUID() }, work, work.attemptId!);
+    const blocked = await app.request(route, {});
+    assert.equal(blocked.status, 409);
+    assert.match(JSON.stringify(blocked.body), /review command process has no termination receipt/i);
+    assert.equal(read().status, "recovery_required");
+    store.event(app.team.id, "review.command_runner_released", { id }, work, work.attemptId!);
+    assert.equal((await app.request(route, {})).status, 200);
+    assert.equal(read().status, "interrupted");
+  } finally { await app.close(); }
+});
 
 test("message and dispatch commit atomically; old recorded messages are not replayed after configuration", async () => {
   const app = await setup(
@@ -475,7 +515,7 @@ test("stop acknowledgment stays stopping until the native attempt has ended", as
       {},
     );
     assert.equal(response.body.status, "stopping");
-    finish!({ status: "interrupted", text: "" });
+    finish!({ status: "failed", text: "", error: "The native transport closed during its cancellation acknowledgement." });
     await until(
       () =>
         app.service.runtime.store.get<Work>(
@@ -488,8 +528,53 @@ test("stop acknowledgment stays stopping until the native attempt has ended", as
       app.service.runtime.store.list<Run>("runs", app.team.id)[0].state,
       "active",
     );
+    const stopped = app.service.runtime.store.get<Work>("works", app.team.id, sent.body.workId);
+    assert.equal(stopped.error, "Stopped by user.");
+    assert.match(app.service.runtime.store.get<Attempt>("attempts", app.team.id, stopped.attemptId!).outcome!.error!, /native transport closed/);
   } finally {
     await app.close();
+  }
+});
+
+test("recovery records a stopped attempt's late completion without delivering its output", async () => {
+  let finish: ((r: HarnessResult) => void) | undefined;
+  const harness = new FixtureHarness(async () => new Promise(resolve => { finish = resolve; }));
+  harness.interrupt = async () => {};
+  const app = await setup(harness);
+  let restart: ReturnType<typeof createApp> | undefined;
+  let originalClosed = false;
+  try {
+    const sent = await app.request(app.messageRoute, { content: "Run a long calculation", clientRequestId: "stopped-recovery" });
+    const workId = sent.body.workId;
+    await until(() => !!finish);
+    assert.equal((await app.request(`/teams/${app.team.id}/works/${workId}/stop`, {})).body.status, "stopping");
+    finish!({ status: "unknown", text: "", error: "Native completion has not arrived." });
+    await until(() => app.service.runtime.store.get<Work>("works", app.team.id, workId).status === "recovery_required");
+    await app.close(true);
+    originalClosed = true;
+
+    const resumed = new FixtureHarness(async () => { throw new Error("Reconciliation started a new execution."); });
+    const lateText = "The old calculation finished after the stop.";
+    resumed.reconcile = async () => ({ status: "completed", text: lateText });
+    restart = createApp({ dataDir: app.dataDir, harnesses: [resumed] });
+    const stopped = await restart.runtime.reconcile(app.team.id, workId);
+    assert.equal(stopped.status, "interrupted");
+    assert.equal(stopped.error, "Stopped by user.");
+    assert.equal(stopped.result ?? null, null);
+    assert.deepEqual(stopped.artifactIds, []);
+    assert.equal(resumed.calls, 0);
+    const store = restart.runtime.store;
+    const attempt = store.get<Attempt>("attempts", app.team.id, stopped.attemptId!);
+    assert.deepEqual(store.attemptResult(attempt), { status: "completed", text: lateText });
+    const delivered = store.db.prepare("SELECT 1 FROM messages WHERE conversation_id=? AND role='assistant' AND content=?")
+      .get(app.conversation.id, lateText);
+    assert.equal(delivered, undefined);
+  } finally {
+    if (!originalClosed) await app.close();
+    else {
+      await restart?.close();
+      rmSync(app.root, { recursive: true, force: true });
+    }
   }
 });
 

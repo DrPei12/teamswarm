@@ -16,10 +16,35 @@ export function harnessProtocol(
   if (connection === "chatgpt" && models.chatgptProtocol) return models.chatgptProtocol;
   return source && models.protocols.includes(source) ? source : models.preferredProtocol ?? "chat-completions";
 }
+export const TEAM_HOST_EXECUTOR = "teamswarm-host" as const;
+
+/** Only official TeamSwarm model authorization or a user-configured provider key enters the Host runtime. */
+export function supportsTeamHost(config: ExecutionConfig): boolean {
+  if (!config.model) return false;
+  if (config.chatgptAccountId) return config.protocol === "responses" && !config.baseUrl && !config.credentialEnv;
+  if (!config.baseUrl || !config.credentialEnv || harnessManifest(config.harness)?.models.nativeOnly ||
+      config.protocol && !["responses", "chat-completions", "anthropic-messages"].includes(config.protocol)) return false;
+  try {
+    const url = new URL(config.baseUrl);
+    return (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
+}
+
+export function teamHostModelConfig(config: ExecutionConfig): ExecutionConfig {
+  return { ...config, protocol: config.chatgptAccountId ? "responses" : config.protocol ?? harnessProtocol(config.harness),
+    access: "read-only", permissions: undefined, nativeReadProbes: undefined };
+}
+
+export function supportsPiSubspaces(c: ExecutionConfig) {
+  return c.harness === "pi" && c.access === "workspace-write" && !c.nativeReadProbes &&
+    c.protocol === "chat-completions" && !!c.credentialEnv && !!apiEffortPolicy(c);
+}
+
 export function needsModelRoute(c: ExecutionConfig) {
   return (
     !!c.chatgptAccountId ||
     (c.harness === "antigravity" && !!c.baseUrl) ||
+    (c.harness === "deepseek-harness" && c.nativeReadProbes === true) ||
     (!!c.baseUrl && !!harnessManifest(c.harness)?.integration) ||
     !!apiEffortPolicy(c) ||
     (!!c.baseUrl &&

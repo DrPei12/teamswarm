@@ -13,7 +13,7 @@ test("Codex native approvals retain their policy, exact request identity and sco
     const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(calls)},line+'\\n');
     if(r.id==='approval'){send({method:'turn/completed',params:{threadId:'permission-session',turn:{id:'permission-turn',status:'completed'}}});return;}
     if(r.id===undefined)return;
-    const result=r.method==='thread/start'?{thread:{id:'permission-session'},model:'fixture',sandbox:{type:r.params.sandbox==='read-only'?'readOnly':'workspaceWrite'}}:r.method==='turn/start'?{turn:{id:'permission-turn'}}:{userAgent:'fixture'};
+    const result=r.method==='thread/unsubscribe'?{status:'notLoaded'}:r.method==='thread/start'?{thread:{id:'permission-session'},model:'fixture',sandbox:{type:r.params.sandbox==='read-only'?'readOnly':'workspaceWrite'}}:r.method==='turn/start'?{turn:{id:'permission-turn'}}:{userAgent:'fixture'};
     send({id:r.id,result});if(r.method==='turn/start')setTimeout(()=>send({id:'approval',method:'item/commandExecution/requestApproval',params:{threadId:'permission-session',turnId:'permission-turn',itemId:'native-command',command:'echo fixture',reason:'Fixture permission'}}),10);
   });`);
   const old = process.env.TEAM_CODEX_BIN; process.env.TEAM_CODEX_BIN = entry;
@@ -80,7 +80,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
  const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(r)+'\\n');
  if(r.id===undefined)return;
  if(r.method==='thread/read')return send({id:r.id,error:{message:r.params.threadId==='unsupported'?'list_turns is not supported yet':'History access denied'}});
- const result=r.method==='thread/resume'?{thread:{id:r.params.threadId}}:
+ const result=r.method==='thread/unsubscribe'?{status:'notLoaded'}:r.method==='thread/resume'?{thread:{id:r.params.threadId}}:
    r.method==='thread/start'?{thread:{id:'fresh-session'},model:'fixture',sandbox:{type:'readOnly'}}:
    r.method==='turn/start'?{turn:{id:'fresh-turn'}}:{userAgent:'fixture'};
  send({id:r.id,result});
@@ -93,7 +93,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
       const harness = new CodexHarness();
       const sessions: string[] = [], events: any[] = [], boundaries: any[] = [];
       const request = {
-        workspace: root, sessionId,
+        workspace: root, sessionId, hostMode: "dialogue" as const,
         config: { harness: "codex", model: "fixture", provider: null, baseUrl: null, credentialEnv: null, effort: null, access: "read-only" as const, protocol: "responses" as const },
         instructions: "Read supplied current Team context.", input: "Complete remaining work using preserved artifacts.",
         tools: [{name: "team_state", description: "Inspect Team", inputSchema: {type: "object", properties: {}}}],
@@ -116,9 +116,11 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
         assert.equal(starts.length,sessionId==='unsupported'?1:0);
         assert.equal(turns.length,sessionId==='unsupported'?1:0);
         if(starts.length) {
-          assert.equal(starts[0].params.developerInstructions, request.instructions);
+          assert(starts[0].params.developerInstructions.startsWith(request.instructions));
+          assert.match(starts[0].params.developerInstructions, /native subagents for local investigation/);
           assert.equal(starts[0].params.sandbox, "read-only");
-          assert.equal(starts[0].params.dynamicTools[0].name, "team_state");
+          assert.deepEqual(starts[0].params.dynamicTools, []);
+          assert.match(starts[0].params.config["mcp_servers.teamswarm"].url, /^http:\/\/127\.0\.0\.1:/);
           assert.equal(turns[0].params.threadId, "fresh-session");
           assert.equal(turns[0].params.input[0].text, request.input);
           assert.equal(request.input, "Fresh project overview and relevant original definitions.");
@@ -222,7 +224,7 @@ test("review policy rejects source grants and only accepts one bounded scratch r
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("a native server ignoring the review profile cannot start a review turn", async () => {
+for (const routed of [false, true]) test(`a native server ignoring the ${routed ? "routed review profile" : "subscription source boundary"} cannot start a review turn`, async () => {
   const root = mkdtempSync(path.join(tmpdir(), "teamswarm-review-transport-"));
   const scratch = path.join(tmpdir(), path.basename(root) + "-scratch");
   const entry = path.join(root, "fixture.js"), calls = path.join(root, "calls.jsonl");
@@ -245,6 +247,9 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
     let rebuilt = false;
     const result = await harness.execute({
       workspace: root, verificationDirectory: scratch, sessionId: "old-review-session",
+      assertReviewCommand: () => {},
+      ...(routed ? { modelRoute: { token: "route-fixture", sourceConfig: { harness:"codex",model:"fixture",provider:null,
+        baseUrl:"http://127.0.0.1:1",credentialEnv:null,effort:null,access:"read-only" as const,protocol:"responses" as const } } } : {}),
       config: {harness:"codex",model:"fixture",provider:null,baseUrl:null,credentialEnv:null,effort:null,access:"read-only",protocol:"responses"},
       instructions:"Verify immutable source.",input:"No real model.",tools:[],
       onSession:()=>{},onTurn:()=>assert.fail("A rejected policy must not start a turn"),onEvent:()=>{},onTool:async()=>({}),
@@ -255,8 +260,9 @@ require('node:readline').createInterface({input:process.stdin}).on('line', line 
     assert.match(result.error ?? "", /did not enforce/);
     const requests = readFileSync(calls, "utf8").trim().split("\n").map(line=>JSON.parse(line));
     const start = requests.find(r=>r.method==='thread/start');
-    assert.equal(start.params.permissions, "teamswarm-review");
-    assert.equal(Object.hasOwn(start.params, "sandbox"), false);
+    const isolatedCommands = process.platform === "win32" && !routed;
+    assert.equal(start.params.permissions, isolatedCommands ? undefined : "teamswarm-review");
+    assert.equal(start.params.sandbox, isolatedCommands ? "read-only" : undefined);
     assert.equal(requests.some(r=>r.method==='thread/resume'||r.method==='turn/start'), false);
   } finally {
     await harness.close();
@@ -281,16 +287,19 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
   const oldBin=process.env.TEAM_CODEX_BIN, oldKey=process.env.TEST_CONNECTION_KEY;
   process.env.TEAM_CODEX_BIN=entry; process.env.TEST_CONNECTION_KEY="test-only";
   try {
-    for(const scenario of [{api:true,effort:null},{api:true,effort:"low"},{api:false,effort:null}] as const) {
+    for(const scenario of [{api:true,effort:null,source:null},{api:true,effort:"low",source:null},{api:false,effort:null,source:null},
+      {api:true,effort:null,source:"chat-completions"},{api:true,effort:null,source:"anthropic-messages"}] as const) {
       const harness=new CodexHarness();
       try {
         await harness.execute({workspace:root, config:{harness:"codex", model:"vendor-model", provider:null,
           baseUrl:scenario.api?"https://example.test/v1":null, credentialEnv:scenario.api?"TEST_CONNECTION_KEY":null,
           protocol:"responses", effort:scenario.effort,access:"read-only"},instructions:"No inference.",input:"No inference.",tools:[],
+          ...(scenario.source ? { modelRoute: { token: "route-fixture", sourceConfig: { harness: "codex", model: "vendor-model", provider: null, baseUrl: "https://example.test/v1", credentialEnv: "TEST_CONNECTION_KEY", protocol: scenario.source, effort: null, access: "read-only" as const } } } : {}),
           onSession:()=>{void harness.close();},onTurn:()=>assert.fail("No inference expected"),onEvent:()=>{},onTool:async()=>({})});
         const start=readFileSync(calls,"utf8").trim().split("\n").map(line=>JSON.parse(line)).filter(r=>r.method==="thread/start").at(-1);
         assert.equal(start.params.config.model_reasoning_effort,scenario.api?scenario.effort??"none":undefined);
         assert.equal(start.params.config.model_reasoning_summary,scenario.api?"none":undefined);
+        assert.equal(start.params.config.web_search,scenario.source?"disabled":undefined);
       } finally {await harness.close();}
     }
   } finally {

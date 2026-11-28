@@ -21,27 +21,40 @@ import { badRequest, conflict, notFound } from "../errors.js";
 import { ownedRuntimeLocks, processIdentity, processStartedAfterFile } from "./process-identity.js";
 import type { ProjectHistory } from "./project-history.js";
 import { RuntimeChanges } from "./changes.js";
+import { threadOf } from "./collaboration-records.js";
 import { createMemberDirectory } from "./member-workspaces.js";
 import { WorkspaceAccess } from "./workspace-access.js";
+import { hasUnsettledPublication, unfinishedPublicationError } from "./file-write-set.js";
 import { successfulCommand, finishedCommand } from "./harness/command-observations.js";
+import { verifySemanticConflicts } from "./semantic-conflicts.js";
+import { SessionVitality } from "./session-vitality.js";
 import type {
   Acceptance,
   ArtifactVersion,
   Attempt,
+  AttemptStatus,
+  ExecutionOutcome,
+  HarnessResult,
   ExecutionConfig,
   Member,
+  OutcomeSpecification,
   Requirement,
   Run,
+  SemanticConflictInput,
   RuntimeEvent,
   RuntimeSettings,
   Work,
   WorkStatus,
+  WorkspaceIdentity,
   TeamExchange,
   TeamExchangeMessage,
   HostDelivery,
 } from "./types.js";
 
 const timestamp = () => new Date().toISOString();
+// Only these journal entries may have replaced bytes without advancing output heads.
+const partialPublication = `json_extract(data,'$.publication.state') NOT IN ('published','kept_current') AND
+  (json_extract(data,'$.publication.preparedPath') IS NOT NULL OR json_array_length(data,'$.publication.appliedPaths') > 0)`;
 export const hash = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
 const tables = [
@@ -70,7 +83,7 @@ type Entity =
   | TeamExchange
   | TeamExchangeMessage
   | HostDelivery;
-export const activeStates = new Set<WorkStatus>([
+export const activeStates = new Set<WorkStatus | AttemptStatus>([
   "running",
   "stopping",
   "recovery_required",
@@ -93,7 +106,9 @@ export function overlaps(a: string, b: string): boolean {
 export class RuntimeStore {
   readonly db: DatabaseSync;
   readonly changes: RuntimeChanges;
+  readonly vitality: SessionVitality;
   history?: ProjectHistory;
+  workflows?: import("./workflow-plans.js").WorkflowPlans;
   private lockPath: string;
   private lockId = randomUUID();
   private commitFrames: Array<Array<() => void>> = [];
@@ -155,11 +170,15 @@ export class RuntimeStore {
           CREATE INDEX IF NOT EXISTS runtime_works_run ON runtime_works(team_id,json_extract(data,'$.runId'));
           CREATE INDEX IF NOT EXISTS runtime_works_member ON runtime_works(team_id,json_extract(data,'$.memberId'));
           CREATE INDEX IF NOT EXISTS runtime_works_thread ON runtime_works(team_id,json_extract(data,'$.threadId'));
+          CREATE INDEX IF NOT EXISTS runtime_works_continuation ON runtime_works(team_id,json_extract(data,'$.continuationOf'));
+          CREATE INDEX IF NOT EXISTS runtime_requirements_outcomes ON runtime_requirements(
+            team_id,json_extract(data,'$.outcome.branchId'),json_extract(data,'$.outcome.revision'));
           CREATE INDEX IF NOT EXISTS runtime_works_exchange ON runtime_works(team_id,json_extract(data,'$.collaborationExchangeId'));
           CREATE INDEX IF NOT EXISTS runtime_runs_state ON runtime_runs(team_id,json_extract(data,'$.state'));
           CREATE INDEX IF NOT EXISTS runtime_attempts_work ON runtime_attempts(team_id,json_extract(data,'$.workId'));
           CREATE INDEX IF NOT EXISTS runtime_exchanges_status ON runtime_exchanges(team_id,json_extract(data,'$.status'));
           CREATE INDEX IF NOT EXISTS runtime_works_global_status ON runtime_works(json_extract(data,'$.status'),team_id);
+          CREATE INDEX IF NOT EXISTS runtime_works_partial_publication ON runtime_works(id) WHERE ${partialPublication};
           CREATE INDEX IF NOT EXISTS runtime_waiting_deadline ON runtime_works(json_extract(data,'$.continuation.deadline'),team_id)
             WHERE json_extract(data,'$.status')='waiting' AND json_extract(data,'$.continuation.timeoutReportedAt') IS NULL;
           CREATE INDEX IF NOT EXISTS runtime_open_exchanges_due ON runtime_exchanges(json_extract(data,'$.commitment.dueAt'),team_id)
@@ -192,7 +211,29 @@ export class RuntimeStore {
           }
           this.db.prepare("INSERT INTO runtime_migrations VALUES (4, ?)").run(timestamp());
         }
+        if (!this.db.prepare("SELECT 1 FROM runtime_migrations WHERE version = 5").get()) {
+          for (const team of teams.listTeams()) for (const attempt of this.list<Attempt>("attempts", team.id)) {
+            const legacyStatus = attempt.status as WorkStatus;
+            if (activeStates.has(legacyStatus)) continue;
+            const receipt = this.db.prepare("SELECT data FROM runtime_events WHERE attempt_id=? AND type='execution.reconciled' ORDER BY sequence DESC LIMIT 1").get(attempt.id);
+            const observed = receipt ? JSON.parse(String(receipt.data)).nativeStatus : undefined;
+            const status: ExecutionOutcome["status"] = ["completed", "failed", "interrupted", "unknown"].includes(observed)
+              ? observed : ["submitted", "accepted", "rejected", "self_checked", "yielded", "waiting", "queued"].includes(legacyStatus)
+                ? "completed" : "unknown";
+            attempt.legacyStatus = legacyStatus;
+            attempt.status = status;
+            attempt.outcome = { status, source: "legacy", observedAt: attempt.finishedAt ?? attempt.startedAt };
+            this.save("attempts", attempt);
+          }
+          this.db.prepare("INSERT INTO runtime_migrations VALUES (5, ?)").run(timestamp());
+        }
+        if (!this.db.prepare("SELECT 1 FROM runtime_migrations WHERE version = 6").get()) {
+          this.db.exec(`DROP INDEX IF EXISTS runtime_works_partial_publication;
+            CREATE INDEX runtime_works_partial_publication ON runtime_works(id) WHERE ${partialPublication};`);
+          this.db.prepare("INSERT INTO runtime_migrations VALUES (6, ?)").run(timestamp());
+        }
       });
+      this.vitality = new SessionVitality(this.db);
       for (const table of tables) this.changes.track(`runtime_${table}`, table, "team_id",
         ["settings", "members", "runs", "works", "exchanges", "exchange_messages"].includes(table), "data");
       this.changes.track("runtime_events", "events");
@@ -301,6 +342,19 @@ export class RuntimeStore {
     if (limit) rows.reverse();
     return rows.map(row => JSON.parse(String(row.data)) as Work);
   }
+  assertPublicationSnapshotSafe(teamId: string, source: WorkspaceIdentity) {
+    // The journal owns physical files, not a branch. Two teams may choose the same project.
+    for (const row of this.db.prepare(`SELECT id, team_id, json_extract(data,'$.publication.state') AS state,
+      coalesce(json_extract(data,'$.publication.plan.workspace'), json_extract(data,'$.sourceWorkspaceIdentity')) AS identity,
+      json_extract(data,'$.sourceWorkspace') AS source FROM runtime_works WHERE ${partialPublication}`).all()) {
+      const target = row.identity ? JSON.parse(String(row.identity)) as WorkspaceIdentity : undefined;
+      const root = target?.path ?? (typeof row.source === "string" ? row.source : undefined);
+      const sameDirectory = target && target.inode !== 0 && source.inode === target.inode &&
+        source.device === target.device && source.createdAt === target.createdAt;
+      if ((root && overlaps(root, source.path)) || sameDirectory)
+        throw unfinishedPublicationError(row.team_id === teamId ? `Work ${row.id}` : "This project directory", String(row.state));
+    }
+  }
   activeRuns(teamId: string): Run[] {
     return this.db.prepare("SELECT data FROM runtime_runs WHERE team_id=? AND json_extract(data,'$.state')='active' ORDER BY rowid")
       .all(teamId).map(r => JSON.parse(String(r.data)));
@@ -333,18 +387,19 @@ export class RuntimeStore {
     data: Record<string, unknown>,
     work?: Work,
     attemptId?: string,
-  ): void {
+  ): string {
     if (type === "execution.item" && data.type === "commandExecution" && work?.reviewOf) {
       const id = attemptId ?? work.attemptId;
       const attempt = id ? this.get<Attempt>("attempts", teamId, id) : undefined;
       data = { ...data, reviewEvidenceContext: attempt?.reviewEvidenceContext };
     }
+    const eventId = randomUUID();
     this.db
       .prepare(
         "INSERT INTO runtime_events(id, team_id, run_id, work_id, attempt_id, type, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
-        randomUUID(),
+        eventId,
         teamId,
         work?.runId ?? null,
         work?.id ?? null,
@@ -354,6 +409,7 @@ export class RuntimeStore {
         timestamp(),
       );
     this.changes.signal();
+    return eventId;
   }
   events(teamId: string, after = 0, limit = 200): RuntimeEvent[] {
     if (!this.teams.getTeam(teamId)) throw notFound();
@@ -669,10 +725,27 @@ export class RuntimeStore {
     );
     return work;
   }
+  currentOutcome(teamId: string, branchId: string): Requirement | undefined {
+    const row = this.db.prepare(`
+      SELECT data FROM runtime_requirements
+      WHERE team_id=? AND json_extract(data,'$.outcome.branchId')=?
+      ORDER BY json_extract(data,'$.outcome.revision') DESC LIMIT 1
+    `).get(teamId, branchId);
+    return row ? JSON.parse(String(row.data)) : undefined;
+  }
   publishRequirement(
     work: Work,
     content: string,
     affectedWorkIds: string[],
+    outcome?: { expectedRequirementId: string | null; specification: OutcomeSpecification },
+  ): Requirement {
+    return this.transaction(() => this.publishRequirementRevision(work, content, affectedWorkIds, outcome));
+  }
+  private publishRequirementRevision(
+    work: Work,
+    content: string,
+    affectedWorkIds: string[],
+    proposed?: { expectedRequirementId: string | null; specification: OutcomeSpecification },
   ): Requirement {
     const run = this.get<Run>("runs", work.teamId, work.runId);
     const current = this.get<Requirement>(
@@ -685,11 +758,32 @@ export class RuntimeStore {
         "already_effective",
         "This message already established an effective requirement. Send a new user revision.",
       );
-    const requirement = {
+    const branchId = this.history?.forRun(run).id;
+    const previous = branchId ? this.currentOutcome(work.teamId, branchId) : undefined;
+    if (proposed) {
+      const latest = this.teams.getConversationDetail(work.teamId, run.conversationId)?.messages
+        .filter(message => message.role === "user" && message.delivery !== "example").at(-1);
+      const member = this.get<Member>("members", work.teamId, work.memberId);
+      if (!branchId || member.kind !== "host" || work.interaction || work.kind === "host-followup" || work.kind === "collaboration" ||
+          latest?.id !== run.sourceMessageId)
+        throw conflict("outcome_user_request", "Bind this outcome revision to the current user request.");
+      if (proposed.expectedRequirementId !== (previous?.id ?? null))
+        throw conflict("outcome_changed", "Read the current outcome before revising it.");
+    }
+    const requirement: Requirement = {
       ...current,
       content,
       affectedWorkIds,
       status: "effective" as const,
+      ...(previous ? { outcomeRequirementId: previous.id } : {}),
+      ...(proposed && branchId ? {
+        outcomeRequirementId: current.id,
+        outcome: {
+          branchId, revision: (previous?.outcome?.revision ?? 0) + 1,
+          parentRequirementId: previous?.id ?? null,
+          specification: proposed.specification,
+        },
+      } : {}),
     };
     this.save("requirements", requirement);
     for (const id of affectedWorkIds) {
@@ -732,6 +826,7 @@ export class RuntimeStore {
         revision: requirement.revision,
         sourceMessageId: requirement.sourceMessageId,
         affectedWorkIds,
+        outcomeRequirementId: requirement.outcomeRequirementId,
       },
       work,
     );
@@ -767,30 +862,79 @@ export class RuntimeStore {
     return attempt;
   }
   setStatus(work: Work, status: WorkStatus, error: string | null = null): void {
-    if (["queued", "waiting", "running"].includes(status))
-      this.activeMember(work.teamId, work.memberId);
-    work.status = status;
-    work.error = error;
-    work.updatedAt = timestamp();
-    work.revision++;
-    this.save("works", work);
-    if (work.attemptId) {
-      const attempt = this.get<Attempt>(
-        "attempts",
+    this.transaction(() => {
+      if (status === "superseded") {
+        // Both requirement and definition revisions retire Work here. File progress can
+        // change without a Work revision bump, so consult the durable row, not the caller.
+        const current = this.get<Work>("works", work.teamId, work.id);
+        if (hasUnsettledPublication(current.publication))
+          throw unfinishedPublicationError(`Work ${work.id}`, current.publication!.state);
+        if (!isDeepStrictEqual(current.publication, work.publication))
+          throw conflict("version_conflict", "Publication changed. Reload the work before replacing it.");
+      }
+      if (["queued", "waiting", "running"].includes(status))
+        this.activeMember(work.teamId, work.memberId);
+      const previousStatus = work.status;
+      work.status = status;
+      work.error = error;
+      work.updatedAt = timestamp();
+      work.revision++;
+      this.save("works", work);
+      if (work.attemptId) {
+        const attempt = this.get<Attempt>(
+          "attempts",
+          work.teamId,
+          work.attemptId,
+        );
+        if (activeStates.has(attempt.status) && (status === "stopping" || status === "recovery_required")) {
+          attempt.status = status;
+          this.save("attempts", attempt);
+        }
+        const request = attempt.modelRequest;
+        if (status === "failed" && previousStatus !== "failed" && previousStatus !== "stopping" &&
+            attempt.outcome?.status === "failed" && request?.status === "rejected" && request.fault)
+          this.event(work.teamId, "work.infra_blocked", {
+            cause: request.fault, requestId: request.id, httpStatus: request.httpStatus,
+          }, work, attempt.id);
+      }
+      this.event(
         work.teamId,
-        work.attemptId,
+        `work.${status}`,
+        { error, revision: work.revision },
+        work,
       );
-      attempt.status = status;
-      if (!activeStates.has(status) && !attempt.finishedAt)
-        attempt.finishedAt = timestamp();
+    });
+  }
+  finishAttempt(teamId: string, attemptId: string, result: Pick<HarnessResult, "status" | "error"> & { text?: string }, source: ExecutionOutcome["source"]): Attempt {
+    return this.transaction(() => {
+      const attempt = this.get<Attempt>("attempts", teamId, attemptId);
+      if (attempt.outcome && attempt.outcome.status !== "unknown") return attempt;
+      const observedAt = timestamp();
+      attempt.outcome = { status: result.status, source, observedAt, ...(result.error ? { error: result.error } : {}) };
+      attempt.status = result.status === "unknown" && source !== "authority_revoked" ? "recovery_required" : result.status;
+      if (result.status !== "unknown") attempt.finishedAt ??= observedAt;
+      const work = this.get<Work>("works", teamId, attempt.workId);
+      attempt.outcome.resultEventId = this.event(teamId, "attempt.execution_ended", { outcome: attempt.outcome, status: attempt.status, ...(typeof result.text === "string" ? { text: result.text } : {}) }, work, attempt.id);
       this.save("attempts", attempt);
-    }
-    this.event(
-      work.teamId,
-      `work.${status}`,
-      { error, revision: work.revision },
-      work,
-    );
+      return attempt;
+    });
+  }
+  attemptResult(attempt: Attempt): HarnessResult | undefined {
+    const outcome = attempt.outcome;
+    if (!outcome?.resultEventId || !["native", "recovery"].includes(outcome.source) || outcome.status === "unknown") return;
+    const row = this.db.prepare("SELECT data FROM runtime_events WHERE id=? AND team_id=? AND attempt_id=? AND type='attempt.execution_ended'")
+      .get(outcome.resultEventId, attempt.teamId, attempt.id);
+    const result = row ? JSON.parse(String(row.data)) : undefined;
+    if (typeof result?.text !== "string") return;
+    return { status: outcome.status, text: result.text, ...(outcome.error ? { error: outcome.error } : {}) };
+  }
+  attemptWorkStatus(work: Work, attempt: Attempt): WorkStatus {
+    if (work.attemptId === attempt.id) return work.status;
+    const statuses: WorkStatus[] = ["queued", "waiting", "running", "yielded", "stopping", "submitted", "self_checked", "accepted", "rejected", "failed", "interrupted", "recovery_required", "superseded"];
+    const row = this.db.prepare(`SELECT type FROM runtime_events WHERE attempt_id=? AND type IN (${statuses.map(() => "?").join(",")}) ORDER BY sequence DESC LIMIT 1`)
+      .get(attempt.id, ...statuses.map(status => `work.${status}`));
+    if (row) return String(row.type).slice(5) as WorkStatus;
+    return attempt.legacyStatus ?? (attempt.status === "completed" ? "submitted" : attempt.status === "unknown" ? "recovery_required" : attempt.status);
   }
   workspace(work: Work): string {
     return (
@@ -944,6 +1088,23 @@ export class RuntimeStore {
       this.get<ArtifactVersion>("artifacts", work.teamId, id),
     );
   }
+  verifyFrozenArtifacts(work: Work): ArtifactVersion[] {
+    if (!work.candidateSnapshotId) return this.verifyArtifacts(work);
+    const files = new Map(this.history!.snapshots.manifest(work.candidateSnapshotId).files.map(file => [file.path, file]));
+    const artifacts = this.currentArtifacts(work);
+    if (!artifacts.length) throw conflict("missing_artifacts", "Work has no captured result.");
+    for (const artifact of artifacts)
+      if (artifact.workId !== work.id || artifact.attemptId !== work.attemptId ||
+          hash(artifact.content) !== artifact.sha256 ||
+          (artifact.path !== "@result" && files.get(artifact.path)?.hash !== artifact.sha256))
+        throw conflict("artifact_changed", `The frozen artifact failed verification: ${artifact.path}`);
+    return artifacts;
+  }
+  receivedArtifact(attemptId: string, artifactId: string): boolean {
+    return !!this.db.prepare(
+      "SELECT 1 FROM runtime_events WHERE attempt_id=? AND type='artifact.received' AND json_extract(data, '$.artifactId')=?",
+    ).get(attemptId, artifactId);
+  }
   verifyArtifacts(work: Work): ArtifactVersion[] {
     const artifacts = this.currentArtifacts(work);
     for (const artifact of artifacts)
@@ -1001,6 +1162,10 @@ export class RuntimeStore {
     );
   }
   assertReviewTargetCurrent(target: Work): void {
+    const latestProducer = this.workQuery(target.teamId, { threadId: threadOf(target) })
+      .filter(work => !work.interaction && !work.reviewOf && work.kind !== "collaboration").at(-1);
+    if (target.supersededByWorkIds?.length || latestProducer && latestProducer.id !== target.id)
+      throw conflict("review_target_replaced", "The review target was replaced. Request a review of the current producer submission.");
     if (this.history && (!target.attemptId || !this.history.isCurrent(target, target.attemptId)))
       throw conflict(
         "producer_context_stale",
@@ -1012,6 +1177,7 @@ export class RuntimeStore {
     targetId: string,
     verdict: "accepted" | "rejected",
     criteria: Acceptance["criteria"],
+    conflicts: SemanticConflictInput[] = [],
   ): Acceptance {
     const target = this.get<Work>("works", reviewer.teamId, targetId);
     if (target.status !== "submitted")
@@ -1122,6 +1288,7 @@ export class RuntimeStore {
             );
           if (
             !finishedCommand(check) ||
+            reviewing.actual?.detachedReviewCommands === true && check.reviewCommandLane !== true ||
             (criterion.passed && !successfulCommand(check))
           )
             throw conflict(
@@ -1147,17 +1314,14 @@ export class RuntimeStore {
           throw conflict("review_workspace_changed", `Restore the assigned artifact version before reviewing: ${artifact.path}`);
     }
     for (const artifact of artifacts) {
-      const received = this.db
-        .prepare(
-          "SELECT 1 FROM runtime_events WHERE attempt_id = ? AND type = 'artifact.received' AND json_extract(data, '$.artifactId') = ?",
-        )
-        .get(reviewer.attemptId, artifact.id);
+      const received = this.receivedArtifact(reviewer.attemptId!, artifact.id);
       if (!received)
         throw conflict(
           "artifact_not_received",
           "Read every submitted artifact version before accepting it.",
         );
     }
+    const semanticConflicts = verifySemanticConflicts(this, reviewer, target, criteria, verdict, conflicts);
     const acceptance: Acceptance = {
       acceptanceEvidence: required,
       id: randomUUID(),
@@ -1169,6 +1333,7 @@ export class RuntimeStore {
       artifactIds: artifacts.map((a) => a.id),
       verdict,
       criteria,
+      ...(semanticConflicts.length ? { semanticConflicts } : {}),
       createdAt: timestamp(),
     };
     if (this.history) {
@@ -1192,13 +1357,17 @@ export class RuntimeStore {
       },
       target,
     );
+    if (semanticConflicts.length)
+      this.event(target.teamId, "work.semantic_conflict", { acceptanceId: acceptance.id, targetWorkId: target.id,
+        targetAttemptId: target.attemptId, conflictIds: semanticConflicts.map(issue => issue.id) }, reviewer, reviewer.attemptId!);
     return acceptance;
   }
   appendAssistant(run: Run, content: string, receiptId: string): void {
     if (!content.trim()) return;
+    const retired = this.db.prepare("SELECT retired_by FROM messages WHERE conversation_id=? AND id=?").get(run.conversationId,run.sourceMessageId)?.retired_by;
     this.db
       .prepare(
-        "INSERT OR IGNORE INTO messages(id, conversation_id, role, content, created_at, delivery, client_request_id) VALUES (?, ?, 'assistant', ?, ?, 'recorded', ?)",
+        "INSERT OR IGNORE INTO messages(id, conversation_id, role, content, created_at, delivery, client_request_id, retired_by) VALUES (?, ?, 'assistant', ?, ?, 'recorded', ?, ?)",
       )
       .run(
         randomUUID(),
@@ -1206,6 +1375,7 @@ export class RuntimeStore {
         content,
         timestamp(),
         `runtime:${receiptId}`,
+        retired ?? null,
       );
     this.db
       .prepare("UPDATE conversations SET updated_at = ? WHERE id = ?")

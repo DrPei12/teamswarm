@@ -242,6 +242,46 @@
   max-height: calc(100% - 80px);
   min-width: 0;
 }
+.subspace-recovery {
+  min-height: 0;
+  max-height: 180px;
+  overflow: auto;
+  margin: 0 16px 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: calc(12px * var(--font-scale));
+  overflow-wrap: anywhere;
+}
+.subspace-recovery-plan + .subspace-recovery-plan {
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+.subspace-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.subspace-restore-content {
+  overflow: auto;
+  padding: 0 16px 16px;
+  overflow-wrap: anywhere;
+}
+.subspace-restore-content li > span {
+  display: block;
+  color: var(--secondary);
+}
+.publication-retention-modal {
+  max-height: min(85dvh, calc(100dvh - 32px));
+  display: flex;
+  flex-direction: column;
+}
+.publication-retention-modal > .modal-header {
+  flex: none;
+}
+[data-publication-state="kept_current"] {
+  color: var(--secondary);
+}
 .member-composer {
   margin: 0 16px 16px;
   padding: 10px 12px;
@@ -376,6 +416,18 @@
 .activity-items {
   border-top: 1px solid var(--line);
   padding-top: 10px;
+}
+.activity-subagent > summary {
+  cursor: pointer;
+  padding: 6px 0;
+}
+.activity-subagent > summary small {
+  margin-left: auto;
+}
+.activity-subagent-items {
+  margin: 4px 0 8px 7px;
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
 }
 .activity-item {
   margin: 6px 0;

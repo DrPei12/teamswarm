@@ -1,5 +1,6 @@
 .workspace-settings.modal {
-  width: min(680px, calc(100vw - 32px));
+  width: min(1120px, calc(100vw - 32px));
+  height: min(800px, calc(100dvh - 32px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -22,24 +23,100 @@
   min-height: 0;
   overflow: auto;
 }
-.settings-tabs {
+.workspace-settings-body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: clamp(180px, 25%, 260px) minmax(0, 1fr);
+  border-top: 1px solid var(--line);
+}
+.settings-navigation {
+  padding: 16px;
+  overflow: auto;
+  min-width: 0;
+  background: var(--surface-top);
+  border-inline-end: 1px solid var(--line);
+}
+.settings-search {
   display: flex;
-  gap: 16px;
-  flex: none;
-  border-bottom: 1px solid var(--line);
-  padding: 0 24px;
+  gap: 8px;
+  align-items: center;
+  background: var(--hover);
+  border-radius: 9px;
+  padding: 8px;
+}
+.settings-search input {
+  min-width: 0;
+  width: 100%;
+  color: var(--text);
+}
+.settings-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+.settings-tabs,
+.settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.settings-nav-group h3 {
+  margin: 18px 6px 4px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--secondary);
 }
 .settings-tabs button {
   background: transparent;
   color: var(--secondary);
-  padding: 9px 2px;
-  border-bottom: 2px solid transparent;
-  font-size: 0.96rem;
+  padding: 8px 10px;
+  border-radius: 7px;
+  text-align: start;
+}
+.settings-tabs button:is(:hover, [data-state="active"]) {
+  color: var(--text);
+  background: var(--hover);
 }
 .settings-tabs button[data-state="active"] {
-  color: var(--text);
-  border-color: var(--accent-solid);
   font-weight: 600;
+}
+.cap-footer .cap-inherit {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.cap-footer .cap-inherit input {
+  width: auto;
+}
+.workspace-settings .embedded-settings {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.workspace-settings .embedded-settings .cap-footer {
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
+}
+@media (max-width: 560px) {
+  .workspace-settings-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .settings-navigation {
+    max-height: 29dvh;
+    border-inline-end: 0;
+    border-bottom: 1px solid var(--line);
+    padding: 10px;
+  }
+  .settings-tabs {
+    flex-direction: row;
+    overflow: auto;
+  }
+  .settings-nav-group {
+    min-width: max-content;
+  }
 }
 .appearance-scroll {
   overflow: auto;

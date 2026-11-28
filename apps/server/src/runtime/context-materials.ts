@@ -10,8 +10,11 @@ import {
   relevance,
 } from "./context-budget.js";
 import { WorkspaceAccess } from "./workspace-access.js";
+import { attemptFileReadRanges } from "./handoff-memo.js";
+import { toolReads } from "./tool-history.js";
 import { resolveProjectSource } from "./collaboration-records.js";
-import type { ProjectInsight, Run, Work } from "./types.js";
+import type { MemoryGovernance } from "./memory-governance.js";
+import type { McpMount, ProjectDefinitionScope, ProjectInsight, Run, Work } from "./types.js";
 
 export interface ContextMaterial {
   ref: string;
@@ -45,10 +48,35 @@ function materialSources(m: ContextMaterial) {
 export const catalogRevision = (m: ContextMaterial) =>
   m.revision + (m.stale ? ":recheck" : "");
 
+export const isMemberContextRef = (ref: string) =>
+  ref.startsWith("member:") && ref.endsWith("/context");
+
+type McpRead = McpMount & { sha256: string; memberId?: string; callId?: string; argumentsSha256?: string; schemaSha256?: string };
+
+function recentMcpReads(store: RuntimeStore, teamId: string, workId: string, attemptId: string) {
+  const limit = 12;
+  const rows = store.db.prepare(`SELECT id,created_at,data FROM runtime_events
+    WHERE attempt_id=? AND type='mcp.tool_completed' AND team_id=? AND work_id=?
+    ORDER BY sequence DESC LIMIT ?`).all(attemptId, teamId, workId, limit + 1);
+  const items = rows.slice(0, limit).reverse().map(row => {
+    const data = JSON.parse(String(row.data)) as McpRead;
+    return {
+      id: String(row.id), createdAt: String(row.created_at),
+      serviceId: data.serviceId, tool: data.tool, revision: data.revision, generation: data.generation, sha256: data.sha256,
+      ...(typeof data.memberId === "string" ? { memberId: data.memberId } : {}),
+      ...(typeof data.callId === "string" ? { callId: data.callId } : {}),
+      ...(typeof data.argumentsSha256 === "string" ? { argumentsSha256: data.argumentsSha256 } : {}),
+      ...(typeof data.schemaSha256 === "string" ? { schemaSha256: data.schemaSha256 } : {}),
+    };
+  });
+  return { items, hasEarlier: rows.length > limit };
+}
+
 export function materialHeader(
   m: ContextMaterial,
   query = "",
   tokenBudget = 1200,
+  scope?: ProjectDefinitionScope,
 ) {
   const sources = materialSources(m);
   const header = {
@@ -65,6 +93,9 @@ export function materialHeader(
     sourceCount: sources.length,
     ...(m.data.historical ? { historical: true } : {}),
     ...(m.stale ? { requiresRecheck: true } : {}),
+    ...(scope && m.kind === "document" ? {
+      definitionRole: scope.revisions[m.data.key] === m.revision ? "selected" : "background",
+    } : {}),
   };
   header.preview = excerpt(
     m.content,
@@ -99,6 +130,7 @@ export class ContextMaterials {
     readonly store: RuntimeStore,
     readonly history: ProjectHistory,
     readonly catalog: TeamCatalog,
+    readonly memory: MemoryGovernance,
   ) {
     store.db.exec(
       "CREATE INDEX IF NOT EXISTS context_message_conversation ON messages(conversation_id, created_at)",
@@ -140,6 +172,7 @@ export class ContextMaterials {
           title: `${description.name}: ${section}`, revision: description.revision,
           content: JSON.stringify(body), links: [description.ref], memberIds, data: { harness: id, section } });
     }
+    const archivedNotes = this.memory.archiveKeys(run.teamId, project.branchId, "note");
     const fileDigests = new Map<string, string | null>();
     const capabilityVersion = this.catalog.capabilities.read(
       run.teamId,
@@ -150,7 +183,7 @@ export class ContextMaterials {
       )
       .all(run.teamId, project.branchId)) {
       const n = JSON.parse(String(row.data));
-      if (n.status !== "open") continue;
+      if (n.status !== "open" || archivedNotes.has(n.key)) continue;
       const changedFiles = Object.entries(n.sourceFiles ?? {}).some(
         ([file, digest]) => {
           if (!fileDigests.has(file)) {
@@ -235,6 +268,7 @@ export class ContextMaterials {
             !["accepted", "self_checked", "superseded"].includes(w.status),
         )
         .map((w) => `work:${w.id}`);
+      links.push(`member:${m.id}/context`);
       items.push({
         ref: `member:${m.id}`,
         kind: "member",
@@ -273,7 +307,8 @@ export class ContextMaterials {
         const i = JSON.parse(String(row.data)) as ProjectInsight;
         current.set(i.key, i);
       }
-      for (const i of current.values())
+      const archived = this.memory.archiveKeys(run.teamId, project.branchId, "insight");
+      for (const i of [...current.values()].filter(insight => !archived.has(insight.key)))
         items.push({
           ref: `insight:${i.id}`,
           kind: "insight",
@@ -312,7 +347,87 @@ export class ContextMaterials {
     run: Run,
     items: ContextMaterial[],
     ref: string,
+    memberScope?: string,
   ): ContextMaterial {
+    if (ref.startsWith("tool-result:")) {
+      const branchId = this.history.forRun(run).id;
+      const row = this.store.db.prepare(`
+        SELECT f.attempt_id, f.data FROM runtime_events e
+        JOIN host_context_frames f ON f.attempt_id=e.attempt_id AND f.team_id=e.team_id
+        JOIN runtime_attempts a ON a.id=f.attempt_id AND a.team_id=f.team_id
+        JOIN runtime_works w ON w.id=e.work_id AND w.team_id=e.team_id
+        JOIN runtime_members m ON m.id=json_extract(w.data,'$.memberId') AND m.team_id=e.team_id
+        WHERE e.id=? AND e.team_id=? AND f.branch_id=? AND json_extract(m.data,'$.kind')='host'
+      `).get(ref.slice(12), run.teamId, branchId);
+      const frame = row ? JSON.parse(String(row.data)) : undefined;
+      const receipt = !memberScope && row && frame ? toolReads(this.store, run.teamId, String(row.attempt_id), frame)
+        .find(item => item.id === ref.slice(12)) : undefined;
+      if (!receipt || (receipt.tool && receipt.tool !== "team_read_file" && frame.epoch !== this.memory.epoch(run.teamId, branchId)))
+        throw conflict("context_reference_unavailable", "This read receipt is unavailable in the current branch.");
+      return { ref, kind: "note", topic: "memory/tool-results", title: !receipt.tool || receipt.tool === "team_read_file" ? "File read receipt" : "Read receipt",
+        revision: receipt.sha256, content: receipt.text, links: [], memberIds: [], data: { key: ref } };
+    }
+    if (isMemberContextRef(ref)) {
+      const member = this.resolve(items, ref.slice(0, -"/context".length));
+      if (memberScope && memberScope !== member.data.id)
+        throw conflict("context_member_scope", "Read context evidence for your own member.");
+      const branchId = this.history.forRun(run).id;
+      const row = this.store.db.prepare(`SELECT a.id AS attempt_id,
+        json_extract(a.data,'$.workId') AS work_id,
+        json_extract(a.data,'$.status') AS status,
+        json_extract(a.data,'$.dispatch.state') AS dispatch_state,
+        json_extract(a.data,'$.skillMounts') AS skill_mounts,
+        json_extract(a.data,'$.mcpMounts') AS mcp_mounts,
+        json_extract(f.data,'$.contextVersion') AS context_version,
+        json_extract(f.data,'$.compacted') AS compacted,
+        json_extract(f.data,'$.assembledMaterials') AS assembled,
+        json_extract(f.data,'$.materialReads') AS partial_reads,
+        json_extract(f.data,'$.completeReads') AS complete_reads,
+        json_extract(f.data,'$.reads') AS tool_reads
+        FROM runtime_attempts a JOIN host_context_frames f ON f.attempt_id=a.id AND f.team_id=a.team_id
+        WHERE a.team_id=? AND f.branch_id=? AND json_extract(a.data,'$.memberId')=?
+        ORDER BY a.rowid DESC LIMIT 1`).get(run.teamId, branchId, member.data.id);
+      const revisions = (value: unknown) =>
+        typeof value === "string"
+          ? Object.fromEntries(
+              Object.entries(JSON.parse(value) as Record<string, unknown>)
+                .sort(([a], [b]) => a.localeCompare(b)),
+            )
+          : {};
+      const data = row
+        ? {
+            memberId: member.data.id,
+            attemptId: row.attempt_id,
+            executionStatus: row.status,
+            dispatchState: row.dispatch_state ?? "unknown",
+            contextVersion: row.context_version,
+            compacted: Boolean(row.compacted),
+            ...(typeof row.skill_mounts === "string" ? { skillMounts: JSON.parse(row.skill_mounts) } : {}),
+            ...(typeof row.mcp_mounts === "string" ? { mcpMounts: JSON.parse(row.mcp_mounts) } : {}),
+            assembledVersions: revisions(row.assembled),
+            completeToolReads: revisions(row.complete_reads),
+            partialToolReads: revisions(row.partial_reads),
+            attemptFileReads: {
+              offsetUnit: "utf16",
+              items: attemptFileReadRanges(this.store, String(row.attempt_id),
+                typeof row.tool_reads === "string" ? JSON.parse(row.tool_reads) : []),
+            },
+            attemptMcpReads: recentMcpReads(this.store, run.teamId, String(row.work_id), String(row.attempt_id)),
+          }
+        : { memberId: member.data.id, attemptId: null };
+      const content = JSON.stringify(data);
+      return {
+        ref,
+        kind: "member",
+        topic: "members/context",
+        title: `${member.title} · Context evidence`,
+        revision: hash(content),
+        content,
+        links: [member.ref],
+        memberIds: member.memberIds,
+        data,
+      };
+    }
     if (
       items.some(
         (m) =>
@@ -460,6 +575,7 @@ export class ContextMaterials {
         m,
         input.query,
         Math.min(1200, tokenBudget - 200),
+        work.definitionScope,
       );
       if (estimateTokens([...page, header]) > tokenBudget - 200) break;
       page.push(header);
@@ -484,11 +600,13 @@ export class ContextMaterials {
     tokenBudget: number,
     expectedRevisions: Record<string, string> = {},
     section: "body" | "links" | "sources" = "body",
+    memberScope?: string,
+    definitionScope?: ProjectDefinitionScope,
   ) {
     const materials = this.all(run);
     const items: unknown[] = [];
     for (const ref of refs) {
-      const m = this.forRead(run, materials, ref);
+      const m = this.forRead(run, materials, ref, memberScope);
       const expected = expectedRevisions[ref] ?? expectedRevisions[m.ref];
       if ((offset > 0 && !expected) || (expected && expected !== m.revision))
         throw conflict(
@@ -537,7 +655,7 @@ export class ContextMaterials {
       }
       let end = Math.min(m.content.length, offset + maxChars);
       let item = {
-        ...materialHeader(m, "", Math.min(1200, tokenBudget / 2)),
+        ...materialHeader(m, "", Math.min(1200, tokenBudget / 2), definitionScope),
         content: m.content.slice(offset, end),
         offset,
         nextOffset: end < m.content.length ? end : null,

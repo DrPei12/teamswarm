@@ -34,6 +34,10 @@ const modelCatalog = load(
   {},
   { "./permissions": permissions },
 );
+const hostModelCatalog = load(source("hostModelCatalog"), {}, {
+  "./modelCatalog": modelCatalog,
+  "./permissions": permissions,
+});
 const modelCatalogCache = load(source("modelCatalogCache"), {}, {});
 const service = source("service");
 function scenario() {
@@ -112,6 +116,7 @@ function scenario() {
       {
         "./preferences-outbox": outbox,
         "./modelCatalog": modelCatalog,
+        "./hostModelCatalog": hostModelCatalog,
         "./modelCatalogCache": modelCatalogCache,
         "./permissions": permissions,
         react: { useSyncExternalStore() {} },

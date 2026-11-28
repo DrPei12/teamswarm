@@ -33,6 +33,7 @@ type Process = {
   rpc: JsonRpcPeer;
   closed: Promise<void>;
   closing: boolean;
+  error?: string;
 };
 export type ServiceActor = "user" | "worker" | "automatic" | "shutdown";
 export type ServiceNotice = {
@@ -452,6 +453,7 @@ export class ServiceManager {
           "Preview",
         );
         owned = { child, closed, rpc, closing: false };
+        const processRef = owned;
         this.processes.set(record.id, owned);
         child.stdin.on("error", () => {});
         child.stderr.resume();
@@ -461,13 +463,16 @@ export class ServiceManager {
         });
         lines.on("line", (line) => {
           try {
-            rpc.receive(JSON.parse(line));
+            const message = JSON.parse(line);
+            if (message.method === "service/error" && typeof message.params?.message === "string") {
+              processRef.error = message.params.message.slice(0, 2048);
+              rpc.close(processRef.error);
+            } else rpc.receive(message);
           } catch {
             rpc.close("Invalid preview response.");
           }
         });
         child.once("error", () => rpc.close("Preview could not start."));
-        const processRef = owned;
         child.once("close", () => {
           lines.close();
           rpc.close();
@@ -846,7 +851,7 @@ export class ServiceManager {
     const confirmed = await confirmOwnedExit(owned.child);
     record.status = confirmed ? "failed" : "recovery_required";
     record.version++;
-    record.error = "The preview process exited.";
+    record.error = owned.error ?? `The preview process exited${owned.child.exitCode === null ? "" : ` with code ${owned.child.exitCode}`}.`;
     this.save(record);
     if (confirmed) this.processes.delete(id);
     const noticeId = randomUUID();

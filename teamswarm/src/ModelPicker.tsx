@@ -34,6 +34,8 @@ export function ModelPicker({
   disabled = false,
   onOpenChange,
   label,
+  ariaLabel,
+  showSource = false,
   selectedKey,
   open: controlledOpen,
   onConfigure,
@@ -49,6 +51,8 @@ export function ModelPicker({
   disabled?: boolean;
   onOpenChange?: (open: boolean) => void;
   label?: string;
+  ariaLabel?: string;
+  showSource?: boolean;
   selectedKey?: string;
   open?: boolean;
   onConfigure?: () => void;
@@ -58,7 +62,7 @@ export function ModelPicker({
   const { t } = useI18n();
   const [internalOpen, setOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
-  const [provider, setProvider] = useState<string | null>(null);
+  const [activeProvider, setProvider] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [custom, setCustom] = useState(false);
   const [customId, setCustomId] = useState("");
@@ -72,6 +76,11 @@ export function ModelPicker({
     ).values(),
   ];
   const groups = [...new Set(catalog.map(modelProvider))].sort();
+  const provider =
+    activeProvider && groups.includes(activeProvider) ? activeProvider : null;
+  useEffect(() => {
+    if (activeProvider && !provider && !loading) setProvider(null);
+  }, [activeProvider, loading, provider]);
   const labelCounts = new Map<string, number>();
   for (const model of catalog) {
     const label = `${modelProvider(model)}:${model.name || model.model}`;
@@ -113,7 +122,7 @@ export function ModelPicker({
               ? "runtime-choice model-picker-trigger compact"
               : "field-select model-picker-trigger"
           }
-          aria-label={label || t("Choose model")}
+          aria-label={ariaLabel || label || t("Choose model")}
         >
           <span>
             {label ||
@@ -252,7 +261,7 @@ export function ModelPicker({
                 />
               </div>
               <div className="model-picker-list" ref={list}>
-                {!provider && !query
+                {!provider && !query.trim()
                   ? groups.map((group) => (
                       <button
                         type="button"
@@ -300,6 +309,11 @@ export function ModelPicker({
                           ) ?? 0) > 1 && model.detail
                             ? `${model.name || model.model} · ${model.detail}`
                             : model.name || model.model}
+                          {showSource &&
+                            model.detail &&
+                            (labelCounts.get(
+                              `${modelProvider(model)}:${model.name || model.model}`,
+                            ) ?? 0) <= 1 && <small>{t(model.detail)}</small>}
                           {model.unavailable && (
                             <small>{t(model.unavailable)}</small>
                           )}

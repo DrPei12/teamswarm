@@ -8,6 +8,14 @@ import type { Harness, PreparedExecutionEnvironment } from "../types.js";
 import { WorkspaceAccess } from "../workspace-access.js";
 import { terminateNative } from "./native-support.js";
 
+export function prepareCodexHome() {
+  const directory = process.env.TEAM_CODEX_HOME;
+  if (!directory) return {};
+  if (!path.isAbsolute(directory)) throw new Error("TEAM_CODEX_HOME must be an absolute directory.");
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  return { CODEX_HOME: directory };
+}
+
 export type PreflightInput = Parameters<NonNullable<Harness["preflight"]>>[0];
 type Report = Record<string, unknown> & { passed: boolean };
 const cache = new Map<string, { at: number; promise: Promise<Report> }>();
@@ -56,7 +64,10 @@ export async function probeCodexExecution(command: { command: string; args: stri
   const scratch = environment?.directory ?? realpathSync(input.scratchDirectory);
   const toml = (v: any): string => v && typeof v === "object" && !Array.isArray(v)
     ? "{" + Object.entries(v).map(([k, x]) => JSON.stringify(k) + "=" + toml(x)).join(",") + "}" : JSON.stringify(v);
-  const overrides = { ...configuration, "features.plugins": false, "features.apps": false, default_permissions: "teamswarm-review", ...(process.platform === "win32" ? { "windows.sandbox": "mxc" } : {}) };
+  const overrides = { ...configuration, "features.plugins": false, "features.apps": false, "features.code_mode": false,
+    "features.code_mode_only": false, "features.code_mode_tool_search": false, "features.code_mode_only_strict_3p_tools": false,
+    "features.code_mode_host": { enabled: false, disable_in_process_fallback: false },
+    default_permissions: "teamswarm-review", ...(process.platform === "win32" ? { "windows.sandbox": "mxc" } : {}) };
   const sourceProbe = path.join(input.workspace, `.teamswarm-preflight-${randomUUID()}`);
   const script = path.join(scratch, "execution-preflight.cjs");
   const code = `const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),http=require('node:http'),{spawnSync}=require('node:child_process'),{DatabaseSync}=require('node:sqlite');
@@ -68,7 +79,7 @@ export async function probeCodexExecution(command: { command: string; args: stri
     const server=http.createServer((req,res)=>res.end('loopback-ok'));server.listen(0,'127.0.0.1',async()=>{try{assert.equal(await(await fetch('http://127.0.0.1:'+server.address().port)).text(),'loopback-ok');console.log('SOURCE_READ_OK SOURCE_WRITE_DENIED CHILD_PROCESS_OK SQLITE_OK LOOPBACK_OK')}catch(e){console.error(e);process.exitCode=1}finally{server.close()}});`;
   writeFileSync(script, code, { mode: 0o600 });
   const child = await spawnOwned(command.command, [...command.args, ...Object.entries(overrides).flatMap(([k,v]) => ["-c", k + "=" + toml(v)]), "app-server", "--listen", "stdio://"],
-    { cwd: input.workspace, windowsHide: true, env: { ...process.env, ...(process.env.TEAM_CODEX_HOME ? { CODEX_HOME: process.env.TEAM_CODEX_HOME } : {}) } });
+    { cwd: input.workspace, windowsHide: true, env: { ...process.env, ...prepareCodexHome() } });
   let id = 0, stderr = "";
   const pending = new Map<number, {resolve: (value: any) => void; reject: (error: Error) => void}>();
   const lines = createInterface({ input: child.stdout });
@@ -89,8 +100,21 @@ export async function probeCodexExecution(command: { command: string; args: stri
   try {
     await rpc("initialize", { clientInfo: { name: "teamswarm-execution-preflight", version: "1" }, capabilities: { experimentalApi: true } });
     child.stdin.write(JSON.stringify({ method: "initialized", params: {} }) + "\n");
+    const native = await rpc("config/read", { cwd: input.workspace, includeLayers: false });
+    if (!native?.config || typeof native.config !== "object" || Array.isArray(native.config))
+      throw new Error("Native preflight could not verify its MCP configuration.");
+    const toolOverrides: Record<string, false> = {};
+    for (const [section, entries] of Object.entries({ mcp_servers: native.config.mcp_servers, plugins: native.config.plugins })) {
+      if (entries == null) continue;
+      if (typeof entries !== "object" || Array.isArray(entries)) throw new Error("Invalid native tool configuration.");
+      for (const name of Object.keys(entries)) {
+        if (!/^[\w@/-]+$/.test(name)) throw new Error("Native preflight could not safely disable an inherited tool.");
+        toolOverrides[`${section}.${name}.enabled`] = false;
+      }
+    }
     await rpc("thread/start", { cwd: input.workspace, permissions: "teamswarm-review", approvalPolicy: "never", ephemeral: true,
-      model: "preflight-no-model", modelProvider: "teamswarm", config: { "model_providers.teamswarm": { name: "Preflight", base_url: "http://127.0.0.1:1", wire_api: "responses", requires_openai_auth: false } } });
+      model: "preflight-no-model", modelProvider: "teamswarm", config: { ...toolOverrides,
+        "model_providers.teamswarm": { name: "Preflight", base_url: "http://127.0.0.1:1", wire_api: "responses", requires_openai_auth: false } } });
     const result = await rpc("command/exec", { command: [...(environment?.commandPrefix ?? []), process.execPath, script], cwd: scratch, permissionProfile: "teamswarm-review", timeoutMs: 20000 });
     if (result.exitCode !== 0 || !String(result.stdout).includes("SOURCE_READ_OK SOURCE_WRITE_DENIED CHILD_PROCESS_OK SQLITE_OK LOOPBACK_OK"))
       throw new Error(`execution_preflight_failed: ${JSON.stringify(result)}`);

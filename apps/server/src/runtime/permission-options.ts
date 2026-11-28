@@ -1,6 +1,6 @@
 import { harnessManifest } from "@team/contracts/harness-catalog";
 import { isDeepStrictEqual } from "node:util";
-import { readOnlyExecution } from "./harness/permissions.js";
+import { readOnlyExecution, scopeNativeReadProbes } from "./harness/permissions.js";
 import type { ExecutionConfig, Harness, Member, NativePermissions, PermissionOptions } from "./types.js";
 
 export const codexPermissionOptions: PermissionOptions = {
@@ -53,6 +53,7 @@ export function nativeAccess(config: ExecutionConfig): "read-only" | "workspace-
   if (config.access === "read-only") return "read-only";
   const p = config.permissions;
   if (!p || p.harness !== config.harness) return "workspace-write";
+  if (p.harness === "codex" && p.sandbox === "read-only") return "read-only";
   const declared = harnessManifest(config.harness)?.integration?.presets["full-access"];
   if (declared && isDeepStrictEqual(p, declared)) return "full-access";
   if ((p.harness === "codex" || p.harness === "deepseek-harness") && p.sandbox === "danger-full-access") return "full-access";
@@ -108,7 +109,7 @@ export function mergePermissionChoice(config: ExecutionConfig, permissions: Nati
   const previous = config.permissions;
   const merged = previous?.harness === "claude-code" && permissions.harness === "claude-code"
     ? { ...previous, ...permissions } : permissions;
-  return { ...config, permissions: merged };
+  return scopeNativeReadProbes({ ...config, permissions: merged });
 }
 
 export function hasSharedModel(config: Pick<ExecutionConfig, "baseUrl" | "chatgptAccountId">): boolean {

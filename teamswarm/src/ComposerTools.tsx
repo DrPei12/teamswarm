@@ -13,6 +13,7 @@ import { isComposing } from "./design-system/motion";
 import {
   forwardRef,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useImperativeHandle,
@@ -34,7 +35,10 @@ import { useI18n } from "./i18n";
 import { ICON_SCALE } from "./ui";
 import { api, product } from "./service";
 import { ModelPicker } from "./ModelPicker";
-import type { ExecutionConfig } from "@team/contracts/runtime";
+import type {
+  ExecutionConfig,
+  GlobalSkillSummary,
+} from "@team/contracts/runtime";
 import { selectedModelChoice, type ModelChoice } from "./modelCatalog";
 import { useModelCatalog } from "./useModelCatalog";
 import { clipboardFiles } from "./AttachmentChip";
@@ -51,6 +55,7 @@ export function RuntimeControls({
   runningConfig,
   config: runtimeConfig,
   showContext = true,
+  host = false,
   showPermissions = true,
   disabled = false,
   running = false,
@@ -63,6 +68,7 @@ export function RuntimeControls({
   runningConfig?: ExecutionConfig;
   config?: RuntimeConfig;
   showContext?: boolean;
+  host?: boolean;
   showPermissions?: boolean;
   disabled?: boolean;
   running?: boolean;
@@ -81,7 +87,12 @@ export function RuntimeControls({
   const [edit, setEdit] = useState<string | null>(null);
   const activeMenu = useRef(edit);
   activeMenu.current = edit;
-  const catalog = useModelCatalog(team.id, harnessId(config.harness));
+  const catalog = useModelCatalog(
+    team.id,
+    harnessId(config.harness),
+    true,
+    host,
+  );
   const selected = executionConfig
     ? selectedModelChoice(catalog.models, executionConfig)
     : undefined;
@@ -134,168 +145,104 @@ export function RuntimeControls({
       : "");
   return (
     <div className="runtime-controls">
-      {(["harness", "model", "effort"] as const).map((key) =>
-        key === "model" ? (
-          <ModelPicker
-            key="model"
-            compact
-            disabled={disabled || saving}
-            value={config.model === "Default model" ? null : config.model}
-            models={catalog.models}
-            selectedKey={selected?.key}
-            loading={checking}
-            error={error}
-            onRetry={catalog.retry}
-            open={!disabled && edit === "model"}
-            onConfigure={() => onSettings("connections")}
-            onCloseAutoFocus={(event) => {
-              if (activeMenu.current && activeMenu.current !== "model")
-                event.preventDefault();
-            }}
-            onOpenChange={(open) =>
-              setEdit((current) =>
-                open ? "model" : current === "model" ? null : current,
-              )
-            }
-            onChange={(model, choice) =>
-              void select(
-                {
-                  ...config,
-                  model: model || "",
-                  effort: "Default",
-                },
-                choice,
-              )
-            }
-          />
-        ) : (
-          <Popover.Root
-            key={key}
-            open={!disabled && edit === key && (key !== "effort" || hasModel)}
-            onOpenChange={(open) =>
-              setEdit((current) =>
-                open ? key : current === key ? null : current,
-              )
-            }
-          >
-            <Popover.Trigger asChild>
-              <button
-                type="button"
-                className={`runtime-choice ${key === "effort" ? "effort-choice" : ""}`}
-                aria-label={tr(`Choose ${key}`)}
-                disabled={disabled || saving || (key === "effort" && !hasModel)}
-              >
-                <span>
-                  {key === "effort"
-                    ? effortChoiceLabel(config[key], policy, tr)
-                    : tr(config[key])}
-                </span>
-                <ChevronDown size={14 * ICON_SCALE} />
-              </button>
-            </Popover.Trigger>
-            <Popover.Portal>
-              <Popover.Content
-                className="runtime-popover"
-                side="top"
-                align="start"
-                sideOffset={12}
-                aria-label={tr(key === "harness" ? "Harness" : "Effort")}
-                onInteractOutside={(event) => {
-                  if ((event.target as Element).closest?.(".runtime-choice"))
-                    event.preventDefault();
-                }}
-                onCloseAutoFocus={(event) => {
-                  if (activeMenu.current && activeMenu.current !== key)
-                    event.preventDefault();
-                }}
-              >
-                <div className="menu-heading">
-                  {key === "harness" ? tr("Harness") : tr("Effort")}
-                </div>
-                {key === "harness" && <div className="separator" />}
-                {key === "harness" && saveError && (
-                  <div className="menu-note" role="alert">
-                    {tr(saveError)}
+      {(["harness", "model", "effort"] as const)
+        .filter((key) => !host || key !== "harness")
+        .map((key) =>
+          key === "model" ? (
+            <ModelPicker
+              key="model"
+              compact
+              showSource={host}
+              disabled={disabled || saving}
+              value={config.model === "Default model" ? null : config.model}
+              models={catalog.models}
+              selectedKey={selected?.key}
+              loading={checking}
+              error={error}
+              onRetry={catalog.retry}
+              open={!disabled && edit === "model"}
+              onConfigure={() => onSettings("connections")}
+              onCloseAutoFocus={(event) => {
+                if (activeMenu.current && activeMenu.current !== "model")
+                  event.preventDefault();
+              }}
+              onOpenChange={(open) =>
+                setEdit((current) =>
+                  open ? "model" : current === "model" ? null : current,
+                )
+              }
+              onChange={(model, choice) =>
+                void select(
+                  {
+                    ...config,
+                    model: model || "",
+                    effort: "Default",
+                  },
+                  choice,
+                )
+              }
+            />
+          ) : (
+            <Popover.Root
+              key={key}
+              open={!disabled && edit === key && (key !== "effort" || hasModel)}
+              onOpenChange={(open) =>
+                setEdit((current) =>
+                  open ? key : current === key ? null : current,
+                )
+              }
+            >
+              <Popover.Trigger asChild>
+                <button
+                  type="button"
+                  className={`runtime-choice ${key === "effort" ? "effort-choice" : ""}`}
+                  aria-label={tr(`Choose ${key}`)}
+                  disabled={
+                    disabled || saving || (key === "effort" && !hasModel)
+                  }
+                >
+                  <span>
+                    {key === "effort"
+                      ? effortChoiceLabel(config[key], policy, tr)
+                      : tr(config[key])}
+                  </span>
+                  <ChevronDown size={14 * ICON_SCALE} />
+                </button>
+              </Popover.Trigger>
+              <Popover.Portal>
+                <Popover.Content
+                  className="runtime-popover"
+                  side="top"
+                  align="start"
+                  sideOffset={12}
+                  aria-label={tr(key === "harness" ? "Harness" : "Effort")}
+                  onInteractOutside={(event) => {
+                    if ((event.target as Element).closest?.(".runtime-choice"))
+                      event.preventDefault();
+                  }}
+                  onCloseAutoFocus={(event) => {
+                    if (activeMenu.current && activeMenu.current !== key)
+                      event.preventDefault();
+                  }}
+                >
+                  <div className="menu-heading">
+                    {key === "harness" ? tr("Harness") : tr("Effort")}
                   </div>
-                )}
-                {key === "harness" && !capabilities && (
-                  <div
-                    className="menu-note"
-                    role={catalog.error ? "alert" : "status"}
-                  >
-                    {catalog.error
-                      ? tr(catalog.error)
-                      : tr("Loading harness options…")}
-                    {catalog.error && (
-                      <button
-                        type="button"
-                        className="model-picker-link"
-                        onClick={catalog.retry}
-                      >
-                        {tr("Retry")}
-                      </button>
-                    )}
-                  </div>
-                )}
-                {key === "harness" && currentHarnessDisabled && (
-                  <div className="menu-note" role="status">
-                    {tr("The current Harness is disabled for this team.")}
-                  </div>
-                )}
-                {(key === "harness"
-                  ? harnesses.map((h) => h.name)
-                  : ["Default", ...efforts.map((e) => e.reasoningEffort)]
-                ).map((value) => (
-                  <button
-                    type="button"
-                    className="menu-item"
-                    key={value}
-                    disabled={saving}
-                    title={
-                      key === "effort"
-                        ? efforts.find((e) => e.reasoningEffort === value)
-                            ?.description
-                        : undefined
-                    }
-                    onClick={() => {
-                      void select(
-                        key === "harness"
-                          ? {
-                              ...config,
-                              harness: value,
-                              effort: "Default",
-                            }
-                          : {
-                              ...config,
-                              [key]: value,
-                            },
-                      );
-                    }}
-                  >
-                    <span className="item-label">
-                      {key === "effort"
-                        ? effortChoiceLabel(value, policy, tr)
-                        : tr(value)}
-                    </span>
-                    {(key === "harness"
-                      ? harnessId(config.harness) === harnessId(value)
-                      : config[key] === value) && (
-                      <Check size={16 * ICON_SCALE} />
-                    )}
-                  </button>
-                ))}
-                <div className="separator" />
-                {key === "effort" &&
-                  !policy &&
-                  (error || (checking && !catalog.inspection)) && (
+                  {key === "harness" && <div className="separator" />}
+                  {key === "harness" && saveError && (
+                    <div className="menu-note" role="alert">
+                      {tr(saveError)}
+                    </div>
+                  )}
+                  {key === "harness" && !capabilities && (
                     <div
                       className="menu-note"
-                      role={error ? "alert" : "status"}
+                      role={catalog.error ? "alert" : "status"}
                     >
-                      {error && !checking
-                        ? tr(error)
+                      {catalog.error
+                        ? tr(catalog.error)
                         : tr("Loading harness options…")}
-                      {error && !checking && (
+                      {catalog.error && (
                         <button
                           type="button"
                           className="model-picker-link"
@@ -306,25 +253,95 @@ export function RuntimeControls({
                       )}
                     </div>
                   )}
-                <button
-                  type="button"
-                  className="menu-item"
-                  onClick={() => {
-                    setEdit(null);
-                    onSettings();
-                  }}
-                >
-                  <Settings2 size={14 * ICON_SCALE} />
-                  {tr("Team capabilities")}
-                </button>
-              </Popover.Content>
-            </Popover.Portal>
-          </Popover.Root>
-        ),
-      )}
+                  {key === "harness" && currentHarnessDisabled && (
+                    <div className="menu-note" role="status">
+                      {tr("The current Harness is disabled for this team.")}
+                    </div>
+                  )}
+                  {(key === "harness"
+                    ? harnesses.map((h) => h.name)
+                    : ["Default", ...efforts.map((e) => e.reasoningEffort)]
+                  ).map((value) => (
+                    <button
+                      type="button"
+                      className="menu-item"
+                      key={value}
+                      disabled={saving}
+                      title={
+                        key === "effort"
+                          ? efforts.find((e) => e.reasoningEffort === value)
+                              ?.description
+                          : undefined
+                      }
+                      onClick={() => {
+                        void select(
+                          key === "harness"
+                            ? {
+                                ...config,
+                                harness: value,
+                                effort: "Default",
+                              }
+                            : {
+                                ...config,
+                                [key]: value,
+                              },
+                        );
+                      }}
+                    >
+                      <span className="item-label">
+                        {key === "effort"
+                          ? effortChoiceLabel(value, policy, tr)
+                          : tr(value)}
+                      </span>
+                      {(key === "harness"
+                        ? harnessId(config.harness) === harnessId(value)
+                        : config[key] === value) && (
+                        <Check size={16 * ICON_SCALE} />
+                      )}
+                    </button>
+                  ))}
+                  <div className="separator" />
+                  {key === "effort" &&
+                    !policy &&
+                    (error || (checking && !catalog.inspection)) && (
+                      <div
+                        className="menu-note"
+                        role={error ? "alert" : "status"}
+                      >
+                        {error && !checking
+                          ? tr(error)
+                          : tr("Loading harness options…")}
+                        {error && !checking && (
+                          <button
+                            type="button"
+                            className="model-picker-link"
+                            onClick={catalog.retry}
+                          >
+                            {tr("Retry")}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  <button
+                    type="button"
+                    className="menu-item"
+                    onClick={() => {
+                      setEdit(null);
+                      onSettings();
+                    }}
+                  >
+                    <Settings2 size={14 * ICON_SCALE} />
+                    {tr("Team capabilities")}
+                  </button>
+                </Popover.Content>
+              </Popover.Portal>
+            </Popover.Root>
+          ),
+        )}
       {showPermissions && executionConfig && (
         <MemberPermissionPicker
           compact
+          hostInlineOnly={!onMemberPermissionPreset}
           teamId={team.id}
           harness={executionConfig.harness}
           sharedModel={
@@ -346,10 +363,11 @@ export function RuntimeControls({
       {showContext && <ContextIndicator usage={team.context} />}
       {running &&
         (hasPendingRuntimeConfiguration(executionConfig, runningConfig) ||
-          hasPendingPermissionConfiguration(
-            executionConfig,
-            runningConfig,
-          )) && (
+          (!!onMemberPermissionPreset &&
+            hasPendingPermissionConfiguration(
+              executionConfig,
+              runningConfig,
+            ))) && (
           <span className="runtime-pending" role="status">
             {tr("Applies next turn")}
           </span>
@@ -358,7 +376,14 @@ export function RuntimeControls({
   );
 }
 
-type Choice = { id: string; label: string; detail: string; kind: string };
+type Choice = {
+  id: string;
+  label: string;
+  detail: string;
+  kind: string;
+  revision?: number;
+  generation?: number;
+};
 export const ComposerInput = forwardRef<
   HTMLTextAreaElement,
   {
@@ -390,11 +415,35 @@ export const ComposerInput = forwardRef<
   const input = useRef<HTMLTextAreaElement>(null);
   useImperativeHandle(ref, () => input.current!);
   const [caret, setCaret] = useState(value.length);
-  const [index, setIndex] = useState(0);
+  const [selected, setSelected] = useState<string>();
   const [dismissed, setDismissed] = useState(false);
   const fragment = value.slice(0, caret).match(/(?:^|\s)([@/])([^\s@/]*)$/);
   const prefix = fragment?.[1];
   const query = (fragment?.[2] || "").toLowerCase();
+  const [authorized, setAuthorized] = useState<{
+    teamId: string;
+    skills: GlobalSkillSummary[];
+  }>();
+  const [skillError, setSkillError] = useState("");
+  useEffect(() => {
+    setAuthorized(undefined);
+    setSkillError("");
+    if (prefix !== "/") return;
+    const abort = new AbortController();
+    void api<GlobalSkillSummary[]>(
+      `/teams/${encodeURIComponent(team.id)}/authorized-text-skills`,
+      undefined,
+      "GET",
+      abort.signal,
+    )
+      .then((skills) => {
+        if (!abort.signal.aborted) setAuthorized({ teamId: team.id, skills });
+      })
+      .catch((e: Error) => {
+        if (!abort.signal.aborted) setSkillError(e.message);
+      });
+    return () => abort.abort();
+  }, [prefix, team.id]);
   const [native, setNative] = useState<Choice[]>([]);
   const [catalogError, setCatalogError] = useState("");
   useEffect(() => {
@@ -453,6 +502,18 @@ export const ComposerInput = forwardRef<
           })),
         ]
       : [
+          ...(authorized?.teamId === team.id ? authorized.skills : []).map(
+            ({ name, mount }) => ({
+              id: mount.skillId,
+              label: name,
+              kind: "global-skill",
+              revision: mount.revision,
+              generation: mount.generation,
+              detail: tr("Global text skill · revision {n}", {
+                n: mount.revision,
+              }),
+            }),
+          ),
           ...native,
           ...workspace.skills
             .filter((s) => s.teamId === team.id)
@@ -484,9 +545,19 @@ export const ComposerInput = forwardRef<
   const choices = candidates.filter((c) =>
     `${c.label} ${c.detail}`.toLowerCase().includes(query),
   );
-  const open = !!fragment && !dismissed;
+  const open =
+    !!fragment && !dismissed && !/^\/btw(?:\s|$)/i.test(value.trimStart());
+  const choiceKey = (choice: Choice) => `${choice.kind}:${choice.id}`;
+  const selectedIndex = choices.findIndex(
+    (choice) => choiceKey(choice) === selected,
+  );
+  const index = Math.max(0, selectedIndex);
+  const defaultKey = choices[0] ? choiceKey(choices[0]) : undefined;
+  useLayoutEffect(() => {
+    if (!open) setSelected(undefined);
+    else if (selectedIndex < 0 && defaultKey) setSelected(defaultKey);
+  }, [open, selectedIndex, defaultKey]);
   useEffect(() => {
-    setIndex(0);
     setDismissed(false);
   }, [value]);
   useEffect(() => {
@@ -513,8 +584,17 @@ export const ComposerInput = forwardRef<
     if (choice.kind === "skill") change.skillId = choice.id;
     else if (choice.kind !== "action")
       change.references = [
-        ...references.filter((r) => r.id !== choice.id),
-        { id: choice.id, kind: choice.kind, label: choice.label },
+        ...references.filter(
+          (r) => r.id !== choice.id || r.kind !== choice.kind,
+        ),
+        {
+          id: choice.id,
+          kind: choice.kind,
+          label: choice.label,
+          ...(choice.kind === "global-skill"
+            ? { revision: choice.revision, generation: choice.generation }
+            : {}),
+        },
       ];
     onChange(change);
     setDismissed(true);
@@ -547,6 +627,11 @@ export const ComposerInput = forwardRef<
             {prefix === "@" ? tr("Members & plugins") : tr("Skills & commands")}
             <kbd>esc</kbd>
           </div>
+          {skillError && prefix === "/" && (
+            <div className="menu-note" role="status">
+              {tr(skillError)}
+            </div>
+          )}
           {catalogError && (
             <div className="menu-note" role="status">
               {tr(catalogError)}
@@ -559,16 +644,19 @@ export const ComposerInput = forwardRef<
                 role="option"
                 aria-selected={i === index}
                 id={`command-${i}`}
-                key={c.id}
+                key={choiceKey(c)}
                 className={`command-option ${i === index ? "selected" : ""}`}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => pick(c)}
-                onMouseEnter={() => setIndex(i)}
+                onPointerMove={(e) => {
+                  if (e.pointerType !== "touch" && (e.movementX || e.movementY))
+                    setSelected(choiceKey(c));
+                }}
               >
                 <span className="command-symbol">
                   {c.kind === "member" ? (
                     <UserRound size={16 * ICON_SCALE} />
-                  ) : c.kind === "skill" ? (
+                  ) : c.kind === "skill" || c.kind === "global-skill" ? (
                     <Sparkles size={16 * ICON_SCALE} />
                   ) : c.kind === "plugin" ? (
                     <Puzzle size={16 * ICON_SCALE} />
@@ -617,10 +705,10 @@ export const ComposerInput = forwardRef<
             }
             if (["ArrowDown", "ArrowUp"].includes(e.key) && choices.length) {
               e.preventDefault();
-              setIndex(
+              const next =
                 (index + (e.key === "ArrowDown" ? 1 : -1) + choices.length) %
-                  choices.length,
-              );
+                choices.length;
+              setSelected(choiceKey(choices[next]));
               return;
             }
             if ((e.key === "Enter" || e.key === "Tab") && choices[index]) {
@@ -633,7 +721,11 @@ export const ComposerInput = forwardRef<
               return;
             }
           }
-          if (e.key === "Enter" && !e.shiftKey) {
+          if (
+            e.key === "Enter" &&
+            !e.shiftKey &&
+            (workspace.sendKey !== "mod-enter" || e.ctrlKey || e.metaKey)
+          ) {
             e.preventDefault();
             onSend();
           }

@@ -25,6 +25,7 @@ const service = createApp({
   // createApp shares the current frontend with the desktop launcher.
   ...(process.env.TEAM_WEB_DIST ? { webDistDir: path.resolve(process.env.TEAM_WEB_DIST) } : {}),
   harnesses: await loadHarnesses(),
+  enableNativeHost: true,
 });
 const server = service.app.listen(port, host, () => {
   const address = server.address();

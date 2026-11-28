@@ -17,6 +17,8 @@ export interface TeamCapabilities {
   version: number;
   globalVersion?: number;
   inheritsDefaults?: boolean;
+  /** Team-projected IDs of connections disabled in the global catalog. */
+  globallyDisabledConnectionIds?: string[];
   enabledHarnesses: string[];
   connections: ModelAccess[];
   preferences: {

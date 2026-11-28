@@ -9,9 +9,11 @@ import { parseArgs } from "node:util";
 import { sourceIdentity } from "./release-identity.mjs";
 
 const { values } = parseArgs({ options: Object.fromEntries(
-  ["installer", "previous-installer", "manifest", "root"].map(name => [name, { type: "string" }])
+  ["installer", "previous-installer", "previous-tag", "manifest", "root"].map(name => [name, { type: "string" }])
 )});
-for (const name of ["installer", "previous-installer", "manifest", "root"]) assert(values[name], `Missing --${name}`);
+for (const name of ["installer", "previous-installer", "previous-tag", "manifest", "root"]) assert(values[name], `Missing --${name}`);
+const previousVersion = /^v(\d+\.\d+\.\d+)$/.exec(values["previous-tag"])?.[1];
+assert(previousVersion, "The previous tag must be a released version such as v0.6.1.");
 assert.equal(process.platform, "win32");
 assert.equal(process.env.GITHUB_ACTIONS, "true", "Run installer tests on a clean GitHub Windows runner.");
 assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted");
@@ -22,7 +24,9 @@ assert(root.startsWith(runnerTemp + path.sep));
 assert(!fs.existsSync(root), "Installer test directory already exists.");
 const installer = path.resolve(values.installer);
 const previousInstaller = path.resolve(values["previous-installer"]);
+assert.equal(path.basename(previousInstaller), `TeamSwarm-${previousVersion}-Windows-x64.exe`);
 const manifest = JSON.parse(fs.readFileSync(values.manifest, "utf8"));
+assert.notEqual(manifest.version, previousVersion, "An upgrade requires two different versions.");
 const identity = sourceIdentity(repository);
 assert.equal(identity.commit, manifest.commit);
 assert.equal(identity.sourceSha256, manifest.sourceSha256);
@@ -54,7 +58,7 @@ const shortcuts = JSON.parse(ps(`$paths=@((Join-Path ([Environment]::GetFolderPa
 assert.deepEqual(registrations(), [], "TeamSwarm is already installed.");
 for (const location of [dataHome, userData, ...shortcuts]) assert(!fs.existsSync(location), `Existing application data: ${location}`);
 fs.mkdirSync(root, { recursive: true });
-const report = { version: manifest.version, commit: manifest.commit, installerSha256: asset.sha256, passed: false, checks: {} };
+const report = { version: manifest.version, commit: manifest.commit, sourceSha256: manifest.sourceSha256, installerSha256: asset.sha256, passed: false, checks: {} };
 let app, page;
 const secret = "installer-credential-fixture";
 const provider = http.createServer((request, response) => {
@@ -178,9 +182,9 @@ try {
   report.checks.uninstallPreservesData = true;
   for (const location of [dataHome, userData]) fs.rmSync(location, { recursive: true });
   install(previousInstaller);
-  report.previousVersion = await launch();
-  assert.notEqual(report.previousVersion, manifest.version);
-  const saved = await seed({ legacy: true });
+  report.previousVersion = await launch(previousVersion);
+  // v0.6.0 used the first-launch team form; later releases start in the chat workspace.
+  const saved = await seed({ legacy: previousVersion === "0.6.0" });
   await close();
   const projectFile = path.join(root, "projects", saved.team.id, "kept.txt");
   assert(fs.statSync(path.dirname(projectFile)).isDirectory());

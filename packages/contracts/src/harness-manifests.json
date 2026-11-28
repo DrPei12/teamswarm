@@ -551,7 +551,7 @@
       }
     },
     "session": {
-      "resume": false
+      "resume": true
     },
     "description": {
       "execution": {
@@ -561,7 +561,7 @@
           "pwsh",
           "native jobs"
         ],
-        "runtime": "DeepSeek Harness SDK profile",
+        "runtime": "DeepSeek Harness ACP profile for read-only routed sessions, SDK profile for command execution",
         "strategy": "DeepSeek Harness owns its plugin composition, command jobs and session events."
       },
       "permissions": {

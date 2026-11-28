@@ -1,10 +1,10 @@
 /** Remove configured credentials from structured observations and bounded error diagnostics. */
-export function redact<T>(value: T, credentialEnv: string | null): T {
+export function redact<T>(value: T, credentialEnv: string | null, ...additional: (string | undefined)[]): T {
   const secrets = [
     ...new Set(
-      [credentialEnv, "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
+      [...[credentialEnv, "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
         .filter((v): v is string => !!v)
-        .map((name) => process.env[name])
+        .map((name) => process.env[name]), ...additional]
         .filter((v): v is string => !!v && v.length >= 8),
     ),
   ];

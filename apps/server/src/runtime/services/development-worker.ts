@@ -120,8 +120,11 @@ async function close() {
   child?.kill();
 }
 function fatal(error: Error) {
+  if (closing) return;
+  closing = true;
   process.stderr.write(error.message + "\n");
-  void close().finally(() => process.exit(1));
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "service/error", params: { message: error.message.slice(0, 2048) } }) + "\n",
+    () => { void close().finally(() => process.exit(1)); });
 }
 
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });

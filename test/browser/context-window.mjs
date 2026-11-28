@@ -106,7 +106,7 @@ try {
   page.setDefaultTimeout(12000);
   await page.goto(origin + "/#/team/" + team.id + "/agent");
   const open = async () => {
-    await page.getByRole("button", { name: "Workspace menu" }).click();
+    await page.getByRole("button", { name: "Application menu" }).click();
     await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
     await page.getByRole("tab", { name: "General", exact: true }).waitFor();
   };
@@ -141,7 +141,7 @@ try {
   await page.getByRole("option", { name: "简体中文", exact: true }).click();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.reload();
-  await page.getByRole("button", { name: "Workspace menu" }).waitFor();
+  await page.getByRole("button", { name: "Application menu" }).waitFor();
   assert.equal((await call("/product")).contextWindowPreset, "auto");
   assert.equal((await call("/product")).language, "en");
   await open();

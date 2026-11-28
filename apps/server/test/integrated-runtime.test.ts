@@ -219,6 +219,28 @@ test("Host frame binds the exact retained insights, output versions and attachme
       },
       "user",
     );
+    const candidates = (["proposed", "adopted"] as const).map((status, index) =>
+      f.records.saveInsight(f.team.id, f.branch.id, {
+        key: `candidate-${index}`,
+        expectedRevision: 0,
+        kind: "decision",
+        status,
+        title: `Alternative ${index}`,
+        content: `Use isolated directory policy ${randomUUID()}`,
+        reason: "Branch exploration",
+        sourceMessageIds: [f.run.sourceMessageId],
+      }, "host"),
+    );
+    assert.throws(() => f.records.saveInsight(f.team.id, f.branch.id, {
+      key: insight.key,
+      expectedRevision: insight.revision,
+      kind: insight.kind,
+      status: "superseded",
+      title: insight.title,
+      content: "Replace the workspace policy",
+      reason: "Counterproposal",
+      sourceMessageIds: insight.sourceMessageIds,
+    }, "host"), { code: "memory_authority" });
     const host = f.store
       .list<Member>("members", f.team.id)
       .find((m) => m.kind === "host")!;
@@ -226,7 +248,7 @@ test("Host frame binds the exact retained insights, output versions and attachme
     const project = f.history.bind(attempt, f.run);
     const output = f.records.outputs(f.team.id, f.branch.id)[0];
     const retained = {
-      retainedInsights: [insight],
+      retainedInsights: [insight, ...candidates],
       currentOutputs: [
         {
           path: output.path,
@@ -252,8 +274,14 @@ test("Host frame binds the exact retained insights, output versions and attachme
     assert.deepEqual(frame.input, JSON.parse(JSON.stringify(input)));
     assert.deepEqual(
       frame.input.retainedInsights,
-      f.records.insights(f.team.id, f.branch.id),
+      f.records.insights(f.team.id, f.branch.id).filter(entry => entry.id === insight.id),
     );
+    assert.equal(frame.epoch, 1);
+    for (const candidate of candidates) {
+      assert(!JSON.stringify(input).includes(candidate.content));
+      const detail = f.hostContext.read(f.run, { kind: "materials", refs: ["insight:" + candidate.id] }, attempt.id);
+      assert(JSON.stringify(detail).includes(candidate.content));
+    }
     assert.deepEqual(frame.input.currentOutputs, retained.currentOutputs);
     assert.deepEqual(
       frame.input.attachmentsAndInstructions,
@@ -450,6 +478,17 @@ function linkedContinuationFixture() {
     nextRun,
     nextHost,
     host,
+    dispatchCoordination() {
+      const coordination = (f.runtime as any).coordination;
+      const live = new Set([f.team.id]);
+      const due = coordination.nextDue(live);
+      assert.ok(due !== null);
+      coordination.flush(due, live);
+      const brief = f.store.workQuery(f.team.id, { runId: nextRun.id, memberId: host.id, statuses: ["queued"] })
+        .find(work => work.kind === "host-followup");
+      assert.ok(brief);
+      return brief;
+    },
     followUp() {
       (f.runtime as any).followUpRun(nextHost, host);
       return f.store.get<Run>("runs", f.team.id, nextRun.id);
@@ -512,7 +551,12 @@ test("a successfully checked continuation completes linked work without discardi
     ]);
     f.store.setStatus(repaired, "self_checked");
     f.records.publishOutputs(repaired);
-    const run = f.followUp();
+    assert.equal(f.followUp().state, "active");
+    const brief = f.dispatchCoordination();
+    assert.deepEqual(brief.coordination?.changes.map(change => change.workId), [repaired.id]);
+    f.store.setStatus(brief, "submitted");
+    (f.runtime as any).followUp(brief, f.host);
+    const run = f.store.get<Run>("runs", f.team.id, f.nextRun.id);
     assert.equal(run.state, "completed");
     assert.equal(
       f.store.get<Work>("works", f.team.id, f.failed.id).status,
@@ -558,6 +602,10 @@ test("a continuation finishing in a later run settles its still-active owner run
     f.store.recordSelfChecks(continuation, [{ criterion: "Change is correct", evidence: "Read current result", evidenceEventIds: [] }]);
     f.store.setStatus(continuation, "self_checked");
     (f.runtime as any).followUp(f.nextHost, f.host);
+    const brief = f.dispatchCoordination();
+    assert.deepEqual(brief.coordination?.changes.map(change => change.workId), [continuation.id]);
+    f.store.setStatus(brief, "submitted");
+    (f.runtime as any).followUp(brief, f.host);
     assert.equal(f.store.get<Run>("runs", f.team.id, f.nextRun.id).state, "completed");
     assert.equal(f.store.get<Run>("runs", f.team.id, f.run.id).state, "completed");
     assert.equal(f.records.outputs(f.team.id, f.branch.id)[0].current.workId, continuation.id);
@@ -573,6 +621,7 @@ test("a failed later continuation coordinates repair only in its current run", (
     delete f.run.continuedWorkIds;
     f.store.save("runs", f.run);
     (f.runtime as any).followUp(f.nextHost, f.host);
+    assert.equal(f.dispatchCoordination().coordination?.urgent, true);
     const queuedHosts = f.store.list<Work>("works", f.team.id).filter(w => w.memberId === f.host.id && w.status === "queued");
     assert.equal(queuedHosts.length, 1);
     assert.equal(queuedHosts[0].runId, f.nextRun.id);

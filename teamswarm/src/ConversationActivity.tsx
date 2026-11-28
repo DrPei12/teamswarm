@@ -93,14 +93,14 @@ function ActionError({ item }: { item: TranscriptItem }) {
 
 function ToolDetails({ item }: { item: TranscriptItem }) {
   const args = toolValue(item.text);
-  if (item.title === "team_write_file")
+  if ((item.toolName ?? item.title) === "team_write_file")
     return (
       <>
         <pre>{field(args, "text")}</pre>
         <ActionError item={item} />
       </>
     );
-  if (item.title === "team_edit_file")
+  if ((item.toolName ?? item.title) === "team_edit_file")
     return (
       <>
         <pre className="activity-diff-before">{field(args, "oldText")}</pre>
@@ -164,6 +164,7 @@ const ActivityItem = memo(function ActivityItem({
   const [choice, setChoice] = useState<boolean | null>(null);
   const open = choice ?? false;
   const exited = item.kind === "command" && commandHasNonzeroExit(item);
+  const tool = item.toolName ?? item.title ?? "";
   if (item.kind === "message")
     return (
       <MessageContent text={item.text} pending={item.status === "running"} />
@@ -172,14 +173,12 @@ const ActivityItem = memo(function ActivityItem({
     item.kind === "command"
       ? Terminal
       : item.kind === "file" ||
-          ["team_write_file", "team_edit_file"].includes(item.title ?? "")
+          ["team_write_file", "team_edit_file"].includes(tool)
         ? FileCode2
         : item.kind === "reasoning" || item.kind === "status"
           ? Circle
           : Wrench;
-  const filePath = ["team_write_file", "team_edit_file"].includes(
-    item.title ?? "",
-  )
+  const filePath = ["team_write_file", "team_edit_file"].includes(tool)
     ? field(toolValue(item.text), "path").split(/[\\/]/).at(-1)
     : undefined;
   const title =
@@ -196,10 +195,8 @@ const ActivityItem = memo(function ActivityItem({
                     : "Command did not complete: {command}",
               { command: commandLabel(item.title || item.text) },
             )
-          : item.title
-            ? [t(toolLabels[item.title] ?? item.title), filePath]
-                .filter(Boolean)
-                .join(" ")
+          : tool
+            ? [t(toolLabels[tool] ?? tool), filePath].filter(Boolean).join(" ")
             : "") ||
         (item.kind === "reasoning"
           ? t("Thinking")
@@ -310,6 +307,30 @@ function CommandGroup({ group }: { group: ActivityGroup }) {
   );
 }
 
+function SubagentActivity({ group }: { group: ActivityGroup }) {
+  const { t } = useI18n();
+  const state = group.items.find((item) => item.id === group.id);
+  const thread = group.items[0].nativeThreadId!;
+  return (
+    <details className="activity-subagent" data-native-thread={thread}>
+      <summary className={`activity-summary-row ${state?.status ?? "unknown"}`}>
+        <Users size={15} />
+        <span>
+          {t("Subagent")} {state?.text || thread.slice(-8)}
+        </span>
+        <small>{t(state?.status ?? "unknown")}</small>
+      </summary>
+      <div className="activity-subagent-items">
+        {group.items
+          .filter((item) => item.id !== group.id)
+          .map((item) => (
+            <ActivityItem item={item} key={item.id} />
+          ))}
+      </div>
+    </details>
+  );
+}
+
 export const ConversationActivity = memo(function ConversationActivity({
   items,
   running = false,
@@ -357,6 +378,8 @@ export const ConversationActivity = memo(function ConversationActivity({
             <ActivityItem item={group.items[0]} key={group.id} />
           ) : group.kind === "commands" ? (
             <CommandGroup group={group} key={group.id} />
+          ) : group.kind === "subagent" ? (
+            <SubagentActivity group={group} key={group.id} />
           ) : (
             <GroupedActivity group={group} members={members} key={group.id} />
           ),

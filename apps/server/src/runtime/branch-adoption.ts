@@ -2,6 +2,7 @@ import { z } from "zod";
 import { conflict } from "../errors.js";
 import { definitionInput, type ProjectHistory } from "./project-history.js";
 import type { CollaborationRecords } from "./collaboration-records.js";
+import { isConfirmedInsight } from "./memory-governance.js";
 import type { RuntimeStore } from "./store.js";
 import type { Member, Run, Work } from "./types.js";
 
@@ -53,7 +54,7 @@ export class BranchAdoption {
       source: this.history.context(work.teamId, source.id),
       base: source.baseNodeId ? this.history.detail(work.teamId, source.baseNodeId) : null,
       mainline: this.history.context(work.teamId, main.id),
-      insights: this.records.insights(work.teamId, source.id),
+      insights: this.records.activeInsights(work.teamId, source.id),
       mainlineWork: this.store.list<Work>("works", work.teamId)
         .filter(w => this.store.get<Member>("members", work.teamId, w.memberId).kind !== "host" && !w.invalidatedByNodeId && ["queued", "running", "waiting", "submitted", "reviewing"].includes(w.status) && this.history.forRun(this.store.get<Run>("runs", work.teamId, w.runId)).id === main.id)
         .map(w => ({ id: w.id, title: w.title, instructions: w.instructions, status: w.status, acceptanceCriteria: w.acceptanceCriteria })),
@@ -67,7 +68,7 @@ export class BranchAdoption {
       const { source, main } = this.authorize(work, run, input.authorizationQuote);
       if (source.headNodeId !== input.expectedSourceHeadId)
         throw conflict("history_conflict", "The source branch changed. Read adoption context again.");
-      const ideas = this.records.insights(work.teamId, source.id);
+      const ideas = this.records.activeInsights(work.teamId, source.id);
       const selected = input.insightIds.map(id => ideas.find(i => i.id === id));
       const merged = new Set<string>();
       const revisions = this.records.insights(work.teamId, source.id, true);
@@ -93,7 +94,7 @@ export class BranchAdoption {
           changedKeys: [...input.definition.documents.map(d => d.key), ...input.definition.removeKeys],
         },
       }, "merge");
-      for (const idea of selected) this.records.saveInsight(work.teamId, source.id, {
+      for (const idea of selected.filter(idea => !isConfirmedInsight(idea))) this.records.saveInsight(work.teamId, source.id, {
         key: idea!.key, expectedRevision: idea!.revision, kind: idea!.kind, status: "adopted",
         title: idea!.title, content: idea!.content, reason: input.definition.reason || input.definition.title,
         sourceMessageIds: [run.sourceMessageId],

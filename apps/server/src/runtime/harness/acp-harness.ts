@@ -31,7 +31,9 @@ export interface AcpPackageOptions {
   validateConfig?(config: ExecutionConfig): void;
   allowsSharedWorkspace?(input: PreflightInput): boolean;
 }
-type Active = { child: ChildProcessWithoutNullStreams; rpc: AcpSession; done: Promise<HarnessResult>; finish(result: HarnessResult): Promise<void>; stopping: boolean; turnId: string };
+type OwnedAcp = { resourceId: string; child: ChildProcessWithoutNullStreams; observe: HarnessRequest["onEvent"]; released?: boolean };
+type Active = OwnedAcp & { rpc: AcpSession; done: Promise<HarnessResult>; finish(result: HarnessResult): Promise<void>;
+  revoke(): Promise<void>; stopping: boolean; turnId: string };
 
 /** Shared process/ACP driver. Packages configure the native program, never execute its tools. */
 export class AcpHarness implements Harness {
@@ -39,7 +41,7 @@ export class AcpHarness implements Harness {
   readonly capabilities: Harness['capabilities'];
   private active = new Map<string, Active>();
   private opening = new Set<string>();
-  private unconfirmed = new Map<string, ChildProcessWithoutNullStreams>();
+  private unconfirmed = new Map<string, OwnedAcp>();
   constructor(readonly manifest: HarnessManifest, private options: AcpPackageOptions) {
     this.id = manifest.id;
     this.capabilities = { sessions: true, resume: manifest.session.resume, streaming: true, dynamicTools: true, interrupt: true, nativeChecks: true, dispatchTracking: true, customModel: true, customProvider: !manifest.models.nativeOnly, ...(manifest.models.preferredProtocol ? { protocol: manifest.models.preferredProtocol } : {}), isolation: String(manifest.description.isolation[process.platform] ?? manifest.description.isolation.default ?? 'Native permissions') };
@@ -48,7 +50,21 @@ export class AcpHarness implements Harness {
     return declaredPermissions(this.manifest) ?? { defaultId: "", options: [] };
   }
   get sessionScope() { return `${sessionStoreScope(nativeHome(this.id))}:acp:${this.manifest.packageVersion}`; }
-  resources() { return [...[...this.active].map(([id, a]) => [id, a.child] as const), ...this.unconfirmed].flatMap(([id, child]) => child.pid ? [{ id: `${this.id}:${id}`, pid: child.pid, sessions: 1 }] : []); }
+  resources() { return [...this.active.values(), ...this.unconfirmed.values()]
+    .flatMap(owner => owner.child.pid && !owner.released ? [{ id: owner.resourceId, pid: owner.child.pid, sessions: 1 }] : []); }
+  private resourceEvent(owner: OwnedAcp, status: "acquired" | "released" | "unconfirmed") {
+    if (owner.released || !owner.child.pid) return;
+    owner.observe({ type: `resource.${status}`, data: { id: owner.resourceId, pid: owner.child.pid, scope: "attempt" } });
+    if (status === "released") owner.released = true;
+  }
+  async reconcileResources() {
+    for (const [id, owner] of this.unconfirmed) {
+      if (await confirmOwnedExit(owner.child) && this.unconfirmed.get(id) === owner) {
+        this.resourceEvent(owner, "released");
+        this.unconfirmed.delete(id);
+      }
+    }
+  }
   async inspect(): Promise<Record<string, unknown>> {
     try {
       const entry = nativeEntry(this.id), pkg = this.manifest.runtime && packageFor(entry, this.manifest.runtime.package);
@@ -86,15 +102,19 @@ export class AcpHarness implements Harness {
     } else writeFileSync(bindingFile, binding, { mode: 0o600 });
     this.opening.add(id);
     const bridge = await toolBridge(request).catch(error => { this.opening.delete(id); throw error; });
-    let spawned: ChildProcessWithoutNullStreams | undefined;
+    let owner: OwnedAcp | undefined;
+    let draining: Promise<void> | undefined;
+    const revoke = () => draining ??= Promise.all([bridge.close(), request.modelRoute?.release?.()]).then(() => {});
     const turnId = randomUUID();
     try {
       const entry = nativeEntry(this.id), env = childEnvironment(request);
       const launch = await this.options.prepare({ request, home, entry, env, bridge: bridge.url });
       request.onSession(id, { harness: this.id, model: request.config.model, protocol: request.config.protocol, nativeCommands: true, nativePermissions: request.config.permissions ?? null, workspace: request.workspace,
         nativeSession: request.sessionId ? 'inherited' : 'unconfirmed' });
-      request.onTurn(turnId); request.onDispatch?.();
-      const child = spawned = await spawnOwned(/\.[cm]?js$/i.test(entry) ? process.execPath : entry, [...(/\.[cm]?js$/i.test(entry) ? [entry] : []), ...launch.args], { cwd: request.workspace, env: launch.env ?? env, windowsHide: true, detached: process.platform !== 'win32' });
+      request.onTurn(turnId);
+      const child = await spawnOwned(/\.[cm]?js$/i.test(entry) ? process.execPath : entry, [...(/\.[cm]?js$/i.test(entry) ? [entry] : []), ...launch.args], { cwd: request.workspace, env: launch.env ?? env, windowsHide: true, detached: process.platform !== 'win32' });
+      const group = owner = { resourceId: `${this.id}:${turnId}`, child, observe: request.onEvent };
+      this.resourceEvent(group, "acquired");
       const receiptFile = path.join(home, `${turnId}.json`);
       const receipt = (result?: HarnessResult) => {
         writeFileSync(receiptFile + '.tmp', JSON.stringify({ sessionId: id, turnId, pid: child.pid, result, updatedAt: new Date().toISOString() }), { mode: 0o600 });
@@ -113,6 +133,8 @@ export class AcpHarness implements Harness {
         if (nativeFailure && result.status === 'completed')
           result = { ...result, status: 'failed', error: nativeFailure };
         terminal = result;
+        let revoked = true;
+        const drained = revoke().catch(() => { revoked = false; });
         rpc.close();
         let stopped = await confirmOwnedExit(child);
         if (!stopped) stopped = await terminateNative(child);
@@ -120,10 +142,13 @@ export class AcpHarness implements Harness {
         if (!stopped) terminal = { ...result, status: 'unknown', error: 'Native process termination could not be confirmed.' };
         if (stopped && request.sessionId && !sessionSeen && result.status !== 'interrupted')
           emit('session.native_unavailable', { harness: this.id });
-        try { observations.close(result.status === 'interrupted'); transcript.finish(result.status); receipt(terminal); }
+        await drained;
+        if (!revoked) terminal = { ...terminal, status: 'unknown', error: 'Native execution leases could not finish draining.' };
+        if (!stopped) this.unconfirmed.set(id, group);
+        this.active.delete(id);
+        this.resourceEvent(group, stopped ? "released" : "unconfirmed");
+        try { observations.close(result.status === 'interrupted'); transcript.finish(terminal.status); receipt(terminal); }
         catch { terminal = { status: 'unknown', text: result.text, error: 'Native execution receipt could not be saved.' }; }
-        await bridge.close();
-        if (stopped) this.active.delete(id);
         settle(terminal);
       };
       const rpc = new AcpSession(child, request, bridge.url, path.join(home, 'native-session.json'), (event: any) => {
@@ -148,7 +173,7 @@ export class AcpHarness implements Harness {
         configure: this.options.configureSession ? (call, sessionId, description) => this.options.configureSession!(request, call, sessionId, description) : undefined,
         denyNativePermissions: request.config.access === 'read-only' && !(this.id === 'antigravity' && request.modelRoute),
       });
-      this.active.set(id, { child, rpc, done, finish, stopping: false, turnId });
+      this.active.set(id, Object.assign(group, { rpc, done, finish, revoke, stopping: false, turnId }));
       child.stdin.on('error', () => {});
       child.stderr.resume();
       const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
@@ -161,17 +186,24 @@ export class AcpHarness implements Harness {
       void rpc.start();
       return await done;
     } catch (error) {
-      if (spawned && !await confirmOwnedExit(spawned) && !await terminateNative(spawned)) {
-        this.unconfirmed.set(id, spawned);
-        await bridge.close();
-        throw new HarnessTransportError(`Native startup failed and process termination could not be confirmed: ${(error as Error).message}`);
+      const drained = revoke().catch(() => false);
+      if (owner) {
+        if (!await confirmOwnedExit(owner.child) && !await terminateNative(owner.child)) {
+          this.unconfirmed.set(id, owner);
+          this.resourceEvent(owner, "unconfirmed");
+          await drained;
+          throw new HarnessTransportError(`Native startup failed and process termination could not be confirmed: ${(error as Error).message}`);
+        }
+        this.resourceEvent(owner, "released");
       }
-      await bridge.close(); throw error;
+      if (await drained === false) throw new HarnessTransportError("Native startup failed before the execution leases drained.");
+      throw error;
     } finally { this.opening.delete(id); }
   }
   async interrupt(id: string, turnId: string) {
     const a = this.active.get(id); if (!a || a.turnId !== turnId) return;
     a.stopping = true; a.rpc.cancel();
+    void a.revoke().catch(() => {});
     const ended = await Promise.race([a.done.then(() => true), new Promise<boolean>(resolve => { const timer = setTimeout(() => resolve(false), 3000); timer.unref(); })]);
     if (!ended && !await terminateNative(a.child)) await a.finish({ status: 'unknown', text: '', error: 'Native cancellation could not confirm process termination.' });
     await a.done;
@@ -189,8 +221,12 @@ export class AcpHarness implements Harness {
   }
   async close() {
     await Promise.all([...this.active].map(([id, a]) => this.interrupt(id, a.turnId)));
-    for (const [id, child] of [...this.unconfirmed, ...[...this.active].map(([id, a]) => [id, a.child] as const)]) {
-      if (await confirmOwnedExit(child) || await terminateNative(child)) { this.unconfirmed.delete(id); this.active.delete(id); }
+    for (const [id, owner] of [...this.unconfirmed, ...this.active]) {
+      if (await confirmOwnedExit(owner.child) || await terminateNative(owner.child)) {
+        this.resourceEvent(owner, "released");
+        this.unconfirmed.delete(id);
+        this.active.delete(id);
+      }
     }
   }
 }

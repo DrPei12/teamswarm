@@ -6,6 +6,7 @@ import { badRequest } from "../errors.js";
 import { definitionInput } from "./project-history.js";
 import { insightInput } from "./collaboration-records.js";
 import { nativePermissions } from "./harness/permissions.js";
+import { supportsNativeReadProbes } from "@team/contracts/harness-catalog";
 
 export const key = z.string().trim().min(1).max(200);
 export const text = z.string().trim().min(1).max(20000);
@@ -60,8 +61,10 @@ export const executionConfig = z
     thinkingFormat: z.enum(["qwen"]).nullable().optional(),
     maxOutputTokens: z.number().int().min(1).max(131072).nullable().optional(),
     contextWindowTokens: z.number().int().min(1024).max(2097152).nullable().optional(),
+    nativeReadProbes: z.boolean().optional(),
   })
-  .strict();
+  .strict().refine(config => !config.nativeReadProbes || supportsNativeReadProbes(config),
+    { path: ["nativeReadProbes"], message: "Native probes require a supported read-only model configuration." });
 export const runtimeSettings = z
   .object({
     expectedVersion: z.number().int().min(0),
@@ -74,6 +77,7 @@ export const runtimeSettings = z
     timeoutSeconds: z.number().int().min(10).max(3600).default(600),
     hostContextMaxBytes: z.number().int().min(32000).max(524288).optional(),
     hostSessionMaxTurns: z.number().int().min(1).max(20).optional(),
+    sessionLongevityMode: z.enum(["standard", "high-efficiency"]).optional(),
     allowIsolatedWorkspaces: z.boolean().default(true),
   })
   .strict();
@@ -98,7 +102,46 @@ export function parse<T extends z.ZodType>(
     );
   return result.data;
 }
+export const globalSkillPin = z.object({ source: z.literal("global"), skillId: z.uuid(),
+  revision: z.number().int().positive(), generation: z.number().int().positive() }).strict();
+const skillCursor = z.string().regex(/^[a-f0-9]{64}:[0-9]{1,12}$/).optional();
+export const mcpMountInput = z.object({
+  serviceId: z.uuid(), revision: z.number().int().positive(), tool: z.string().regex(/^[A-Za-z0-9_.-]{1,128}$/),
+  generation: z.number().int().positive(),
+}).strict();
+const memoryTarget = z.object({ kind: z.enum(["note", "insight"]), key,
+  expectedRevision: z.number().int().positive(), expectedVersion: z.number().int().nonnegative(),
+}).strict();
+export const memoryChangeInput = memoryTarget.extend({
+  active: z.boolean().optional(),
+  correction: z.object({ title: z.string().trim().min(1).max(200), content: text }).strict().optional(),
+}).superRefine((input, context) => {
+  if ((input.active !== undefined) === (input.correction !== undefined) || input.correction && input.kind !== "note")
+    context.addIssue({ code: "custom", message: "Select one memory action. Corrections apply to project notes." });
+});
+export type MemoryChange = z.infer<typeof memoryChangeInput>;
+
 export const tools = {
+  team_skill_list: {
+    description: "List granted global text skills in this Host turn. Pass an exact mount to team_skill_read or team_delegate.mountSkills.",
+    schema: z.object({ cursor: skillCursor, limit: z.number().int().min(1).max(30).default(10) }).strict(),
+  },
+  team_skill_read: {
+    description: "Read a page of the exact authorized skill body. Continue with its nextCursor.",
+    schema: z.object({ mount: globalSkillPin, cursor: skillCursor, limit: z.number().int().min(1).max(8000).default(4000) }).strict(),
+  },
+  team_mcp_list: {
+    description: "List the authorized MCP services and tool revisions mounted in this turn.",
+    schema: z.object({ offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(30).default(10) }).strict(),
+  },
+  team_mcp_schema: {
+    description: "Read the exact input schema of an MCP tool mounted in this turn.",
+    schema: mcpMountInput,
+  },
+  team_mcp_call: {
+    description: "Call an authorized read-only MCP tool with arguments matching its pinned schema.",
+    schema: z.object({ mount: mcpMountInput, arguments: z.record(z.string(), z.unknown()) }).strict(),
+  },
   team_preview_prepare: {
     description: "Prepare a project-owned Vite or Next.js development server. Run the returned commandPrefix through your own native command tool; preparing starts no process. A stable runtime copy preserves the framework CLI, compiler and hot reload across compatible handoffs. Requires writable production work and an adapter-verified execution policy. Currently Pi requires an explicit bash or powershell tool; other adapters without a verified launcher are refused. Use a plain vite or next dev script, with a local readiness path and expected text. Read-only work cannot launch services.",
     schema: z.object({ name: z.string().trim().min(1).max(80), directory: z.string().min(1).max(500).default("."), development: z.object({ framework: z.enum(["vite", "next"]), script: z.string().regex(/^[\w.-]+$/).default("dev"), ready: z.object({ path: z.string().regex(/^\/($|[^/])/).max(500), contains: z.string().min(1).max(500) }).strict() }).strict() }).strict(),
@@ -133,7 +176,7 @@ export const tools = {
   },
   team_save_insight: {
     description:
-      "Preserve a useful idea or decision with exact sourceMessageIds from the current input or team_state. Use a stable key and expectedRevision (0 for new). Proposed/rejected/superseded ideas are NOT effective requirements. Host records explicit user judgments as adopted, uncertainty as proposed. When adopting a branch into mainline, keep its ideas proposed until team_adopt_branch atomically publishes them; use that tool instead of simply changing the insight status. Members may only propose. Never invent source IDs or turn a tentative idea into a commitment.",
+      "Record an idea or decision with exact sourceMessageIds from the current input or team_state. Use a stable key and expectedRevision (0 for new). Only user-adopted revisions enter the branch's continuing decision context. Record Host findings as proposed for adoption in project records. Use team_adopt_branch for an authorized merge into mainline. Members may propose ideas.",
     schema: insightInput,
   },
   team_insight_sources: {
@@ -196,10 +239,11 @@ export const tools = {
   },
   team_context_read: {
     description:
-      "Read branch materials by refs, or search original messages and notes. Follow nextOffset for content and nextRefOffset for remaining batch refs; on continuation pass expectedRevisions from the preceding page. section=links/sources pages complete relationships and provenance when linkCount/sourceCount exceed the header preview. Use messageId for an original message, or document:<revision> for a historical definition in this branch. If a revision changes, restart at offset 0.",
+      "Read branch materials by refs, or search original messages and notes. Follow nextOffset for content and nextRefOffset for remaining batch refs; on continuation pass expectedRevisions from the preceding page. section=links/sources pages relationships and provenance. kind=handoff pages captured dialogue, worktree changes or check receipts by handoffSection. Use messageId to read an original message or document:<revision> for a historical definition.",
     schema: z
       .object({
-        kind: z.enum(["messages", "notes", "materials"]),
+        kind: z.enum(["messages", "notes", "materials", "handoff"]),
+        handoffSection: z.enum(["dialogue", "worktree", "checks"]).optional(),
         refs: z.array(z.string().min(1).max(256)).min(1).max(20).optional(),
         messageId: key.optional(),
         expectedRevisions: z.record(z.string().min(1).max(256),key).optional(),
@@ -211,6 +255,17 @@ export const tools = {
         limit: z.number().int().min(1).max(20).default(5),
       })
       .strict().refine(v => v.kind !== "materials" || !!v.refs?.length, "refs are required for materials"),
+  },
+  team_save_handoff_memo: {
+    description: "Save a brief handoff memo for the current turn. Pin exact relative paths, file hashes and original 1-based line ranges. Host spans require verified team_read_file receipts. The first memo uses expectedRevision=0.",
+    schema: z.object({
+      expectedRevision: z.number().int().nonnegative(),
+      nextImmediateCut: z.string().trim().min(1).max(1200),
+      rejectedHypotheses: z.array(z.string().trim().min(1).max(600)).max(5),
+      hotFileSpans: z.array(z.object({ path: key, sha256: z.string().regex(/^[a-f0-9]{64}$/),
+        startLine: z.number().int().positive(), endLine: z.number().int().positive(),
+      }).strict()).max(3),
+    }).strict(),
   },
   team_host_note: {
     description:
@@ -297,18 +352,26 @@ export const tools = {
   },
   team_yield: {
     description:
-      "Checkpoint unfinished responsibility and END this native turn. Work remains open and resumes in a later turn. Finish independent work before waiting; waitForExchangeIds waits for a useful reply, cancellation, or new inbound collaboration. Empty list continues at next scheduling boundary. Never sleep/poll; call this only before result submission. After team_submit_result succeeds, end with a final response instead of calling this tool or submitting again. A native turn ending alone does not checkpoint unfinished work.",
+      "Checkpoint unfinished responsibility and END this native turn. Finish independent work before waiting. waitForExchangeIds waits for a useful reply, cancellation, or new inbound collaboration. To wait for an interface decision, supply interfaceConflict from an owned file and a pinned predecessor artifact you have read. Use reason=session_rotation only after the runtime requests a session change and you saved the handoff memo; do not wait for any exchange in that case. An empty exchange list without interfaceConflict continues at the next scheduling boundary. Use this tool before result submission.",
     schema: z
       .object({
         summary: text,
+        reason: z.literal("session_rotation").optional(),
         waitForExchangeIds: z.array(key).max(30).default([]),
         waitSeconds: z.number().int().min(1).max(3600).default(300),
+        interfaceConflict: z.object({
+          contractKey: z.string().regex(/^contracts\/[a-zA-Z0-9][a-zA-Z0-9_/-]{0,109}$/),
+          upstreamArtifactId: key,
+          localPath: z.string().min(1).max(2000),
+          expected: z.string().trim().min(1).max(2000),
+          observed: z.string().trim().min(1).max(2000),
+        }).strict().optional(),
       })
       .strict(),
   },
   team_project_context: {
     description:
-      "Read the complete shared project definition for your branch. Bodies contain the definition only; history is separate. Reading records receipt, not understanding.",
+      "Read the project definition for the current work. With a selected definition scope, the result contains the pinned documents, their dependencies and branch goals and requirements.",
     schema: z.object({}).strict(),
   },
   team_acknowledge_context: {
@@ -348,10 +411,76 @@ export const tools = {
   },
   team_define_requirements: {
     description:
-      "Host only. Establish effective requirements from the current user request. Use only for an actual delegation or confirmed revision, never ordinary discussion. affectedWorkIds STOPS and SUPERSEDES those responsibilities; you must delegate replacement work. Use [] when existing work can continue and notify members through A2A instead. A requirement update does not itself create replacement tasks.",
+      "Host only. Establish the current user's production requirements. Use outcome to record the agreed value goal, invariants, user-visible criteria and non-goals. Read the current outcome and supply its requirement ID, or null for the first revision. List the existing responsibilities affected by this request in affectedWorkIds.",
     schema: z
-      .object({ content: text, affectedWorkIds: z.array(key).max(100) })
+      .object({
+        content: text,
+        affectedWorkIds: z.array(key).max(100),
+        outcome: z.object({
+          expectedRequirementId: key.nullable(),
+          specification: z.object({
+            valueGoal: z.string().trim().min(1).max(600),
+            invariants: z.array(z.string().trim().min(1).max(400)).max(12),
+            criteria: z.array(z.object({
+              key: z.string().trim().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/),
+              text: z.string().trim().min(1).max(500),
+            }).strict()).min(1).max(16),
+            nonGoals: z.array(z.string().trim().min(1).max(400)).max(12),
+          }).strict().refine(value => new Set(value.criteria.map(criterion => criterion.key)).size === value.criteria.length,
+            "Each outcome criterion needs a distinct key."),
+        }).strict().optional(),
+      })
       .strict(),
+  },
+  team_plan_workflow: {
+    description: "Host only. Revise this Run's dependency graph against its effective outcome. Set expectedRevision to 0 for a new plan. Use assigneeMemberId to plan a member before dispatch, null to clear the planned member, and renew to give an ended assignment a new generation. Read team_state for ready nodes and assign them with workflowNodeKey and expectedWorkflowRevision.",
+    schema: z.object({
+      expectedRevision: z.number().int().min(0),
+      upsert: z.array(z.object({
+        key, title: z.string().trim().min(1).max(160),
+        assigneeMemberId: key.nullable().optional(),
+        dependsOn: z.array(key).max(30),
+        outcomeCriteria: z.array(key).max(16),
+      }).strict()).max(100),
+      remove: z.array(key).max(100),
+      renew: z.array(key).max(100).default([]),
+    }).strict(),
+  },
+  team_host_inline_edit: {
+    description: "Host only. Ask for approval and apply one or two small replacements in existing project text files. Use the current user message ID, the exact file hashes from team_read_file, and one literal matching fragment per file.",
+    schema: z.object({
+      sourceMessageId: key,
+      edits: z.array(z.object({
+        path: z.string().min(1).max(1000),
+        expectedSha256: z.string().regex(/^[a-f0-9]{64}$/),
+        oldText: z.string().min(1).max(4000),
+        newText: z.string().max(4000),
+      }).strict()).min(1).max(2),
+    }).strict(),
+  },
+  team_memory_list: {
+    description: "Read branch memory keys, revisions and archive state to select the exact entry for a user decision.",
+    schema: z.object({ offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(40).default(20) }).strict(),
+  },
+  team_memory_change: {
+    description: "Ask the user to archive or restore the exact memory revision, or approve corrected title and content for a project note.",
+    schema: memoryChangeInput,
+  },
+  team_subspace_prepare: {
+    description: "Prepare a snapshot for a current direct child. Use the task name returned by spawn_agent or the native thread ID from team_state. Assign exact files within this Work.",
+    schema: z.object({ threadId: key, paths: z.array(z.string().min(1).max(1000)).min(1).max(128) }).strict(),
+  },
+  team_subspace_submit: {
+    description: "Freeze the current child turn's file changes and finish the child turn.",
+    schema: z.object({}).strict(),
+  },
+  team_subspace_commit: {
+    description: "Apply a completed child's submitted files to the parent working copy and verify the resulting hashes.",
+    schema: z.object({ id: key }).strict(),
+  },
+  team_subspace_abandon: {
+    description: "Release a child write set whose files have not been applied.",
+    schema: z.object({ id: key }).strict(),
   },
   team_add_member: {
     description:
@@ -398,7 +527,7 @@ export const tools = {
   },
   team_delegate: {
     description:
-      "Host only. Declare acceptanceEvidence for every exact criterion: native_check for required execution, review_judgment for semantic inspection. Omitted declarations remain unresolved and cannot be accepted. Review and continuation inherit pinned expectations. Assign owned work with exact acceptance criteria, versioned input IDs and dependencies. Use one stable responsibilityKey per responsibility and reuse it on retries; declared writePaths also deduplicate repeated ownership. Reused work retains its original instructions: if delegationReuse.instructionsApplied=false, send necessary changes to that thread instead of assigning it again. Changed criteria, inputs or permissions require explicit continuation. Set verification=self-check for small reversible work; independent for complex/high-impact work or explicit independent review. Use continuationOf to continue the exact existing work thread. Production dependencies and input producers must satisfy their verification policy: self-check work must be self_checked and independent work must be ACCEPTED; submitted is insufficient. Stale inputs fail before creating work; read current files or continue the original responsibility rather than retrying stale versions. For independent review use team_review. Shared integration of isolated sources requires every deliverable source work ID in integratesWorkIds and dependsOn plus every source artifact in inputArtifactIds.",
+      "Host only. Declare acceptanceEvidence for every exact criterion: native_check for required execution, review_judgment for semantic inspection. Omitted declarations remain unresolved and cannot be accepted. Review and continuation inherit pinned expectations. Assign owned work with exact acceptance criteria, versioned input IDs and dependencies. Use one stable responsibilityKey per responsibility and reuse it on retries; declared writePaths also deduplicate repeated ownership. Reused work retains its original instructions: if delegationReuse.instructionsApplied=false, send necessary changes to that thread instead of assigning it again. Changed criteria, inputs or permissions require explicit continuation. Set verification=self-check for small reversible work; independent for complex/high-impact work or explicit independent review. Use continuationOf to continue the exact existing work thread. Production dependencies and input producers must satisfy their verification policy: self-check work must be self_checked and independent work must be ACCEPTED; submitted is insufficient. Stale inputs fail before creating work; read current files or continue the original responsibility rather than retrying stale versions. For independent review use team_review. For integration, select isolated mode, independent review, each accepted source in integratesWorkIds and dependsOn, its exact artifact IDs, and write paths covering every source file. The integrator starts from the current project and reads each version with team_read_artifact before submitting the resolution.",
     schema: z
       .object({
         memberId: key,
@@ -408,6 +537,15 @@ export const tools = {
         acceptanceEvidence: acceptanceEvidence.optional(),
         inputArtifactIds: z.array(key).max(128),
         contextRefs: z.array(z.string().min(1).max(256)).max(100).optional(),
+        definitionScope: z.enum(["branch", "selected"]).optional().describe("Select authoritative document refs for a task, including their dependencies and the branch goals and requirements. Branch scope includes the complete definition."),
+        outcomeCriteria: z.array(key).max(16).optional().describe("Keys of the agreed outcome criteria this work verifies. Include their exact text in acceptanceCriteria."),
+        workflowNodeKey: key.optional(),
+        expectedWorkflowRevision: z.number().int().positive().optional(),
+        isolatedSubspaces: z.boolean().optional().describe("Use separate snapshots for writing children within an isolated Work. Select bounded Codex or a writable Pi 1.3.0 member on the supported DeepSeek Chat Completions connection. Provide exact owned writePaths. Isolated Pi has no commands; assign executable checks to an independent reviewer."),
+        mountSkills: z.array(z.union([globalSkillPin, z.object({
+          skillId: key, revision: z.string().regex(/^[a-f0-9]{64}$/),
+        }).strict()])).max(16).optional().describe("Mount exact global skills listed in this Host turn or team skill versions selected in the user message."),
+        mountMcp: z.array(mcpMountInput).max(16).optional().describe("Mount exact team-authorized MCP tool revisions for this work."),
         dependsOn: z.array(key).max(30),
         reviewOf: key.nullable().default(null),
         verification: z
@@ -453,8 +591,13 @@ export const tools = {
   },
   team_read_artifact: {
     description:
-      "Read an immutable submitted artifact version. This records actual delivery to this attempt, not a claim of understanding or use.",
-    schema: z.object({ artifactId: key }).strict(),
+      "Read an immutable submitted artifact. Integration reads include the source baseline, prepared mainline and candidate hashes. Use view=base or view=current to read that snapshot file as it existed at preparation.",
+    schema: z.object({ artifactId: key, view: z.enum(["base", "current", "candidate"]).default("candidate") }).strict(),
+  },
+  team_read_artifacts: {
+    description: "Read several exact immutable artifact versions in one call. The combined result must fit 64 KiB. Use single artifact reads for larger results.",
+    schema: z.object({ artifactIds: z.array(key).min(1).max(16)
+      .refine(ids => new Set(ids).size === ids.length, "Provide distinct artifact IDs.") }).strict(),
   },
   team_read_file: {
     description: "Read a UTF-8 file in the assigned workspace and its current hash. Omit offset and limit to read from the beginning. Pagination uses character positions, not line numbers. When truncated is true, read the remaining content before quoting the full file. Private/runtime directories are excluded.",
@@ -507,7 +650,7 @@ export const tools = {
   },
   team_accept_work: {
     description:
-      "Record independent acceptance or rejection. Each passed native_check criterion must cite successful current-attempt command events; review_judgment cannot satisfy a pinned native_check requirement. Read every target artifact and check every exact criterion. For actual executable checks use native_check with event IDs from team_review_evidence. For semantic inspection use review_judgment with an explicit reason and no event IDs. Never present a judgment as observed command execution.",
+      "Record independent acceptance or rejection with a result for each exact criterion. Read every target artifact and cite current command events for native checks. When an integration check demonstrates an interface conflict, cite the two upstream artifact IDs, failed criterion and failed command in semanticConflicts.",
     schema: z
       .object({
         workId: key,
@@ -525,6 +668,12 @@ export const tools = {
               .strict(),
           )
           .max(MAX_ACCEPTANCE_CRITERIA),
+        semanticConflicts: z.array(z.object({
+          contractKey: z.string().regex(/^contracts\/[a-zA-Z0-9][a-zA-Z0-9_/-]{0,99}$/),
+          providerArtifactId: key, consumerArtifactId: key,
+          criterion: z.string().min(1).max(1000), evidenceEventId: key,
+          expected: z.string().trim().min(1).max(1000), observed: z.string().trim().min(1).max(1000),
+        }).strict()).max(4).optional(),
       })
       .strict(),
   },

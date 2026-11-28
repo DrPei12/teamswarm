@@ -5,7 +5,7 @@ import type { AllocationBoundary, AttemptExecutionSnapshot, CompatibilityIssue,
   EffectiveSelection, ExecutionObservation, PortableAllocationPackage,
   ResourceAvailability, ResourceSelection } from "@team/contracts/allocation";
 import { executionConfig, key } from "./validation.js";
-import { executionCompatibility } from "./model-routing.js";
+import { executionCompatibility, needsModelRoute } from "./model-routing.js";
 
 const version = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 export const resourceSelection = z.object({
@@ -106,6 +106,7 @@ export function migrateLegacyAllocation(input: unknown): AttemptExecutionSnapsho
  * optional-field presence: conservative new sessions are safer than false reuse.
  */
 export function canReuseNativeSession(previous: ExecutionConfig, next: ExecutionConfig): boolean {
+  if (next.harness === "deepseek-harness" && (next.access !== "read-only" || !needsModelRoute(next))) return false;
   return previous.harness === next.harness && harnessManifest(next.harness)?.session.resume === true &&
     checkExecutionCompatibility(next).length === 0 && JSON.stringify(previous) === JSON.stringify(next);
 }

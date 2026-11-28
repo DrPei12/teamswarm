@@ -23,11 +23,13 @@ export function ProjectRecords({
   onClose,
   onNavigate,
   onNavigateMember,
+  onDelivery,
 }: {
   workspace: Workspace;
   teamId: string;
   chat?: Chat;
   source?: Message;
+  onDelivery?: (id: string) => void;
   onClose: () => void;
   onNavigate: (chatId: string, messageId: string) => void;
   onNavigateMember: (
@@ -54,6 +56,10 @@ export function ProjectRecords({
   const insights = (workspace.insights ?? []).filter(
     (n) => n.teamId === teamId && n.branchId === branchId,
   );
+  const belongs = (entry: Workspace["deliveries"][number]) =>
+    entry.teamId === teamId && (!entry.branchId || entry.branchId === branchId);
+  const deliveries = workspace.deliveries.filter(belongs);
+  const progress = (workspace.updates ?? []).filter(belongs);
   const inputSource =
     source ??
     [...(chat?.messages ?? [])].reverse().find((m) => !m.pending && m.recordId);
@@ -129,6 +135,46 @@ export function ProjectRecords({
             {!outputs.length && (
               <p>{t("Completed work will publish its files here.")}</p>
             )}
+            {onDelivery && deliveries.length > 0 && (
+              <section aria-label={t("Deliveries")}>
+                <h3>{t("Deliveries")}</h3>
+                {deliveries.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className="delivery-row"
+                    onClick={() => onDelivery(item.id)}
+                  >
+                    <span>
+                      <strong>{item.title}</strong>
+                      {item.summary && item.summary !== item.title && (
+                        <small>{item.summary}</small>
+                      )}
+                    </span>
+                  </button>
+                ))}
+              </section>
+            )}
+            {onDelivery && progress.length > 0 && (
+              <details>
+                <summary>{t("Progress history")}</summary>
+                {progress.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className="delivery-row"
+                    onClick={() => onDelivery(item.id)}
+                  >
+                    <span>
+                      <strong>{item.title}</strong>
+                      {item.summary && item.summary !== item.title && (
+                        <small>{item.summary}</small>
+                      )}
+                    </span>
+                  </button>
+                ))}
+              </details>
+            )}
             {outputs.map((output) => (
               <OutputRecord key={output.path} output={output} teamId={teamId} />
             ))}
@@ -136,9 +182,7 @@ export function ProjectRecords({
         ) : (
           <div className="record-list">
             <p className="record-hint">
-              {t(
-                "Proposals preserve exploration. Only adopted decisions guide future work.",
-              )}
+              {t("Decisions you adopt guide future work in this branch.")}
             </p>
             {!editing && inputSource && (
               <button
@@ -192,16 +236,13 @@ export function ProjectRecords({
                       name="status"
                       defaultValue={current?.status ?? "proposed"}
                     >
-                      {[
-                        "proposed",
-                        ...(current?.status === "adopted" ? ["adopted"] : []),
-                        "rejected",
-                        "superseded",
-                      ].map((s) => (
-                        <option key={s} value={s}>
-                          {t(`insight.${s}`)}
-                        </option>
-                      ))}
+                      {["proposed", "adopted", "rejected", "superseded"].map(
+                        (s) => (
+                          <option key={s} value={s}>
+                            {t(`insight.${s}`)}
+                          </option>
+                        ),
+                      )}
                     </FieldSelect>
                   </label>
                 </div>
@@ -313,6 +354,7 @@ function OutputRecord({
                     : `v${output.revisions.length - i}`}{" "}
                   · {new Date(r.createdAt).toLocaleString()}
                   {r.restoredFrom ? ` · ${t("Restored")}` : ""}
+                  {r.inlineEditId ? ` · ${t("Verified text edit")}` : ""}
                 </option>
               ))}
             </FieldSelect>
@@ -422,7 +464,7 @@ function InsightRecord({
         <strong>{note.title}</strong>
         <span>
           {t(note.kind === "idea" ? "Idea" : "Decision")} ·{" "}
-          <InsightStatus status={note.status} />
+          <InsightStatus insight={note} />
         </span>
       </div>
       <MessageContent text={note.content} />
@@ -473,7 +515,7 @@ function InsightRecord({
           {revisions.map((r) => (
             <details key={r.id}>
               <summary>
-                v{r.revision} · {t(`insight.${r.status}`)} · {r.reason}
+                v{r.revision} · <InsightStatus insight={r} /> · {r.reason}
               </summary>
               <p>{r.content}</p>
             </details>

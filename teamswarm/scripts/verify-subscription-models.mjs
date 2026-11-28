@@ -174,12 +174,27 @@ try {
     );
   });
   await page.goto(`${base}/#/team/${team.id}/agent`);
-  await page
-    .getByRole("button", { name: "Team capabilities", exact: true })
-    .click();
-  await page
-    .getByRole("tab", { name: "Models and connections", exact: true })
-    .click();
+  const openGlobalConnections = async (language = "en") => {
+    const zh = language === "zh-CN";
+    await page
+      .getByRole("button", {
+        name: zh ? "应用菜单" : "Application menu",
+        exact: true,
+      })
+      .click();
+    await page
+      .getByRole("menuitem", { name: zh ? "设置" : "Settings", exact: true })
+      .click();
+    await page
+      .locator(".settings-nav-group")
+      .filter({ hasText: zh ? "全局能力与偏好" : "Global capabilities" })
+      .getByRole("tab", {
+        name: zh ? "模型与连接" : "Models and connections",
+        exact: true,
+      })
+      .click();
+  };
+  await openGlobalConnections();
   await page
     .locator(".cap-intro-row")
     .getByRole("button", { name: "Add connection", exact: true })
@@ -317,11 +332,14 @@ try {
   });
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("button", { name: "Close", exact: true }).click();
+  const enterOpenAI = () =>
+    page
+      .locator(".model-picker-popover")
+      .getByRole("button", { name: /^OpenAI \d+$/ })
+      .click();
   await page.getByRole("button", { name: "Choose model", exact: true }).click();
-  await page.getByRole("button", { name: /^OpenAI 3$/ }).click();
-  await page
-    .getByRole("button", { name: "GPT Catalog Reasoning", exact: true })
-    .waitFor();
+  await enterOpenAI();
+  await page.getByRole("button", { name: /GPT Catalog Reasoning/ }).waitFor();
   // Revocation and a completed sign-in update the mounted composer without reload.
   const openConnection = async () => {
     await page
@@ -339,7 +357,7 @@ try {
     await page
       .getByRole("button", { name: "Choose model", exact: true })
       .click();
-    await page.getByRole("button", { name: /^OpenAI 3$/ }).click();
+    await enterOpenAI();
   };
   await openConnection();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
@@ -347,11 +365,16 @@ try {
     .getByRole("button", { name: "Continue with ChatGPT", exact: true })
     .waitFor();
   await returnToModels();
-  const reconnectModel = page.getByRole("button", {
-    name: /gpt-catalog-reasoning.*Reconnect ChatGPT/,
-  });
-  await reconnectModel.waitFor();
-  assert(await reconnectModel.isDisabled());
+  await page
+    .locator(".model-picker-popover")
+    .getByRole("button", {
+      name: /GPT Catalog Reasoning|gpt-catalog-reasoning/,
+    })
+    .waitFor({ state: "hidden" });
+  await page
+    .locator(".model-picker-popover")
+    .getByRole("button", { name: /Second account model/ })
+    .waitFor();
   await openConnection();
   await page
     .getByRole("button", { name: "Continue with ChatGPT", exact: true })
@@ -363,16 +386,46 @@ try {
   });
   await restoredModel.waitFor();
   assert(await restoredModel.isEnabled());
+  await page
+    .getByRole("button", { name: "Configure models", exact: true })
+    .click();
+  const connectionRow = page
+    .locator(".cap-connection")
+    .filter({ hasText: "ChatGPT catalog" });
+  await connectionRow
+    .getByRole("checkbox", { name: "Enable", exact: true })
+    .uncheck();
+  await page
+    .getByRole("button", { name: "Save settings", exact: true })
+    .click();
+  await page.getByText("Saved", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Choose model", exact: true }).click();
+  await enterOpenAI();
+  await page.getByRole("button", { name: /Second account model/ }).waitFor();
+  assert.equal(
+    await restoredModel.count(),
+    0,
+    "Disabled explicit account must not return via automatic discovery",
+  );
+  await page
+    .getByRole("button", { name: "Configure models", exact: true })
+    .click();
+  await connectionRow
+    .getByRole("checkbox", { name: "Enable", exact: true })
+    .check();
+  await page
+    .getByRole("button", { name: "Save settings", exact: true })
+    .click();
+  await page.getByText("Saved", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
   assert.equal(
     await page.getByText("Reconnect ChatGPT", { exact: true }).count(),
     0,
   );
   await request("/product/preferences", { language: "zh-CN" }, "PATCH");
   await page.reload();
-  await page
-    .getByRole("button", { name: "团队能力与偏好", exact: true })
-    .click();
-  await page.getByRole("tab", { name: "模型与连接", exact: true }).click();
+  await openGlobalConnections("zh-CN");
   await page
     .locator(".cap-connection")
     .filter({ hasText: "ChatGPT catalog" })

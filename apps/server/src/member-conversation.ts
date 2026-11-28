@@ -14,6 +14,8 @@ import type {
 import type { TeamRuntime } from "./runtime/engine.js";
 import { codexDisplayItem } from "./runtime/harness/codex-items.js";
 import { threadOf } from "./runtime/collaboration-records.js";
+import { canKeepCurrentPublication } from "./runtime/file-write-set.js";
+import { contextWindowUsage, sessionRotationSummary } from "./product-context.js";
 
 /** A branch exchange is attached to a work thread only after an actual participation record. */
 function durableExchanges(runtime: TeamRuntime, teamId: string): Exchange[] {
@@ -106,6 +108,8 @@ export function transcriptItems(
         kind: data.kind,
         text: "",
         status: "running",
+        nativeThreadId: data.nativeThreadId,
+        parentThreadId: data.parentThreadId,
       };
       if (data.field === "output") {
         const output = (item.output ?? "") + String(data.delta ?? "");
@@ -130,19 +134,18 @@ export function transcriptItems(
         if (data.nativeOutcome === "failed") item.status = "failed";
         if (data.nativeOutcome === "cancelled") item.status = "interrupted";
         if (data.nativeOutcome === "unknown") item.status = "unknown";
-        items.set(id, { ...items.get(id), ...item });
+        items.set(id, { ...items.get(id), ...item, nativeThreadId: data.nativeThreadId, parentThreadId: data.parentThreadId });
       }
     }
   }
+  const settled = !!attempt.finishedAt || ["unknown", "recovery_required"].includes(attempt.status);
   return [...items.values()].map((item) =>
-    item.status === "running" && attempt.finishedAt
+    item.status === "running" && settled
       ? {
           ...item,
-          status: ["submitted", "accepted", "self_checked", "waiting"].includes(
-            attempt.status,
-          )
+          status: attempt.status === "completed" && item.kind === "message"
             ? "completed"
-            : "interrupted",
+            : attempt.status === "interrupted" ? "interrupted" : "unknown",
         }
       : item,
   );
@@ -280,11 +283,14 @@ export function memberConversation(
                 ? work.continuation?.summary
                 : work.result) ?? "")
             : "",
-        status: ended
-          ? attempt.status
-          : attempt.status === "recovery_required"
-            ? "recovery_required"
-            : "running",
+        status: runtime.store.attemptWorkStatus(work, attempt),
+        ...(attempt.id === work.attemptId && work.publication ? {
+          publication: {
+            workId: work.id, revision: work.revision, state: work.publication.state,
+            appliedPaths: work.publication.appliedPaths, error: work.publication.error,
+            ...(canKeepCurrentPublication(work.publication) ? { keepCurrentAllowed: true } : {}),
+          },
+        } : {}),
         elapsedMs: ended
           ? Date.parse(attempt.finishedAt!) - Date.parse(attempt.startedAt)
           : undefined,
@@ -385,23 +391,34 @@ export function memberConversation(
     if (!entry.id.startsWith("attempt:")) return entry;
     const attempt = attempts.find((a) => `attempt:${a.id}` === entry.id)!;
     const items = transcriptItems(runtime, attempt);
+    const rotation = sessionRotationSummary(runtime.store.db, attempt);
     return {
       ...entry,
+      ...(rotation ? { sessionRotation: rotation } : {}),
       text:
         items
-          .filter((i) => i.kind === "message" && i.phase !== "commentary")
+          .filter((i) => !i.nativeThreadId && i.kind === "message" && i.phase !== "commentary")
           .map((i) => i.text)
           .join("\n\n") || entry.text,
       items: items.filter(
-        (i) => i.kind !== "message" || i.phase === "commentary",
+        (i) => !!i.nativeThreadId || i.kind !== "message" || i.phase === "commentary",
       ),
     };
   });
   attachDeliveryHistory(runtime, teamId, page, teamWorks, messages);
+  const current = attempts.at(-1);
+  const settings = runtime.store.settings(teamId);
+  const mode = member.sessionLongevityMode ?? settings?.sessionLongevityMode ?? "standard";
+  const health = current && runtime.store.vitality.inspect(current);
+  const context = contextWindowUsage(runtime.store.db, current?.config ?? member.config, current, undefined, {
+    mode,
+    ...(health?.complete && health.compactionCount > 0 ? { compactionCount: health.compactionCount } : {}),
+  });
   return {
     memberId,
     workId: selected?.id,
     entries: page,
+    ...(context ? { context } : {}),
     hasMore: start > 0,
     hasNewer: finish < entries.length,
     before: start,

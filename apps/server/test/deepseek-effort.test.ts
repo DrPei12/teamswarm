@@ -15,6 +15,20 @@ import {
 } from "../src/runtime/execution-status.js";
 import type { Attempt, ModelRequestReceipt } from "../src/runtime/types.js";
 
+test("Pi, Claude and OpenCode read probes require independently routed read-only configurations", () => {
+  const base = { model: "deepseek-flash", baseUrl: "https://api.deepseek.com",
+    protocol: "chat-completions", credentialEnv: "PROBE_KEY", access: "read-only", nativeReadProbes: true };
+  for (const harness of ["pi", "claude-code", "opencode"]) {
+    const probe = { ...base, harness };
+    assert(needsModelRoute(executionConfig.parse({ ...probe, nativeReadProbes: false })));
+    assert(executionConfig.safeParse(probe).success);
+    for (const invalid of [{ access: "workspace-write" }, { baseUrl: "http://127.0.0.1:8080/v1" },
+      { protocol: "responses" }, { credentialEnv: null }, { harness: "grok" }])
+      assert.equal(executionConfig.safeParse({ ...probe, ...invalid }).success, false);
+  }
+  assert(executionConfig.safeParse({ ...base, harness: "deepseek-harness" }).success);
+});
+
 test("DeepSeek provider presets reach the serialized wire and Host receipt for each protocol", async () => {
   const gateway = new ModelGateway(
     mkdtempSync(path.resolve(".test-deepseek-effort-")),

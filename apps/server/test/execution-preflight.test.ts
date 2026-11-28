@@ -554,6 +554,38 @@ test("a file-only independent reviewer completes without a native command grant"
   } finally { await t.close(); }
 });
 
+test("Codex command preflight disables inherited MCP and plugins before opening a thread", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "preflight-tools-"));
+  try {
+    const entry = path.join(root, "app-server.cjs");
+    writeFileSync(entry, `
+const assert = require('node:assert/strict');
+let configured;
+require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+  const request = JSON.parse(line);
+  if (request.id === undefined) return;
+  const { id, method, params } = request;
+  let result = {};
+  if (method === 'config/read') result = { config: { mcp_servers: { global_stdio: { command: 'not-executed' } }, plugins: { example: {} } } };
+  if (method === 'thread/start') {
+    assert.equal(params.config['mcp_servers.global_stdio.enabled'], false);
+    assert.equal(params.config['plugins.example.enabled'], false);
+    configured = true;
+  }
+  if (method === 'command/exec') {
+    assert(configured);
+    result = { exitCode: 0, stdout: 'SOURCE_READ_OK SOURCE_WRITE_DENIED CHILD_PROCESS_OK SQLITE_OK LOOPBACK_OK' };
+  }
+  console.log(JSON.stringify({ id, result }));
+});`);
+    const report = await probeCodexExecution({ command: process.execPath, args: [entry] }, {
+      workspace: root, config: { ...config, access: "read-only" }, writePaths: [], scratchDirectory: path.join(root, "scratch"),
+      requirements: { nativeCommands: true },
+    }, {});
+    assert.equal(report.exitCode, 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("preflight scratch preparation failure never starts the native process", async () => {
   const root = mkdtempSync(path.join(tmpdir(), "preflight-start-"));
   try {

@@ -57,6 +57,7 @@ export function codexDisplayItem(
     return {
       ...base,
       kind: "tool",
+      ...(item.type === "mcpToolCall" && item.server === "teamswarm" ? { toolName: item.tool } : {}),
       title: [
         item.server,
         item.tool ?? (item.type === "webSearch" ? "Web search" : "Tool"),

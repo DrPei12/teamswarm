@@ -6,14 +6,14 @@ export class JsonRpcPeer {
   private next = 0;
   private ended: Error | undefined;
   private pending = new Map<number, { method: string; resolve(value: any): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
-  constructor(private write: (message: unknown) => void, private name = 'ACP', private onResponse?: (method: string) => void) {}
+  constructor(private write: (message: unknown) => void, private name = 'ACP', private onResponse?: (method: string) => void, private nextRequestId?: () => number) {}
   get pendingCount() { return this.pending.size; }
   send(message: unknown) { if (this.ended) throw this.ended; this.write(message); }
   call(method: string, params: unknown, timeout = 30000): Promise<any> {
     if (this.ended) return Promise.reject(this.ended);
     if (this.pending.size >= 256) return Promise.reject(new Error(`${this.name}: too many pending protocol requests.`));
     return new Promise((resolve, reject) => {
-      const id = ++this.next;
+    const id = this.nextRequestId ? this.nextRequestId() : ++this.next;
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`${this.name} timeout: ${method}`)); }, timeout);
       this.pending.set(id, { method, resolve, reject, timer });
       try { this.send({ jsonrpc: '2.0', id, method, params }); }

@@ -51,7 +51,7 @@ try {
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(origin + "/#/team/" + team.id + "/chat/" + chat);
   const open = async () => {
-    await page.getByRole("button", { name: "Workspace menu" }).click();
+    await page.getByRole("button", { name: "Application menu" }).click();
     await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
     await page.getByRole("tab", { name: "Appearance" }).click();
   };

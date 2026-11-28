@@ -1,6 +1,6 @@
 {
   "name": "teamswarm-product",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -30,7 +30,7 @@
     "start:rework": "node scripts/start-rework.mjs"
   },
   "devDependencies": {
-    "@openai/codex": "0.163.0",
+    "@openai/codex": "0.169.0",
     "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^24.0.0",
     "electron": "44.9.1",

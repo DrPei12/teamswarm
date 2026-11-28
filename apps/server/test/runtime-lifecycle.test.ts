@@ -74,11 +74,14 @@ test("event streaming drains a 1500-event burst in order and resumes from the la
 test("process ownership remains tracked while memory observations do not restrict execution",async()=>{
   const root=mkdtempSync(path.join(tmpdir(),"teamswarm-process-observation-"));
   const service=createApp({dataDir:root,harnesses:[]}),MiB=1024*1024;
-  let sample={totalPhysical:4096*MiB,availablePhysical:1100*MiB,availableCommit:700*MiB,processes:[] as any[]};
+  let sample={totalPhysical:4096*MiB,availablePhysical:1100*MiB,totalCommit:8192*MiB,availableCommit:1200*MiB,processes:[] as any[]};
   let currentPhysical=sample.availablePhysical;
   const harness=new CodexHarness(), resources=new RuntimeResources(service.runtime.store,new Map([[harness.id,harness]]),()=>{},async()=>sample,()=>currentPhysical);
+  const pressure: boolean[] = [];
+  harness.maintain = async options => { pressure.push(options.pressure); };
   try {
     await resources.refresh();
+    assert.equal(pressure.at(-1), false);
     assert.equal(resources.canStart("codex",false),true);resources.reserve("first","codex");
     assert.equal(resources.canStart("codex",false),true);assert.equal(resources.canStart("codex",true),true);
     resources.finish("first");assert.equal(resources.canStart("codex",false),true);
@@ -93,17 +96,18 @@ test("process ownership remains tracked while memory observations do not restric
     assert.equal(resources.state(team.id).groups[0].state,"released");
     await resources.refresh(); // Finish the acquisition-triggered sample before changing the fixture.
     sample={...sample,availableCommit:200*MiB};await resources.refresh();
+    assert.equal(pressure.at(-1), true);
     assert.equal(resources.canStart("codex",true),true);
   } finally {await resources.close();await harness.close();await service.close();rmSync(root,{recursive:true,force:true});}
 });
 
-test("Codex idle reclamation closes the owned process and resumes the same native session with explicit tool inventory",async()=>{
+test("Codex idle reclamation closes the owned process and resumes the same native session with explicit tool inventory",{timeout:15000},async()=>{
   const root=mkdtempSync(path.join(tmpdir(),"teamswarm-idle-")),entry=path.join(root,"fixture.js"),calls=path.join(root,"calls");
   writeFileSync(path.join(root,"package.json"),'{"type":"commonjs"}');
-  writeFileSync(entry,`const fs=require('node:fs');const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(r)+'\\n');if(r.id===undefined)return;const result=r.method==='thread/start'||r.method==='thread/resume'?{thread:{id:'kept-session'},sandbox:{type:'readOnly'}}:r.method==='thread/read'?{thread:{turns:[]}}:r.method==='config/read'?{config:{mcp_servers:{unused:{}}}}:r.method==='turn/start'?{turn:{id:'turn'}}:{};send({id:r.id,result});if(r.method==='turn/start')setTimeout(()=>send({method:'turn/completed',params:{threadId:'kept-session',turn:{id:'turn',status:'completed'}}}),30);});`);
+  writeFileSync(entry,`const fs=require('node:fs');const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(r)+'\\n');if(r.id===undefined)return;const result=r.method==='thread/start'||r.method==='thread/resume'?{thread:{id:'kept-session'},sandbox:{type:'readOnly'}}:r.method==='thread/read'?{thread:{turns:[]}}:r.method==='config/read'?{config:{mcp_servers:{unused:{}}}}:r.method==='turn/start'?{turn:{id:'turn-'+process.pid}}:r.method==='thread/unsubscribe'?{status:'notLoaded'}:{};send({id:r.id,result});if(r.method==='turn/start')setTimeout(()=>send({method:'turn/completed',params:{threadId:'kept-session',turn:{id:'turn-'+process.pid,status:'completed'}}}),30);});`);
   const prior=process.env.TEAM_CODEX_BIN;process.env.TEAM_CODEX_BIN=entry;
   const harness=new CodexHarness(),events:any[]=[];
-  const request:HarnessRequest={workspace:root,config:{harness:"codex",model:"fixture",provider:null,baseUrl:null,credentialEnv:null,effort:null,access:"read-only"},contextWindow:{preset:"1m",rawTokens:872000,usableTokens:828400,modelMaxTokens:872000,effectivePercent:95,source:"model",overrideNative:true},instructions:"Read",input:"Work",tools:[],onSession:()=>{},onTurn:()=>{},onEvent:e=>events.push(e),onTool:async()=>({})};
+  const request:HarnessRequest={workspace:root,hostMode:"dialogue",config:{harness:"codex",model:"fixture",provider:null,baseUrl:null,credentialEnv:null,effort:null,access:"read-only"},contextWindow:{preset:"1m",rawTokens:872000,usableTokens:828400,modelMaxTokens:872000,effectivePercent:95,source:"model",overrideNative:true},instructions:"Read",input:"Work",tools:[],onSession:()=>{},onTurn:()=>{},onEvent:e=>events.push(e),onTool:async()=>({})};
   try {
     assert.equal((await harness.execute(request)).status,"completed");
     const first=harness.resources()[0];assert.ok(first.pid);
@@ -116,7 +120,7 @@ test("Codex idle reclamation closes the owned process and resumes the same nativ
     const resumed=requests.find(r=>r.method==="thread/resume");assert.equal(resumed.params.threadId,"kept-session");
     for(const r of requests.filter(r=>["thread/start","thread/resume"].includes(r.method))) {
       assert.equal(r.params.config.model_context_window,872000);
-      assert.equal(r.params.config.model_auto_compact_token_limit,828400);
+      assert.equal(r.params.config.model_auto_compact_token_limit,784800);
       assert.equal(r.params.config["features.plugins"],false);assert.equal(r.params.config["mcp_servers.unused.enabled"],false);
     }
   } finally {await harness.close();if(prior===undefined)delete process.env.TEAM_CODEX_BIN;else process.env.TEAM_CODEX_BIN=prior;rmSync(root,{recursive:true,force:true});}
