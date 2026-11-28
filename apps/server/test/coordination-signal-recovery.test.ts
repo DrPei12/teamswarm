@@ -141,49 +141,82 @@ test("only unaffected submissions move to a new effective outcome's coordinator"
 });
 
 test("new same-branch intent fences the old coordinator and leaves one current review briefing", { timeout: 16_000 }, async () => {
-  const liveCalls: HarnessRequest[] = [];
-  const workers: string[] = [];
-  let finishFirst!: () => void;
-  const firstFinished = new Promise<void>(resolve => { finishFirst = resolve; });
+  const briefingCalls: string[] = [];
+  const ordinaryFollowUps: string[] = [];
+  const dialogueCalls: string[] = [];
+  const first = Promise.withResolvers<void>();
+  const dialogue = Promise.withResolvers<void>();
+  const ordinary = Promise.withResolvers<void>();
+  let staleToolCode: string | null | undefined;
   const f = fixture(async request => {
     request.onSession(randomUUID(), { workspace: request.workspace });
     request.onTurn(randomUUID());
     request.onDispatch?.();
+    const { work } = JSON.parse(request.input) as { work: Work };
     if (request.hostMode === "coordination") {
-      liveCalls.push(request);
-      if (liveCalls.length === 1) {
-        await firstFinished;
-        await assert.rejects(request.onTool("team_define_requirements", { content: "Stale change", affectedWorkIds: [] }, randomUUID()), { code: "coordination_stale" });
+      if (!work.coordination) {
+        // The restored briefing doesn't arrange review in this fixture. The
+        // ordinary unfinished-work follow-up is distinct from replaying a signal.
+        ordinaryFollowUps.push(work.id);
+        await ordinary.promise;
+        return { status: "completed", text: "The review is still outstanding." };
+      }
+      briefingCalls.push(work.id);
+      if (briefingCalls.length === 1) {
+        await first.promise;
+        staleToolCode = await request.onTool("team_define_requirements", { content: "Stale change", affectedWorkIds: [] }, randomUUID())
+          .then(() => null, error => (error as { code?: string }).code ?? "unexpected_error");
         return { status: "completed", text: "The stale turn cannot publish this." };
       }
       return { status: "completed", text: "The current turn received the retained candidate." };
     }
-    workers.push(request.input);
+    dialogueCalls.push(work.id);
+    await dialogue.promise;
     return { status: "completed", text: "The new user instruction is understood." };
   });
-  async function until(check: () => boolean) {
+  async function until(phase: string, check: () => boolean) {
     const deadline = Date.now() + 10_000;
     while (!check()) {
-      if (Date.now() > deadline) throw Error("Coordinator did not settle before the deadline");
+      if (Date.now() > deadline) {
+        const { store } = f.app.runtime;
+        const works = store.workQuery(f.team.id).map(({ id, runId, kind, status, error, attemptId }) => ({ id, runId, kind, status, error, attemptId }));
+        const runs = store.list<Run>("runs", f.team.id).map(({ id, state }) => ({ id, state }));
+        const claims = store.db.prepare("SELECT sequence, coordinator_id, parked FROM runtime_coordination_claims WHERE team_id=?").all(f.team.id);
+        const signals = store.db.prepare("SELECT sequence, run_id, due_at FROM runtime_coordination_signals WHERE team_id=?").all(f.team.id);
+        assert.fail(`${phase} did not settle: ${JSON.stringify({ dialogueCalls, briefingCalls, ordinaryFollowUps, works, runs, claims, signals })}`);
+      }
       await delay(20);
     }
   }
   try {
     const work = f.submit("Retain this submission"), expectedSequence = sequence(f.app, work);
     const { store } = f.app.runtime;
-    await until(() => liveCalls.length === 1);
+    await until("Initial coordination", () => briefingCalls.length === 1);
+    const [interrupted] = briefingCalls;
     assert.equal(work.status, "submitted");
     const newDialogue = f.send("The earlier candidate remains valid; use the updated review wording.", true);
-    finishFirst();
-    await until(() => workers.length === 1 && liveCalls.length === 2 &&
-      store.workQuery(f.team.id).some(work => work.kind === "host-followup" && work.status === "submitted"));
+    first.resolve();
+    await until("New dialogue dispatch", () => dialogueCalls.length === 1);
+    assert.deepEqual(dialogueCalls, [newDialogue.id]);
+    assert.equal(staleToolCode, "coordination_stale");
+    assert.equal(store.get<Work>("works", f.team.id, interrupted).status, "interrupted");
+    assert.deepEqual(briefingCalls, [interrupted]);
+    assert.deepEqual(store.db.prepare("SELECT sequence, coordinator_id, parked FROM runtime_coordination_claims WHERE team_id=?").all(f.team.id)
+      .map(row => [row.sequence, row.coordinator_id, row.parked]), [[expectedSequence, interrupted, 1]]);
+
+    dialogue.resolve();
+    // Intentionally observe the ordinary follow-up after the replay has settled.
+    // A poll of all coordination calls can now see three calls, not two.
+    await until("Ordinary follow-up after the restored briefing", () => ordinaryFollowUps.length === 1);
     const briefs = store.workQuery(f.team.id).filter(work => work.kind === "host-followup" && work.coordination);
     assert.equal(briefs.length, 2);
+    assert.deepEqual(briefingCalls, briefs.map(brief => brief.id));
     assert.equal(briefs[0].status, "interrupted");
     assert.equal(briefs[0].result, null);
+    assert.equal(briefs[1].status, "submitted");
     assert.deepEqual(briefs[1].coordination?.changes, [{ workId: work.id, sequence: expectedSequence, type: "work.submitted" }]);
     assert.equal(store.get<Work>("works", f.team.id, newDialogue.id).status, "submitted");
     assert.equal(store.get<Work>("works", f.team.id, work.id).status, "submitted");
     assert.equal(store.db.prepare("SELECT count(*) AS n FROM runtime_coordination_claims").get()?.n, 0);
-  } finally { finishFirst(); await f.close(); }
+  } finally { first.resolve(); dialogue.resolve(); ordinary.resolve(); await f.close(); }
 });
