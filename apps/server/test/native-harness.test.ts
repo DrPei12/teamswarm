@@ -13,6 +13,7 @@ import {
   resolveConnection,
 } from "../src/runtime/connections.js";
 import { NativeHarness } from "../src/runtime/harness/native.js";
+import { darwinSupervisor } from "../src/runtime/harness/darwin-supervisor.js";
 import { DshProbeTree } from "../src/runtime/harness/dsh-probe-tree.js";
 import {
   toolBridge,
@@ -169,7 +170,7 @@ test("native environments exclude parent orchestration variables in every casing
 });
 
 test(
-  "an exited native root with inherited descendant pipes settles unknown within a bounded wait",
+  "an exited native root with inherited pipes does not manufacture a completion receipt",
   { timeout: 12000 },
   async () => {
     const root = mkdtempSync(
@@ -191,20 +192,35 @@ test(
     const h = new NativeHarness("claude-code");
     let descendant: number | undefined;
     try {
+      const treeSupervised = process.platform === "win32" || Boolean(await darwinSupervisor());
       const req = request(root);
+      const released = new Set<unknown>();
+      let attemptResource: unknown;
       req.onEvent = (e) => {
-        const value = e.data.event as any;
+        if (e.type === "resource.acquired" && e.data.scope === "attempt") attemptResource = e.data.id;
+        if (e.type === "resource.released" && e.data.scope === "attempt") released.add(e.data.id);
+        const value = e.data.event as { type?: string; pid?: number } | undefined;
         if (value?.type === "fixture-child") descendant = value.pid;
       };
       const result = await h.execute(req);
       assert.equal(result.status, "unknown");
-      assert.match(result.error ?? "", process.platform === "win32" ? /without a completion receipt/ : /descendant execution is unknown/);
-      if (process.platform === "win32" && descendant) {
-        for (let i=0;i<100;i++) {
-          try { process.kill(descendant,0); } catch { break; }
-          await new Promise(r=>setTimeout(r,20));
-        }
-        assert.throws(() => process.kill(descendant!,0), {code:"ESRCH"});
+      assert.equal(typeof attemptResource, "string");
+      assert(typeof descendant === "number" && Number.isSafeInteger(descendant) && descendant > 1);
+      if (treeSupervised) {
+        assert.match(result.error ?? "", /Native process exited \(0\) without a completion receipt/);
+        assert(released.has(attemptResource));
+        const pid = descendant;
+        const alive = () => {
+          try { process.kill(pid, 0); return true; }
+          catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return false; throw error; }
+        };
+        for (let i = 0; i < 100 && alive(); i++) await new Promise(r => setTimeout(r, 20));
+        assert(!alive(), "The owned descendant survived the supervisor's exit receipt.");
+        descendant = undefined;
+      } else {
+        assert.match(result.error ?? "", /descendant execution is unknown/);
+        assert(!released.has(attemptResource));
+        assert.doesNotThrow(() => process.kill(descendant!, 0));
       }
       await h.close();
     } finally {

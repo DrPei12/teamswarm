@@ -348,14 +348,16 @@ export class DevelopmentWorkingCopy {
       }, 120);
     };
     this.watcher.on("all", (_event, file) => enqueue(file, true));
-    if (process.platform === "win32")
-      this.watcher.on("raw", (event, name, details) => {
-        const watchedPath = details && typeof details === "object" && "watchedPath" in details
-          ? details.watchedPath : undefined;
-        if (event === "rename" && typeof name === "string" &&
-            typeof watchedPath === "string" && path.resolve(watchedPath) === path.resolve(source))
-          enqueue(path.resolve(source, name), false);
-      });
+    // A rapid file-to-directory replacement can arrive as a native rename
+    // without a normalized unlink/addDir. Recheck its type, but let the stable
+    // normalized event authorize copying regular file contents.
+    this.watcher.on("raw", (event, name, details) => {
+      const watchedPath = details && typeof details === "object" && "watchedPath" in details
+        ? details.watchedPath : undefined;
+      if (event === "rename" && typeof name === "string" &&
+          typeof watchedPath === "string" && path.resolve(watchedPath) === path.resolve(source))
+        enqueue(path.resolve(source, name), false);
+    });
     await new Promise<void>((resolve, reject) => {
       this.watcher!.once("ready", resolve);
       this.watcher!.once("error", reject);
