@@ -88,6 +88,14 @@ static void report(char code, int error) {
     if (write(RECEIPT, text, (size_t)length) < 0) { /* The owner can already have exited. */ }
 }
 
+// Report the failing handshake stage without including command arguments or environment data.
+static int reject_start(const char *stage, int error) {
+    char text[96];
+    int length = snprintf(text, sizeof(text), "N %d %s\n", error, stage);
+    if (length > 0 && length < (int)sizeof(text) && write(RECEIPT, text, (size_t)length) < 0) { /* Owner exited. */ }
+    return 125;
+}
+
 static void report_started(pid_t root) {
     Process identity;
     if (!info(root, &identity)) { report('R', 0); return; }
@@ -166,12 +174,10 @@ static int run(int argc, char **argv) {
     (void)signal(SIGHUP, request_stop);
     int maxargs = 0;
     size_t length = sizeof(maxargs);
-    if (sysctlbyname("kern.argmax", &maxargs, &length, NULL, 0) < 0 || maxargs < 4096 || maxargs > (16 << 20)) {
-        report('N', EIO);
-        return 125;
-    }
+    if (sysctlbyname("kern.argmax", &maxargs, &length, NULL, 0) < 0) return reject_start("argument-limit", errno);
+    if (maxargs < 4096 || maxargs > (16 << 20)) return reject_start("argument-limit", EIO);
     char *arguments = malloc((size_t)maxargs);
-    if (!arguments) { report('N', ENOMEM); return 125; }
+    if (!arguments) return reject_start("allocate", ENOMEM);
     char marker[sizeof(COOKIE_PREFIX) + 64];
     snprintf(marker, sizeof(marker), "%s%s", COOKIE_PREFIX, token);
 
@@ -183,20 +189,27 @@ static int run(int argc, char **argv) {
     EV_SET(&changes[3], SIGHUP, EVFILT_SIGNAL, EV_ADD, 0, 0, NULL);
     struct timespec grant_timeout = { .tv_sec = 15 };
     char grant[2];
-    if (queue < 0 || getppid() != parent || kevent(queue, changes, 4, NULL, 0, NULL) < 0 ||
-            kevent(queue, NULL, 0, &event, 1, &grant_timeout) != 1 || event.filter != EVFILT_READ ||
-            read(CONTROL, grant, sizeof(grant)) != (ssize_t)sizeof(grant) || memcmp(grant, "G\n", sizeof(grant)) ||
-            (event.flags & EV_EOF) || getppid() != parent || stop_signal) {
-        report('N', ECANCELED);
-        return 125;
-    }
+    if (queue < 0) return reject_start("queue", errno);
+    if (getppid() != parent) return reject_start("owner-before-grant", ECANCELED);
+    if (kevent(queue, changes, 4, NULL, 0, NULL) < 0) return reject_start("watch", errno);
+    int received = kevent(queue, NULL, 0, &event, 1, &grant_timeout);
+    if (received < 0) return reject_start("grant-wait", errno);
+    if (received == 0) return reject_start("grant-wait", ETIMEDOUT);
+    if (event.filter != EVFILT_READ) return reject_start("grant-event", ECANCELED);
+    ssize_t bytes = read(CONTROL, grant, sizeof(grant));
+    if (bytes < 0) return reject_start("grant-read", errno);
+    if (bytes != (ssize_t)sizeof(grant) || memcmp(grant, "G\n", sizeof(grant)))
+        return reject_start("grant-content", ECANCELED);
+    if ((event.flags & EV_EOF) || getppid() != parent || stop_signal)
+        return reject_start("owner-after-grant", ECANCELED);
     // Stable parent descriptors never enter the native target or its descendants.
     posix_spawn_file_actions_t files;
     posix_spawnattr_t attributes;
     int error = posix_spawn_file_actions_init(&files);
     if (!error) error = posix_spawn_file_actions_addclose(&files, CONTROL);
     if (!error) error = posix_spawn_file_actions_addclose(&files, RECEIPT);
-    if (!error) error = posix_spawn_file_actions_addclose(&files, queue);
+    // Darwin omits kqueue descriptors when copying the spawn file table.
+    // Closing that already-absent descriptor in a file action fails with EBADF.
     if (!error) error = posix_spawnattr_init(&attributes);
     sigset_t reset, mask;
     sigemptyset(&reset);
@@ -209,7 +222,7 @@ static int run(int argc, char **argv) {
     if (!error && setenv("TEAMSWARM_OWNED_GROUP", token, 1) < 0) error = errno;
     pid_t root = 0;
     if (!error) error = posix_spawnp(&root, argv[4], &files, &attributes, &argv[4], environ);
-    if (error) { report('N', error); return 125; }
+    if (error) return reject_start("target-spawn", error);
     report_started(root);
     posix_spawn_file_actions_destroy(&files);
     posix_spawnattr_destroy(&attributes);

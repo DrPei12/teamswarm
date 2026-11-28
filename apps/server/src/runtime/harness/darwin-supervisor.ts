@@ -38,10 +38,6 @@ async function resolveSupervisor() {
     } catch { return false; }
   };
   if (verified()) return binary;
-  const sdk = await execute("/usr/bin/xcode-select", ["-p"], { timeout: 3000 });
-  if (!path.isAbsolute(sdk.stdout.trim())) return;
-  const compiler = (await execute("/usr/bin/xcrun", ["--find", "clang"], { timeout: 5000 })).stdout.trim();
-  if (!path.isAbsolute(compiler)) return;
   mkdirSync(root, { recursive: true, mode: 0o700 });
   if (lstatSync(root).isSymbolicLink()) throw Error("The process supervisor cache must not be a link.");
   const staging = mkdtempSync(path.join(root, ".darwin-"));
@@ -49,7 +45,8 @@ async function resolveSupervisor() {
     const input = path.join(staging, "owned-process.c");
     const output = path.join(staging, "owned-process-darwin");
     writeFileSync(input, bytes, { mode: 0o600 });
-    await execute(compiler, ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", input, "-o", output], { timeout: 30000 });
+    // Invoking the resolved Clang binary directly loses xcrun's SDK selection.
+    await execute("/usr/bin/xcrun", ["--sdk", "macosx", "clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", input, "-o", output], { timeout: 30000 });
     writeFileSync(path.join(staging, "sha256"), hash(readFileSync(output)), { mode: 0o600 });
     try { renameSync(staging, directory); }
     catch (error) { if (!verified()) throw error; }
@@ -58,12 +55,18 @@ async function resolveSupervisor() {
   } finally { rmSync(staging, { recursive: true, force: true }); }
 }
 
-export async function darwinSupervisor() {
+export async function darwinSupervisor({ required = false }: { required?: boolean } = {}) {
   if (process.platform !== "darwin") return;
-  // Do not let a missing development toolchain prevent startup. Packaging compiles and verifies the helper separately.
-  let binary = await (prepared ??= resolveSupervisor().catch(() => undefined));
-  if (binary && !executable(binary)) binary = await (prepared = resolveSupervisor().catch(() => undefined));
-  return binary;
+  // Source startup can degrade on machines without a toolchain. Release checks
+  // must exercise the same loader without hiding the reason native mode failed.
+  try {
+    let binary = await (prepared ??= resolveSupervisor());
+    if (binary && !executable(binary)) binary = await (prepared = resolveSupervisor());
+    if (!binary && required) throw Error("The macOS compiler path could not be resolved.");
+    return binary;
+  } catch (error) {
+    if (required) throw error;
+  }
 }
 
 const fallback = String.raw`
@@ -123,7 +126,10 @@ export async function reclaimDarwinOrphan(value: unknown): Promise<boolean> {
   } catch { return false; }
 }
 
-const spawnError = (code: string, command: string) => Object.assign(new Error(`Unable to start the supervised command: ${code}`), { code, syscall: "spawn", path: command });
+const spawnError = (code: string, command: string, detail?: string) => Object.assign(
+  new Error(`Unable to start the supervised command: ${code}${detail ? ` (${detail})` : ""}`),
+  { code, syscall: "spawn", path: command },
+);
 
 export async function spawnDarwinOwned(command: string, args: string[], options: SpawnOptionsWithoutStdio, register: (owned: DarwinOwned) => void,
     resolve = darwinSupervisor) {
@@ -152,15 +158,17 @@ export async function spawnDarwinOwned(command: string, args: string[], options:
       const line = text.slice(0, end);
       text = text.slice(end + 1);
       const started = /^R (\d{1,10}) (\d{1,12}\.\d{6})$/.exec(line);
+      const rejected = /^N(?: (\d+|missing|denied)(?: ([a-z-]{1,32}))?)?$/.exec(line);
       if ((line === "R" || !!started) && !launched && !terminated) {
         if (native && started && Number(started[1]) > 1)
           owned.binding = { rootPid: Number(started[1]), rootIdentity: "darwin:" + started[2], cookie: token };
         launched = true; startResult();
-      } else if (/^N(?: \d+| missing| denied)?$/.test(line) && !launched && !terminated) {
+      } else if (rejected && !launched && !terminated) {
         terminated = true; confirmed = true;
-        const reason = line.slice(2);
-        startResult(spawnError(reason === "2" || reason === "missing" ? "ENOENT" :
-          reason === "13" || reason === "denied" ? "EACCES" : "PROCESS_SUPERVISOR", command));
+        const [, reason, stage] = rejected;
+        const code = reason === "2" || reason === "missing" ? "ENOENT" :
+          reason === "13" || reason === "denied" ? "EACCES" : "PROCESS_SUPERVISOR";
+        startResult(spawnError(code, command, stage ? `${stage}, errno ${reason}` : undefined));
       } else if ((line === "E" || line === "U") && launched && !terminated) {
         terminated = true; confirmed = !!native && line === "E";
       } else invalid = true;
