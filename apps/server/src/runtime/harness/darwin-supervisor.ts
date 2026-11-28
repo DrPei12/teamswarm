@@ -126,7 +126,10 @@ export async function reclaimDarwinOrphan(value: unknown): Promise<boolean> {
   } catch { return false; }
 }
 
-const spawnError = (code: string, command: string) => Object.assign(new Error(`Unable to start the supervised command: ${code}`), { code, syscall: "spawn", path: command });
+const spawnError = (code: string, command: string, detail?: string) => Object.assign(
+  new Error(`Unable to start the supervised command: ${code}${detail ? ` (${detail})` : ""}`),
+  { code, syscall: "spawn", path: command },
+);
 
 export async function spawnDarwinOwned(command: string, args: string[], options: SpawnOptionsWithoutStdio, register: (owned: DarwinOwned) => void,
     resolve = darwinSupervisor) {
@@ -155,15 +158,17 @@ export async function spawnDarwinOwned(command: string, args: string[], options:
       const line = text.slice(0, end);
       text = text.slice(end + 1);
       const started = /^R (\d{1,10}) (\d{1,12}\.\d{6})$/.exec(line);
+      const rejected = /^N(?: (\d+|missing|denied)(?: ([a-z-]{1,32}))?)?$/.exec(line);
       if ((line === "R" || !!started) && !launched && !terminated) {
         if (native && started && Number(started[1]) > 1)
           owned.binding = { rootPid: Number(started[1]), rootIdentity: "darwin:" + started[2], cookie: token };
         launched = true; startResult();
-      } else if (/^N(?: \d+| missing| denied)?$/.test(line) && !launched && !terminated) {
+      } else if (rejected && !launched && !terminated) {
         terminated = true; confirmed = true;
-        const reason = line.slice(2);
-        startResult(spawnError(reason === "2" || reason === "missing" ? "ENOENT" :
-          reason === "13" || reason === "denied" ? "EACCES" : "PROCESS_SUPERVISOR", command));
+        const [, reason, stage] = rejected;
+        const code = reason === "2" || reason === "missing" ? "ENOENT" :
+          reason === "13" || reason === "denied" ? "EACCES" : "PROCESS_SUPERVISOR";
+        startResult(spawnError(code, command, stage ? `${stage}, errno ${reason}` : undefined));
       } else if ((line === "E" || line === "U") && launched && !terminated) {
         terminated = true; confirmed = !!native && line === "E";
       } else invalid = true;

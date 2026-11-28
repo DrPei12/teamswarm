@@ -39,12 +39,25 @@ jobs:
         run: |
           node --import tsx --input-type=module <<'JS'
           import assert from 'node:assert/strict';
+          import { once } from 'node:events';
+          import { tmpdir } from 'node:os';
           import { darwinSupervisor, sampleDarwinProcesses } from './apps/server/src/runtime/harness/darwin-supervisor.ts';
+          import { confirmOwnedExit, spawnOwned } from './apps/server/src/runtime/harness/owned-process.ts';
           assert(await darwinSupervisor({ required: true }));
           const sample = await sampleDarwinProcesses(process.pid);
           assert.equal(sample.supervision, 'native');
           assert.equal(sample.processCoverage, 'descendants');
           assert(sample.processes.some(row => row.pid === process.pid && row.privateBytes > 0));
+          const child = await spawnOwned(process.execPath, ['-e', 'process.stdout.write("started"); process.exitCode = 7;'], {});
+          const closed = once(child, 'close');
+          let output = '';
+          child.stdout.on('data', chunk => { output += chunk; });
+          child.stderr.resume();
+          child.stdin.end();
+          assert.deepEqual(await closed, [7, null]);
+          assert.equal(output, 'started');
+          assert.equal(await confirmOwnedExit(child), true);
+          await assert.rejects(spawnOwned(tmpdir(), [], {}), { code: 'EACCES' });
           JS
       - run: npm run check
         env:
