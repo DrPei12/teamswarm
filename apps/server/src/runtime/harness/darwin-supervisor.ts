@@ -38,10 +38,6 @@ async function resolveSupervisor() {
     } catch { return false; }
   };
   if (verified()) return binary;
-  const sdk = await execute("/usr/bin/xcode-select", ["-p"], { timeout: 3000 });
-  if (!path.isAbsolute(sdk.stdout.trim())) return;
-  const compiler = (await execute("/usr/bin/xcrun", ["--find", "clang"], { timeout: 5000 })).stdout.trim();
-  if (!path.isAbsolute(compiler)) return;
   mkdirSync(root, { recursive: true, mode: 0o700 });
   if (lstatSync(root).isSymbolicLink()) throw Error("The process supervisor cache must not be a link.");
   const staging = mkdtempSync(path.join(root, ".darwin-"));
@@ -49,7 +45,8 @@ async function resolveSupervisor() {
     const input = path.join(staging, "owned-process.c");
     const output = path.join(staging, "owned-process-darwin");
     writeFileSync(input, bytes, { mode: 0o600 });
-    await execute(compiler, ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", input, "-o", output], { timeout: 30000 });
+    // Invoking the resolved Clang binary directly loses xcrun's SDK selection.
+    await execute("/usr/bin/xcrun", ["--sdk", "macosx", "clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", input, "-o", output], { timeout: 30000 });
     writeFileSync(path.join(staging, "sha256"), hash(readFileSync(output)), { mode: 0o600 });
     try { renameSync(staging, directory); }
     catch (error) { if (!verified()) throw error; }
