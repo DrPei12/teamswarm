@@ -33,6 +33,17 @@ jobs:
           python-version: '3.12'
       - run: npm ci --no-audit --no-fund
       - run: npm run release:check
+      - name: Check the native macOS supervisor before the test suite
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          build_dir=$(mktemp -d "$RUNNER_TEMP/owned-process-check.XXXXXX")
+          supervisor="$build_dir/owned-process-darwin"
+          /usr/bin/xcrun --sdk macosx clang -std=c11 -O2 -Wall -Wextra -Werror \
+            -mmacosx-version-min=11.0 -arch "$(uname -m)" \
+            apps/server/src/runtime/harness/owned-process-darwin.c -o "$supervisor"
+          "$supervisor" sample "$$" > "$build_dir/sample.json"
+          node -e 'const result = require(process.argv[1]); if (result.supervision !== "native" || !result.processes.some(process => process.pid === Number(process.argv[2]))) throw Error("macOS supervisor could not sample its own runner process");' "$build_dir/sample.json" "$$"
       - run: npm run check
         env:
           NODE_OPTIONS: --test-reporter=tap
