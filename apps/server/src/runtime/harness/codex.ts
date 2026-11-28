@@ -231,8 +231,11 @@ export function codexCommand(): { command: string; args: string[] } {
   }
   const localEntry = path.join(repository, "node_modules", "@openai", "codex", "bin", "codex.js");
   if (commandFile(localEntry, true) && codexLauncherAvailable(localEntry)) return { command: process.execPath, args: [localEntry] };
-  const bundled = process.env.TEAM_CODEX_FALLBACK_BIN;
-  if (bundled && path.isAbsolute(bundled) && commandFile(bundled)) return { command: bundled, args: [] };
+  // Packaged services can start directly, without the Electron launch environment.
+  const packaged = path.join(repository, "runtime", "codex", "bin", process.platform === "win32" ? "codex.exe" : "codex");
+  for (const bundled of [process.env.TEAM_CODEX_FALLBACK_BIN, packaged]) {
+    if (bundled && path.isAbsolute(bundled) && commandFile(bundled)) return { command: bundled, args: [] };
+  }
   throw new Error(
     "Codex is not installed. Install the Codex CLI or configure TEAM_CODEX_BIN.",
   );
