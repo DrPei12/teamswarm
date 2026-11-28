@@ -62,7 +62,7 @@ export function ModelPicker({
   const { t } = useI18n();
   const [internalOpen, setOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
-  const [provider, setProvider] = useState<string | null>(null);
+  const [activeProvider, setProvider] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [custom, setCustom] = useState(false);
   const [customId, setCustomId] = useState("");
@@ -76,6 +76,11 @@ export function ModelPicker({
     ).values(),
   ];
   const groups = [...new Set(catalog.map(modelProvider))].sort();
+  const provider =
+    activeProvider && groups.includes(activeProvider) ? activeProvider : null;
+  useEffect(() => {
+    if (activeProvider && !provider && !loading) setProvider(null);
+  }, [activeProvider, loading, provider]);
   const labelCounts = new Map<string, number>();
   for (const model of catalog) {
     const label = `${modelProvider(model)}:${model.name || model.model}`;
@@ -209,9 +214,7 @@ export function ModelPicker({
                 ? t("Custom model")
                 : provider
                   ? t(provider)
-                  : showSource
-                    ? t("Available models")
-                    : t("Model providers")}
+                  : t("Model providers")}
             </strong>
           </div>
           {custom ? (
@@ -258,7 +261,7 @@ export function ModelPicker({
                 />
               </div>
               <div className="model-picker-list" ref={list}>
-                {!provider && !query && !showSource
+                {!provider && !query.trim()
                   ? groups.map((group) => (
                       <button
                         type="button"
@@ -306,9 +309,11 @@ export function ModelPicker({
                           ) ?? 0) > 1 && model.detail
                             ? `${model.name || model.model} · ${model.detail}`
                             : model.name || model.model}
-                          {showSource && model.detail && (
-                            <small>{t(model.detail)}</small>
-                          )}
+                          {showSource &&
+                            model.detail &&
+                            (labelCounts.get(
+                              `${modelProvider(model)}:${model.name || model.model}`,
+                            ) ?? 0) <= 1 && <small>{t(model.detail)}</small>}
                           {model.unavailable && (
                             <small>{t(model.unavailable)}</small>
                           )}

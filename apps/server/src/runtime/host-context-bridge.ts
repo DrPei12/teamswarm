@@ -49,7 +49,7 @@ export function isCoordination(store: RuntimeStore, work: Work) {
 function latestIntent(store: RuntimeStore, teamId: string, branchId: string, before?: string): string | null {
   const row = store.db.prepare(`SELECT m.id FROM project_conversations p
     JOIN messages m ON m.conversation_id=p.conversation_id
-    WHERE p.team_id=? AND p.branch_id=? AND m.role='user' AND m.delivery IS NOT 'example'
+    WHERE p.team_id=? AND p.branch_id=? AND m.retired_by IS NULL AND m.role='user' AND m.delivery IS NOT 'example'
       AND (? IS NULL OR m.rowid<(SELECT rowid FROM messages WHERE id=?)) ORDER BY m.rowid DESC LIMIT 1`)
     .get(teamId, branchId, before ?? null, before ?? null);
   return typeof row?.id === "string" ? row.id : null;
@@ -102,7 +102,7 @@ export function recentDialoguePairs(store: RuntimeStore, run: Run, branchId: str
     JOIN host_context_frames f ON f.attempt_id=a.id AND f.team_id=w.team_id
     JOIN messages s ON s.conversation_id=u.conversation_id AND s.client_request_id='runtime:'||a.id
     WHERE r.team_id=? AND u.conversation_id=? AND f.branch_id=? AND ${dialogueWork("w")}
-      AND u.role='user' AND u.delivery IS NOT 'example' AND s.role='assistant' AND s.delivery='recorded'
+      AND u.retired_by IS NULL AND s.retired_by IS NULL AND u.role='user' AND u.delivery IS NOT 'example' AND s.role='assistant' AND s.delivery='recorded'
       AND json_extract(m.data,'$.kind')='host' AND json_extract(w.data,'$.status')='submitted' AND json_extract(a.data,'$.status')='completed'
       AND s.content=json_extract(w.data,'$.result') ORDER BY u.rowid DESC LIMIT ?`)
     .all(run.teamId, run.conversationId, branchId, maxDialogueTurns);

@@ -884,8 +884,12 @@
 }
 @media (max-height: 650px) {
   .member-action-area:has(> .approval-requests) {
-    /* Keep the thread and Latest reachable without starving the request dock. */
-    max-height: calc(100% - 56px);
+    /* Keep enough room for Latest while leaving the request dock scrollable. */
+    max-height: calc(100% - 44px);
+  }
+  .member-action-area:has(> .approval-requests) > .member-composer {
+    margin-block: 4px 8px;
+    padding-block: 12px 10px;
   }
 }
 .member-composer-config .runtime-choice > span {
@@ -1843,22 +1847,6 @@ html[data-pane-dragging] * {
 .host-branch-row > .icon-button {
   flex: none;
 }
-.host-side-chats {
-  flex: 0 1 280px;
-  width: min(280px, 40vw);
-  padding: 12px;
-  border-inline-start: 1px solid var(--border);
-  overflow: auto;
-}
-.host-side-chats > header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-.host-side-chats > header strong {
-  flex: 1;
-}
 .composer-workspace {
   display: flex;
   align-items: center;
@@ -1910,61 +1898,198 @@ html[data-pane-dragging] * {
 .message-user > .host-message-actions {
   justify-content: flex-end;
 }
+.messages .message-user:has(> .host-message-edit) {
+  width: min(100%, 680px);
+  max-width: 100%;
+}
+.host-message-edit {
+  width: 100%;
+}
 .host-message-edit textarea {
   display: block;
   width: 100%;
-  min-height: 100px;
-  resize: vertical;
-  color: inherit;
+  min-height: 54px;
+  max-height: min(42dvh, 320px);
+  field-sizing: content;
+  resize: none;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  color: var(--text);
   font: inherit;
-  padding: 10px;
+}
+.host-message-edit textarea:focus-visible {
+  outline: 1px solid var(--accent-solid);
+  outline-offset: 1px;
+}
+.host-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+.host-edit-actions button {
+  padding: 6px 12px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .message-user .host-message-actions > button {
+    opacity: 0;
+  }
+  .message-user:is(:hover, :focus-within) .host-message-actions > button {
+    opacity: 1;
+  }
+}
+.revision-history {
+  overflow: auto;
+  max-height: 48dvh;
+  overflow-wrap: anywhere;
+}
+.revision-history p {
+  white-space: pre-wrap;
+}
+.app-menu-sub > span {
+  flex: 1;
+}
+.application-menu-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 34px;
+  border-radius: 8px;
+  padding: 4px 8px;
+  color: var(--text);
+}
+.application-menu-trigger span:not(.swarm-mark) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.application-menu-trigger:is(:hover, :focus-visible, [data-state="open"]) {
+  background: var(--hover);
+}
+.application-menu {
+  width: min(242px, calc(100vw - 24px));
 }
 
-.host-side-chats {
+.side-question-panel {
   display: flex;
+  flex: 0 0 clamp(300px, 34vw, 460px);
   flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  border-inline-start: 1px solid var(--line);
+  background: var(--panel);
 }
-.side-chat-list {
-  overflow: auto;
-  max-height: 30%;
+.side-question-panel[hidden] {
+  display: none;
 }
-.side-chat-messages {
+.side-question-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 47px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.side-question-head .icon-button {
+  flex-shrink: 0;
+}
+.side-question-head > .icon-button:last-child {
+  margin-inline-start: auto;
+}
+.desktop .side-question-head {
+  padding-right: calc(
+    10px + 100vw - env(titlebar-area-x, 0px) -
+      env(titlebar-area-width, calc(100vw - 148px))
+  );
+  app-region: drag;
+}
+.desktop .workspace-content:has(> .side-question-panel:not([hidden])) .topbar {
+  padding-right: 20px;
+}
+.side-question-tabs {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  gap: 4px;
+}
+.side-question-tab {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding-inline-start: 8px;
+  border-radius: 8px;
+}
+.side-question-tab[data-active="true"],
+.side-question-tab:hover {
+  background: var(--hover);
+}
+.side-question-tab-label {
+  min-height: 32px;
+  padding-inline-end: 5px;
+  white-space: nowrap;
+}
+.side-question-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  margin-block: 8px;
-}
-.side-chat-message {
-  padding: 7px 4px;
+  overscroll-behavior: contain;
   overflow-wrap: anywhere;
+  padding: 14px 16px;
 }
-.side-chat-message.from-user {
-  background: var(--surface-muted, #8881);
-  padding-inline: 8px;
-  border-radius: 10px;
+.side-question-body:has(> .side-question-empty) {
+  display: grid;
+  place-items: center;
+  color: var(--secondary);
 }
-.side-chat-compose {
+.side-question-exchange + .side-question-exchange {
+  margin-top: 18px;
+}
+.side-question-user {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 0 12px auto;
+  padding: 8px 11px;
+  border-radius: 12px;
+  background: var(--hover);
+  white-space: pre-wrap;
+}
+.side-question-notice {
+  margin: 0 14px;
+  color: var(--secondary);
+}
+.side-question-form {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: end;
+  gap: 4px;
+  margin: 10px;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
 }
-.side-chat-compose textarea {
-  min-height: 64px;
-  width: 100%;
-  resize: vertical;
-  color: inherit;
-  background: inherit;
+.side-question-form:focus-within {
+  border-color: var(--secondary);
+}
+.side-question-form textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  max-height: 24dvh;
+  padding-block: 6px;
+  field-sizing: content;
+  resize: none;
+  color: var(--text);
   font: inherit;
-}
-.side-chat-compose button {
-  align-self: flex-end;
+  outline: none;
 }
 @media (max-width: 760px) {
-  .host-side-chats {
+  .side-question-panel {
     position: absolute;
     inset: 0 0 0 auto;
-    width: min(360px, 93vw);
-    background: var(--surface, white);
+    width: min(380px, calc(100% - 44px));
     z-index: 8;
   }
 }

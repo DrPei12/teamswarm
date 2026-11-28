@@ -128,7 +128,7 @@ async function position(selector) {
 async function maximumFonts(max) {
   await page.setViewportSize({ width: 1200, height: 920 });
   await page
-    .getByRole("button", { name: "Workspace menu", exact: true })
+    .getByRole("button", { name: "Application menu", exact: true })
     .click();
   await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
   const d = page.getByRole("dialog", { name: "Settings", exact: true });

@@ -9,7 +9,7 @@ export function collectHostBranches(
   workspace: Workspace,
 ): Map<string, BranchLink[]> {
   const visibleChats = workspace.chats.filter(
-    (chat) => !chat.archived && chat.kind !== "side" && chat.branchId,
+    (chat) => !chat.archived && chat.branchId,
   );
   const branchChats = new Map<string, (typeof visibleChats)[number]>();
   const nodes = new Map(workspace.projectNodes?.map((node) => [node.id, node]));

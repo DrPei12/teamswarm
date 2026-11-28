@@ -3,7 +3,7 @@
  * stored receipts available for provenance, outside the dialogue and its
  * history cursors. Match the runtime identity, never user-visible wording.
  */
-export const conversationMessageSql = `(
+export const conversationMessageSql = `retired_by IS NULL AND (
   role <> 'assistant' OR client_request_id IS NULL OR (
     client_request_id NOT GLOB 'runtime:resource-wait:*' AND
     client_request_id NOT GLOB 'runtime:resource-resumed:*' AND

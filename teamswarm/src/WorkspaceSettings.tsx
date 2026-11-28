@@ -20,6 +20,8 @@ import {
 import type { Workspace } from "./store";
 import { useI18n, type Language } from "./i18n";
 import { Modal } from "./ui";
+import { CapabilitySettings, capabilityTabs } from "./CapabilitySettings";
+import { ManualExecutionSettings } from "./ExecutionSettings";
 import { FieldSelect } from "./FieldSelect";
 import {
   bundled,
@@ -247,8 +249,12 @@ export function WorkspaceSettings({
   appearance,
   close,
   update,
+  teamId,
+  initialPage = "general",
 }: {
   workspace: Workspace;
+  initialPage?: string;
+  teamId: string;
   nextWindow?: ContextWindowPlan;
   appearance: ReturnType<typeof useAppearance>;
   close: () => void;
@@ -256,11 +262,32 @@ export function WorkspaceSettings({
 }) {
   const { t } = useI18n();
   const { value, save, error } = appearance;
+  const [page, setPage] = useState(initialPage);
+  const [filter, setFilter] = useState("");
+  const groups = [
+    {
+      label: "Preferences",
+      options: [
+        ["general", "General"],
+        ["appearance", "Appearance"],
+      ],
+    },
+    { label: "This computer", options: [["runtime", "Runtime and device"]] },
+    {
+      label: "Global capabilities",
+      options: capabilityTabs.map(([key, label]) => [`global:${key}`, label]),
+    },
+    {
+      label: "Team configuration",
+      options: capabilityTabs.map(([key, label]) => [`team:${key}`, label]),
+    },
+  ];
   const initial = useRef({
     name: workspace.name,
     language: workspace.language,
   });
   const [language, setLanguage] = useState<Language>(workspace.language);
+  const [sendKey, setSendKey] = useState(workspace.sendKey ?? "enter");
   const [windowChoice, setWindowChoice] = useState<ContextWindowPreset | null>(
     null,
   );
@@ -304,275 +331,373 @@ export function WorkspaceSettings({
       title={t("Settings")}
       className="workspace-settings"
     >
-      <Tabs.Root defaultValue="general" className="workspace-settings-body">
-        <Tabs.List className="settings-tabs" aria-label={t("Settings")}>
-          <Tabs.Trigger value="general">{t("General")}</Tabs.Trigger>
-          <Tabs.Trigger value="appearance">{t("Appearance")}</Tabs.Trigger>
-        </Tabs.List>
-        <Tabs.Content value="general" forceMount className="settings-pane">
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (savingWindow) return;
-              const name = String(
-                new FormData(e.currentTarget).get("name") || "",
-              ).trim();
-              setSavingWindow(true);
-              setWindowError("");
-              try {
-                await product.saveGeneralSettings({
-                  ...(name && name !== initial.current.name ? { name } : {}),
-                  ...(language !== initial.current.language
-                    ? { language }
-                    : {}),
-                  ...(changedWindow
-                    ? { contextWindowPreset: windowChoice }
-                    : {}),
-                });
-                close();
-              } catch {
-                setWindowError(t("Could not save settings. Try again."));
-              } finally {
-                setSavingWindow(false);
-              }
-            }}
-          >
-            <div className="form-body">
-              <label>
-                {t("Workspace name")}
-                <input
-                  name="name"
-                  defaultValue={initial.current.name}
-                  disabled={savingWindow}
-                  required
-                  maxLength={60}
-                />
-              </label>
-              <label>
-                {t("Language")}
-                <FieldSelect
-                  name="language"
-                  value={language}
-                  disabled={savingWindow}
-                  onValueChange={(v) => setLanguage(v as Language)}
-                >
-                  <option value="en">English</option>
-                  <option value="zh-CN">简体中文</option>
-                </FieldSelect>
-              </label>
-              <label className="context-preset-field">
-                {t("Context window")}
-                <FieldSelect
-                  name="context-window-preset"
-                  aria-label={t("Context window preset")}
-                  value={windowChoice ?? savedWindow}
-                  disabled={savingWindow}
-                  onValueChange={(id) => {
-                    setWindowChoice(id as ContextWindowPreset);
-                    setWindowError("");
-                  }}
-                >
-                  {contextWindowPresetIds.map((id) => (
-                    <option key={id} value={id}>
-                      {id === "auto"
-                        ? t("Automatic (by model)")
-                        : id.toUpperCase()}
-                    </option>
-                  ))}
-                </FieldSelect>
-                <small>
-                  {t(
-                    "Applies to new Host and member turns. Space is reserved for context compaction.",
-                  )}
-                </small>
-                {nextWindow && !changedWindow && (
+      <Tabs.Root
+        value={page}
+        onValueChange={setPage}
+        orientation="vertical"
+        className="workspace-settings-body"
+      >
+        <aside className="settings-navigation">
+          <label className="settings-search">
+            <Search size={15} />
+            <input
+              aria-label={t("Search settings")}
+              placeholder={t("Search settings")}
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+            />
+          </label>
+          <Tabs.List className="settings-tabs" aria-label={t("Settings")}>
+            {groups.map((group) => {
+              const options = group.options.filter(
+                ([, label]) =>
+                  !filter.trim() ||
+                  `${t(group.label)} ${t(label)} ${label}`
+                    .toLowerCase()
+                    .includes(filter.trim().toLowerCase()),
+              );
+              return (
+                options.length > 0 && (
+                  <div className="settings-nav-group" key={group.label}>
+                    <h3>{t(group.label)}</h3>
+                    {options.map(([key, label]) => (
+                      <Tabs.Trigger key={key} value={key}>
+                        {t(label)}
+                      </Tabs.Trigger>
+                    ))}
+                  </div>
+                )
+              );
+            })}
+          </Tabs.List>
+        </aside>
+        <div className="settings-content">
+          <Tabs.Content value="general" forceMount className="settings-pane">
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (savingWindow) return;
+                const name = String(
+                  new FormData(e.currentTarget).get("name") || "",
+                ).trim();
+                setSavingWindow(true);
+                setWindowError("");
+                try {
+                  await product.saveGeneralSettings({
+                    ...(name && name !== initial.current.name ? { name } : {}),
+                    ...(language !== initial.current.language
+                      ? { language }
+                      : {}),
+                    ...(changedWindow
+                      ? { contextWindowPreset: windowChoice }
+                      : {}),
+                    ...(sendKey !== (workspace.sendKey ?? "enter")
+                      ? { sendKey }
+                      : {}),
+                  });
+                  close();
+                } catch {
+                  setWindowError(t("Could not save settings. Try again."));
+                } finally {
+                  setSavingWindow(false);
+                }
+              }}
+            >
+              <div className="form-body">
+                <label>
+                  {t("Workspace name")}
+                  <input
+                    name="name"
+                    defaultValue={initial.current.name}
+                    disabled={savingWindow}
+                    required
+                    maxLength={60}
+                  />
+                </label>
+                <label>
+                  {t("Language")}
+                  <FieldSelect
+                    name="language"
+                    value={language}
+                    disabled={savingWindow}
+                    onValueChange={(v) => setLanguage(v as Language)}
+                  >
+                    <option value="en">English</option>
+                    <option value="zh-CN">简体中文</option>
+                  </FieldSelect>
+                </label>
+                <label>
+                  {t("Send messages with")}
+                  <FieldSelect
+                    aria-label={t("Send messages with")}
+                    value={sendKey}
+                    disabled={savingWindow}
+                    onValueChange={(value) =>
+                      setSendKey(value === "mod-enter" ? "mod-enter" : "enter")
+                    }
+                  >
+                    <option value="enter">Enter</option>
+                    <option value="mod-enter">Ctrl / ⌘ + Enter</option>
+                  </FieldSelect>
+                </label>
+                <label className="context-preset-field">
+                  {t("Context window")}
+                  <FieldSelect
+                    name="context-window-preset"
+                    aria-label={t("Context window preset")}
+                    value={windowChoice ?? savedWindow}
+                    disabled={savingWindow}
+                    onValueChange={(id) => {
+                      setWindowChoice(id as ContextWindowPreset);
+                      setWindowError("");
+                    }}
+                  >
+                    {contextWindowPresetIds.map((id) => (
+                      <option key={id} value={id}>
+                        {id === "auto"
+                          ? t("Automatic (by model)")
+                          : id.toUpperCase()}
+                      </option>
+                    ))}
+                  </FieldSelect>
                   <small>
                     {t(
-                      nextWindow.source === "estimate"
-                        ? "Estimated for Host: {raw} tokens before reserve, {usable} available."
-                        : "Host: {raw} tokens before reserve, {usable} available.",
-                      {
-                        raw: nextWindow.rawTokens.toLocaleString(),
-                        usable: nextWindow.usableTokens.toLocaleString(),
-                      },
+                      "Applies to new Host and member turns. Space is reserved for context compaction.",
                     )}
                   </small>
+                  {nextWindow && !changedWindow && (
+                    <small>
+                      {t(
+                        nextWindow.source === "estimate"
+                          ? "Estimated for Host: {raw} tokens before reserve, {usable} available."
+                          : "Host: {raw} tokens before reserve, {usable} available.",
+                        {
+                          raw: nextWindow.rawTokens.toLocaleString(),
+                          usable: nextWindow.usableTokens.toLocaleString(),
+                        },
+                      )}
+                    </small>
+                  )}
+                </label>
+                {windowError && (
+                  <p className="form-error" role="alert">
+                    {windowError}
+                  </p>
                 )}
-              </label>
-              {windowError && (
-                <p className="form-error" role="alert">
-                  {windowError}
+              </div>
+              <div className="form-footer">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={savingWindow}
+                  onClick={close}
+                >
+                  {t("Cancel")}
+                </button>
+                <button className="primary-button" disabled={savingWindow}>
+                  {t("Save changes")}
+                </button>
+              </div>
+            </form>
+          </Tabs.Content>
+          <Tabs.Content
+            value="appearance"
+            className="settings-pane appearance-pane"
+          >
+            <div className="appearance-scroll">
+              <section aria-labelledby="appearance-style">
+                <h3 id="appearance-style">{t("Visual style")}</h3>
+                <div className="appearance-card">
+                  <div className="appearance-row">
+                    <strong>{t("Mode")}</strong>
+                    <div
+                      className="appearance-modes"
+                      role="group"
+                      aria-label={t("Mode")}
+                    >
+                      {(["system", "light", "dark"] as const).map((mode) => {
+                        const Icon =
+                          mode === "system"
+                            ? Monitor
+                            : mode === "light"
+                              ? Sun
+                              : Moon;
+                        return (
+                          <button
+                            key={mode}
+                            type="button"
+                            aria-pressed={workspace.theme === mode}
+                            onClick={() =>
+                              update((old) => ({ ...old, theme: mode }))
+                            }
+                          >
+                            <Icon size={15} />
+                            {t(mode.charAt(0).toUpperCase() + mode.slice(1))}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <div className="appearance-palette">
+                    <strong>{t("Light background")}</strong>
+                    <div
+                      className="appearance-swatches"
+                      role="group"
+                      aria-label={t("Light background")}
+                    >
+                      {palettes.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          aria-pressed={value.palette === c.id}
+                          onClick={() =>
+                            save((current) => ({ ...current, palette: c.id }))
+                          }
+                        >
+                          <i
+                            aria-hidden="true"
+                            style={{ background: c.background }}
+                          >
+                            {value.palette === c.id && <Check size={13} />}
+                          </i>
+                          {t(c.name)}
+                        </button>
+                      ))}
+                    </div>
+                    <small className="dark-palette-note">
+                      {t("This background is used in light mode.")}
+                    </small>
+                  </div>
+                </div>
+              </section>
+              <section aria-labelledby="appearance-type">
+                <h3 id="appearance-type">{t("Typography")}</h3>
+                <div className="appearance-card appearance-type">
+                  {textRoles.map((role) => {
+                    const size = fontSizes[role];
+                    return (
+                      <div className="appearance-type-row" key={role}>
+                        <strong>{t(labels[role])}</strong>
+                        <FontPicker
+                          role={role}
+                          value={value.styles[role].font}
+                          imports={value.imports}
+                          families={families}
+                          scanning={scanning}
+                          scan={scan}
+                          change={(font) => changeStyle(role, { font })}
+                          add={(id, name) =>
+                            save((current) => ({
+                              ...current,
+                              imports: { ...current.imports, [id]: name },
+                              styles: {
+                                ...current.styles,
+                                [role]: {
+                                  ...current.styles[role],
+                                  font: "file:" + id,
+                                },
+                              },
+                            }))
+                          }
+                        />
+                        <FieldSelect
+                          className="appearance-size"
+                          aria-label={t("{section} size", {
+                            section: t(labels[role]),
+                          })}
+                          value={String(value.styles[role].size)}
+                          onValueChange={(v) =>
+                            changeStyle(role, { size: Number(v) })
+                          }
+                        >
+                          {Array.from(
+                            { length: size.max - size.min + 1 },
+                            (_, i) => size.min + i,
+                          ).map((n) => (
+                            <option key={n} value={String(n)}>
+                              {n} px
+                            </option>
+                          ))}
+                        </FieldSelect>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+              <section className="appearance-preview" aria-label={t("Preview")}>
+                <div>
+                  <Type size={15} />
+                  {t("Preview")}
+                </div>
+                <p>{t("The first line of your next conversation.")}</p>
+                <code>const team = "TeamSwarm";</code>
+              </section>
+              {error && (
+                <p role="alert" className="form-error">
+                  {t(error)}
                 </p>
               )}
             </div>
             <div className="form-footer">
               <button
                 type="button"
+                className="text-button"
+                onClick={() =>
+                  save((current) => ({
+                    ...defaults(),
+                    imports: current.imports,
+                  }))
+                }
+              >
+                {t("Restore defaults")}
+              </button>
+              <button
+                type="button"
                 className="secondary-button"
-                disabled={savingWindow}
                 onClick={close}
               >
-                {t("Cancel")}
-              </button>
-              <button className="primary-button" disabled={savingWindow}>
-                {t("Save changes")}
+                {t("Done")}
               </button>
             </div>
-          </form>
-        </Tabs.Content>
-        <Tabs.Content
-          value="appearance"
-          className="settings-pane appearance-pane"
-        >
-          <div className="appearance-scroll">
-            <section aria-labelledby="appearance-style">
-              <h3 id="appearance-style">{t("Visual style")}</h3>
-              <div className="appearance-card">
-                <div className="appearance-row">
-                  <strong>{t("Mode")}</strong>
-                  <div
-                    className="appearance-modes"
-                    role="group"
-                    aria-label={t("Mode")}
-                  >
-                    {(["system", "light", "dark"] as const).map((mode) => {
-                      const Icon =
-                        mode === "system"
-                          ? Monitor
-                          : mode === "light"
-                            ? Sun
-                            : Moon;
-                      return (
-                        <button
-                          key={mode}
-                          type="button"
-                          aria-pressed={workspace.theme === mode}
-                          onClick={() =>
-                            update((old) => ({ ...old, theme: mode }))
-                          }
-                        >
-                          <Icon size={15} />
-                          {t(mode.charAt(0).toUpperCase() + mode.slice(1))}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div className="appearance-palette">
-                  <strong>{t("Light background")}</strong>
-                  <div
-                    className="appearance-swatches"
-                    role="group"
-                    aria-label={t("Light background")}
-                  >
-                    {palettes.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        aria-pressed={value.palette === c.id}
-                        onClick={() =>
-                          save((current) => ({ ...current, palette: c.id }))
-                        }
-                      >
-                        <i
-                          aria-hidden="true"
-                          style={{ background: c.background }}
-                        >
-                          {value.palette === c.id && <Check size={13} />}
-                        </i>
-                        {t(c.name)}
-                      </button>
-                    ))}
-                  </div>
-                  <small className="dark-palette-note">
-                    {t("This background is used in light mode.")}
-                  </small>
-                </div>
-              </div>
-            </section>
-            <section aria-labelledby="appearance-type">
-              <h3 id="appearance-type">{t("Typography")}</h3>
-              <div className="appearance-card appearance-type">
-                {textRoles.map((role) => {
-                  const size = fontSizes[role];
-                  return (
-                    <div className="appearance-type-row" key={role}>
-                      <strong>{t(labels[role])}</strong>
-                      <FontPicker
-                        role={role}
-                        value={value.styles[role].font}
-                        imports={value.imports}
-                        families={families}
-                        scanning={scanning}
-                        scan={scan}
-                        change={(font) => changeStyle(role, { font })}
-                        add={(id, name) =>
-                          save((current) => ({
-                            ...current,
-                            imports: { ...current.imports, [id]: name },
-                            styles: {
-                              ...current.styles,
-                              [role]: {
-                                ...current.styles[role],
-                                font: "file:" + id,
-                              },
-                            },
-                          }))
-                        }
-                      />
-                      <FieldSelect
-                        className="appearance-size"
-                        aria-label={t("{section} size", {
-                          section: t(labels[role]),
-                        })}
-                        value={String(value.styles[role].size)}
-                        onValueChange={(v) =>
-                          changeStyle(role, { size: Number(v) })
-                        }
-                      >
-                        {Array.from(
-                          { length: size.max - size.min + 1 },
-                          (_, i) => size.min + i,
-                        ).map((n) => (
-                          <option key={n} value={String(n)}>
-                            {n} px
-                          </option>
-                        ))}
-                      </FieldSelect>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-            <section className="appearance-preview" aria-label={t("Preview")}>
-              <div>
-                <Type size={15} />
-                {t("Preview")}
-              </div>
-              <p>{t("The first line of your next conversation.")}</p>
-              <code>const team = "TeamSwarm";</code>
-            </section>
-            {error && (
-              <p role="alert" className="form-error">
-                {t(error)}
-              </p>
-            )}
-          </div>
-          <div className="form-footer">
-            <button
-              type="button"
-              className="text-button"
-              onClick={() =>
-                save((current) => ({ ...defaults(), imports: current.imports }))
-              }
-            >
-              {t("Restore defaults")}
-            </button>
-            <button type="button" className="secondary-button" onClick={close}>
-              {t("Done")}
-            </button>
-          </div>
-        </Tabs.Content>
+          </Tabs.Content>
+          <Tabs.Content value="runtime" className="settings-pane">
+            <ManualExecutionSettings
+              embedded
+              open
+              teamId={teamId}
+              workspace={workspace}
+              onClose={close}
+              onConfigureModels={() => setPage("global:connections")}
+            />
+          </Tabs.Content>
+          {(["global", "team"] as const).map((scope) => {
+            const activeTab = capabilityTabs.find(
+              ([key]) => page === `${scope}:${key}`,
+            )?.[0];
+            return (
+              <section
+                key={scope}
+                hidden={!activeTab}
+                role={activeTab ? "tabpanel" : undefined}
+                aria-label={t(
+                  scope === "team"
+                    ? "Team configuration"
+                    : "Global capabilities",
+                )}
+              >
+                <CapabilitySettings
+                  embedded
+                  open
+                  scope={scope}
+                  teamId={teamId}
+                  workspace={workspace}
+                  activeTab={activeTab}
+                  onClose={close}
+                />
+              </section>
+            );
+          })}
+        </div>
       </Tabs.Root>
     </Modal>
   );

@@ -100,7 +100,8 @@ const clip = (value: string, limit: number) =>
 export function unfinishedHostTurns(runtime: TeamRuntime, run: Run, currentAttemptId: string, limit = 2) {
   const store = runtime.store;
   const hosts = new Set(store.list<Member>("members", run.teamId).filter(m => m.kind === "host").map(m => m.id));
-  const runs = new Map(store.list<Run>("runs", run.teamId).filter(r => r.conversationId === run.conversationId).map(r => [r.id, r]));
+  const activeMessages = new Set(store.db.prepare("SELECT id FROM messages WHERE conversation_id=? AND retired_by IS NULL").all(run.conversationId).map(row=>String(row.id)));
+  const runs = new Map(store.list<Run>("runs", run.teamId).filter(r => r.conversationId === run.conversationId && activeMessages.has(r.sourceMessageId)).map(r => [r.id, r]));
   const works = new Map(store.list<Work>("works", run.teamId)
     .filter(w => runs.has(w.runId) && hosts.has(w.memberId) && w.kind !== "host-followup" && w.kind !== "collaboration")
     .map(w => [w.id, w]));

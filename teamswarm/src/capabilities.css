@@ -165,7 +165,7 @@
   border-top: 1px solid var(--line);
 }
 .cap-harness.selected {
-  background: var(--accent-wash);
+  background: var(--hover);
 }
 .cap-harness-row {
   display: flex;
@@ -863,8 +863,24 @@
   }
 }
 
-.cap-inherit {
-  margin: 12px 24px 0;
+.cap-footer .cap-inherit {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--secondary);
+  font-size: calc(13px * var(--font-scale));
+}
+.cap-footer .cap-inherit input {
+  width: auto;
+  flex: none;
+}
+@media (max-width: 560px) {
+  .cap-footer {
+    flex-wrap: wrap;
+  }
+  .cap-footer > div {
+    min-width: 0;
+  }
 }
 .cap-body[inert] {
   opacity: 0.68;

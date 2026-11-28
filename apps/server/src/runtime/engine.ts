@@ -1413,6 +1413,8 @@ export class TeamRuntime {
       attempt.toolContractVersion = hash(JSON.stringify({ tools: executionTools, transport: !nativeHost && attempt.config.harness === "codex" ? codexTeamToolContract(executionTools) : null, ...(nativeHost ? { executor: TEAM_HOST_EXECUTOR, probe: selectedProbe ?? null } : {}), writePaths: writePaths ?? null, workspace, permissions: attempt.config.permissions ?? null, hostMode: member.kind === "host" ? hostMode(work.kind) : null, dialogueContract: 5, contextWindow: windowBinding(attempt.contextWindow), ...(skillScope.length ? { hostSkillScope: skillScope } : {}), ...(mounted.length ? { skillMounts: mounted } : {}), ...(mcpScope.length ? { mcpMounts: mcpScope } : {}) }));
       attempt.nativeSessionScope = harness.sessionScope;
       this.store.save("attempts", attempt);
+      const cut = member.kind === "host" ? this.store.db.prepare("SELECT max(cutoff) AS n FROM conversation_revisions WHERE conversation_id=?").get(run.conversationId)?.n : null;
+      const previousSource = this.store.db.prepare("SELECT rowid AS n FROM messages WHERE id=? AND retired_by IS NULL");
       const priorAttempts =
         (member.kind === "host" || work.continuation || work.interaction || work.continuationOf) &&
         !(
@@ -1443,6 +1445,7 @@ export class TeamRuntime {
                     work.teamId,
                     this.store.get<Work>("works", work.teamId, a.workId).runId,
                   ).conversationId === run.conversationId &&
+                  (cut == null || Number(previousSource.get(this.store.get<Run>("runs", work.teamId, this.store.get<Work>("works", work.teamId, a.workId).runId).sourceMessageId)?.n ?? 0) > Number(cut)) &&
                   canReuseSession(a.config, attempt.config);
       const mostRecent = priorAttempts.find(sameConversation);
       let previous = mostRecent?.executor === attempt.executor
@@ -4060,6 +4063,8 @@ export class TeamRuntime {
       );
     const member = this.store.activeMember(teamId, work.memberId);
     const run = this.store.get<Run>("runs", teamId, work.runId);
+    if (member.kind === "host" && this.store.db.prepare("SELECT retired_by FROM messages WHERE id=? AND conversation_id=?").get(run.sourceMessageId, run.conversationId)?.retired_by)
+      throw conflict("conversation_changed", "The conversation changed. Review the current messages and try again.");
     this.assertWriteAssignment(work, run);
     const resolved = resolveExecution({ store: this.store, catalog: this.catalog }, teamId, member, work);
     if (resolved.conflict) throw conflict("execution_configuration_changed", resolved.conflict);

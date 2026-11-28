@@ -66,6 +66,9 @@ export type Chat = {
   messages: Message[];
   /** Opaque record ID for fetching the next older message page. */
   historyBefore?: string;
+  historyHead?: string | null;
+  historyRevision?: string;
+  hasRevisions?: boolean;
   createdAt: number;
   starred: boolean;
   archived?: boolean;
@@ -302,6 +305,8 @@ export type Workspace = {
   name: string;
   theme: "light" | "dark" | "system";
   contextWindowPreset?: ContextWindowPreset;
+  sendKey?: "enter" | "mod-enter";
+  codeWrap?: boolean;
   language: "en" | "zh-CN";
   teams: Team[];
   chats: Chat[];
@@ -314,7 +319,7 @@ export type Workspace = {
   updates?: Delivery[];
   plugins: Plugin[];
   eventIds?: string[];
-  service?: { revision: number; migrated: boolean; manualResourceConfiguration?: boolean };
+  service?: { revision: number; migrated: boolean; version?: string; build?: { commit: string; sourceSha256: string }; manualResourceConfiguration?: boolean };
   executions?: Record<string, TeamExecution>;
   projectNodes?: ProjectNode[];
   projectBranches?: ProjectBranch[];

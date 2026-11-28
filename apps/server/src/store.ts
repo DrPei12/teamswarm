@@ -247,6 +247,12 @@ export class TeamStore {
     `);
     // A removed team keeps its rows so references stay valid, but every read
     // below treats it as absent. Archived teams remain readable.
+    if (!this.all('PRAGMA table_info(messages)').some(row => row.name === 'retired_by'))
+      this.db.exec('ALTER TABLE messages ADD COLUMN retired_by TEXT');
+    this.db.exec(`CREATE TABLE IF NOT EXISTS conversation_revisions (
+      id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+      anchor_id TEXT NOT NULL, mode TEXT NOT NULL, cutoff INTEGER NOT NULL, created_at TEXT NOT NULL
+    ); CREATE INDEX IF NOT EXISTS conversation_revisions_chat ON conversation_revisions(conversation_id);`);
     const columns = new Set(this.all('PRAGMA table_info(teams)').map(row => String(row.name)));
     if (!columns.has('archived_at')) this.db.exec('ALTER TABLE teams ADD COLUMN archived_at TEXT');
     if (!columns.has('deleted_at')) this.db.exec('ALTER TABLE teams ADD COLUMN deleted_at TEXT');
@@ -454,7 +460,7 @@ export class TeamStore {
     if (!conversation) return undefined;
     if (page) {
       const limit = Math.max(1, Math.min(100, page.limit));
-      const cursor = page.before ? this.one('SELECT created_at, rowid AS seq FROM messages WHERE id=? AND conversation_id=?', page.before, conversationId) : undefined;
+      const cursor = page.before ? this.one('SELECT created_at, rowid AS seq FROM messages WHERE id=? AND conversation_id=? AND retired_by IS NULL', page.before, conversationId) : undefined;
       if (page.before && !cursor) return undefined;
       const rows = cursor
         ? this.all(`SELECT * FROM messages WHERE conversation_id=? AND ${conversationMessageSql} AND (created_at < ? OR (created_at=? AND rowid < ?)) ORDER BY created_at DESC, rowid DESC LIMIT ?`, conversationId, String(cursor.created_at), String(cursor.created_at), Number(cursor.seq), limit + 1)

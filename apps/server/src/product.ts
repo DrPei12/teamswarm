@@ -1,5 +1,6 @@
 import {contextWindowPresetIds,type ContextWindowPreset} from "@team/contracts/context-window";
 import {memberContextWindow} from "./runtime/context-window.js";
+import { productBuild, productVersion } from "./version.js";
 import { hostExecution, projectHostExecutions } from "./host-execution.js";
 import { contextWindowUsage } from "./product-context.js";
 import { permissionCatalog, mergePermissionChoice } from "./runtime/permission-options.js";
@@ -40,8 +41,11 @@ import type {
   TeamExchange,
   Member as RuntimeMember,
 } from "@team/contracts/runtime";
+import { conversationHead, conversationRevisions, reviseConversation } from "./conversation-revisions.js";
 import { saveProductCredential } from "./product-credentials.js";
 import { stageAttachment } from "./attachments.js";
+import { answerSideQuestion } from "./runtime/harness/team-host.js";
+import { supportsTeamHost, teamHostModelConfig } from "./runtime/model-routing.js";
 import { CodexHarness } from "./runtime/harness/codex.js";
 import type { TeamRuntime } from "./runtime/engine.js";
 import { definitionInput } from "./runtime/project-history.js";
@@ -57,6 +61,8 @@ import {
 
 type Preferences = {
   contextWindowPreset?: ContextWindowPreset;
+  sendKey?: Workspace["sendKey"];
+  codeWrap?: boolean;
   name: string;
   theme: Workspace["theme"];
   language: Workspace["language"];
@@ -306,6 +312,8 @@ export class ProductStore {
       theme: p.theme,
       language: p.language,
       contextWindowPreset: p.contextWindowPreset ?? "auto",
+      sendKey: p.sendKey ?? "enter",
+      codeWrap: p.codeWrap ?? true,
       teams: [],
       chats: [],
       skills: p.skills,
@@ -316,7 +324,7 @@ export class ProductStore {
       connections: [],
       deliveries: [],
       updates: [],
-      service: { revision, migrated: true, manualResourceConfiguration: this.runtime.catalog.manualResourceConfiguration },
+      service: { revision, migrated: true, version: productVersion, ...(productBuild ? { build: productBuild } : {}), manualResourceConfiguration: this.runtime.catalog.manualResourceConfiguration },
       executions: {},
       projectNodes: [],
       projectBranches: [],
@@ -385,7 +393,8 @@ export class ProductStore {
         hostProbeConfig: hostMember.hostSelections?.[activeBranch]?.hostProbeConfig,
       };
       const currentChat = prefs.lastChatId ?? mainChatId;
-      const dialogueRunIds = new Set(state.runs.filter(r => r.conversationId === currentChat).map(r => r.id));
+      const sourceIsVisible = this.db.prepare("SELECT 1 FROM messages WHERE id=? AND retired_by IS NULL");
+      const dialogueRunIds = new Set(state.runs.filter(r => r.conversationId === currentChat && sourceIsVisible.get(r.sourceMessageId)).map(r => r.id));
       const dialogueWorks = new Set(state.works.filter(w => dialogueRunIds.has(w.runId) && w.memberId === hostId &&
         w.kind !== "host-followup" && w.kind !== "collaboration").map(w => w.id));
       const contextAttempt = attempts.filter(a => a.memberId === hostId && dialogueWorks.has(a.workId)).at(-1);
@@ -502,6 +511,9 @@ export class ProductStore {
           createdAt: Date.parse(conversation.createdAt),
           messages,
           historyBefore: detail.historyBefore,
+          historyHead: conversationHead(this.runtime, conversation.id),
+          historyRevision: this.db.prepare("SELECT id FROM conversation_revisions WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1").get(conversation.id)?.id as string | undefined,
+          hasRevisions: !!this.db.prepare("SELECT 1 FROM conversation_revisions WHERE conversation_id=? LIMIT 1").get(conversation.id),
           branchId: branch.id,
           workspace: branch.workspace ?? settings?.workspace,
           kind: this.db.prepare("SELECT kind FROM product_chat_kind WHERE conversation_id=?").get(conversation.id)?.kind as Chat["kind"],
@@ -850,6 +862,57 @@ export class ProductStore {
 export function productRoutes(runtime: TeamRuntime): Router {
   const router = Router();
   const product = new ProductStore(runtime);
+  const sideQuestions = new Set<string>();
+  router.post("/product/conversations/:id/btw", async (req,res) => {
+    const id = parse(key,req.params.id);
+    const input = parse(z.object({ teamId: key, question: z.string().trim().min(1).max(4000) }).strict(),req.body);
+    const branch = runtime.history.forConversation(input.teamId,id);
+    if (product.read().preferences.chats[id]?.archived) throw notFound();
+    const detail = runtime.store.teams.getConversationDetail(input.teamId,id,{limit:50});
+    if (!detail) throw notFound();
+    const host = runtime.store.list<RuntimeMember>("members",input.teamId).find(m=>m.kind==="host");
+    if (!host) throw notFound();
+    const config = runtime.catalog.memberExecution(input.teamId,branch.id,host).config;
+    const allowed = () => {
+      const caps = runtime.catalog.capabilities.read(input.teamId);
+      const linkedAccount = config.chatgptAccountId && caps.inheritsDefaults !== false &&
+        !caps.connections.some(connection => connection.chatgptAccountId === config.chatgptAccountId);
+      return !!linkedAccount || runtime.catalog.capabilities.allowed(input.teamId,config);
+    };
+    if (!supportsTeamHost(config) || !allowed())
+      throw conflict("side_model_unavailable", "Choose a direct API or connected ChatGPT model for /btw.");
+    const workspace = branch.workspace ?? runtime.store.settings(input.teamId)?.workspace;
+    if (!workspace) throw conflict("runtime_not_configured", "Configure the Team runtime first.");
+    if (runtime.isClosing || sideQuestions.has(id) || sideQuestions.size >= 4)
+      throw conflict("side_question_busy", "Wait for the current side question or cancel it.");
+    sideQuestions.add(id);
+    const cancel = new AbortController();
+    const abort = () => cancel.abort();
+    res.once("close",abort);
+    res.type("application/x-ndjson");
+    res.set("Cache-Control","no-store");
+    res.flushHeaders();
+    const send = (event: object) => { if (!res.destroyed) res.write(JSON.stringify(event)+"\n"); };
+    try {
+      await answerSideQuestion(runtime.models,teamHostModelConfig(config),workspace,
+        detail.messages.filter(m=>m.delivery==="recorded" && (m.role==="user" || m.role==="assistant"))
+          .map(m=>({role:m.role,content:m.content.slice(0,12000)})),
+        input.question,AbortSignal.any([cancel.signal,AbortSignal.timeout(60000)]),delta=>send({delta}), () => {
+          if (runtime.isClosing || product.read().preferences.chats[id]?.archived || !allowed())
+            throw conflict("side_question_revoked", "The conversation or model connection is no longer available.");
+          const current = runtime.store.list<RuntimeMember>("members",input.teamId).find(m=>m.kind==="host");
+          if (!current || !isDeepStrictEqual(config,runtime.catalog.memberExecution(input.teamId,branch.id,current).config))
+            throw conflict("side_question_revoked", "The Host model changed. Ask the question again.");
+        });
+      send({done:true});
+    } catch {
+      send({error:"The side question could not be completed. Check the model connection and try again."});
+    } finally {
+      sideQuestions.delete(id);
+      res.off("close",abort);
+      if(!res.destroyed) res.end();
+    }
+  });
   router.get("/product/teams/:teamId/snapshot", (req,res) => res.json(product.teamSnapshot(parse(key,req.params.teamId))));
   router.post(
     "/product/teams/:teamId/deliveries/:deliveryId/view",
@@ -1530,45 +1593,42 @@ export function productRoutes(runtime: TeamRuntime): Router {
     });
     res.status(201).json(result);
   });
+  router.post("/product/conversations/:id/revisions", (req, res) => {
+    const id = parse(key, req.params.id);
+    const input = parse(z.object({ teamId: key, anchor: key, expectedHead: key, mode: z.enum(["edit","rewind"]),
+      content: z.string().trim().min(1).max(20000).optional(), clientRequestId: key }).strict(), req.body);
+    runtime.history.forConversation(input.teamId,id);
+    if (product.read().preferences.chats[id]?.archived) throw notFound();
+    const result = reviseConversation(runtime,input.teamId,id,input);
+    if (result.messageId) runtime.enqueue(input.teamId,id,result.messageId);
+    res.status(201).json(result);
+  });
+  router.get("/product/conversations/:id/revisions", (req, res) => {
+    const id = parse(key, req.params.id);
+    const { teamId, revision, before } = parse(z.object({ teamId: key, revision: key.optional(), before: key.optional() }), req.query);
+    res.json(conversationRevisions(runtime,teamId,id,revision,before));
+  });
   router.post("/product/conversations/:id/fork", (req, res) => {
     const parentId = parse(key, req.params.id);
     const input = parse(z.object({
       clientRequestId: key, teamId: key, title: z.string().trim().min(1).max(160),
-      kind: z.enum(["branch", "side", "edit"]), messageId: key.optional(), content: z.string().trim().min(1).max(20000).optional(),
+      kind: z.literal("branch"), messageId: key.optional(),
     }).strict(), req.body);
     const teamId = input.teamId;
     const kickoff = runtime.store.once(`conversation-fork:${teamId}`, input.clientRequestId, { ...input, parentId }, () => {
       const parent = runtime.history.forConversation(teamId, parentId);
       if (product.read().preferences.chats[parentId]?.archived) throw notFound();
-      if (input.kind === "side" && product.db.prepare("SELECT 1 FROM product_independent_team WHERE team_id=?").get(teamId))
-        throw conflict("project_required", "Open a Team conversation to create a side chat.");
-      const editing = input.kind === "edit";
-      if (editing && (!input.messageId || !input.content)) throw badRequest("invalid_input", "Select a user message and enter the revised text.");
       const source = runtime.store.list<RuntimeMember>("members", teamId).find(m => m.kind === "host");
       if (!source) throw notFound();
       const current = runtime.catalog.memberExecution(teamId, parent.id, source).config;
-      const result = runtime.history.forkConversation(teamId, parentId, input.title, input.messageId, editing);
+      const result = runtime.history.forkConversation(teamId, parentId, input.title, input.messageId);
       const preset = "read-only";
       const config = runtime.memberPermissions.configuration(teamId, current, preset);
       source.hostSelections = { ...source.hostSelections, [result.branch.id]: { revision: 1, selection: null, config, permissionPreset: preset } };
       runtime.store.save("members", source);
-      product.db.prepare("INSERT INTO product_chat_kind VALUES(?,?)").run(result.conversation.id, input.kind === "side" ? "side" : "branch");
-      let messageId: string | undefined;
-      if (editing) {
-        const recorded = runtime.store.teams.recordMessage(teamId, result.conversation.id, input.content!, input.clientRequestId, message => {
-          const previous = product.db.prepare("SELECT data FROM product_message_details WHERE message_id=?").get(input.messageId!);
-          if (previous) {
-            const details = JSON.parse(String(previous.data));
-            delete details.legacyId;
-            product.db.prepare("INSERT INTO product_message_details VALUES(?,?)").run(message.id, JSON.stringify(details));
-          }
-          runtime.store.enqueueHost(teamId, result.conversation.id, message.id, true, false);
-        });
-        messageId = recorded?.message.id;
-      }
-      return { id: result.conversation.id, teamId, messageId };
+      product.db.prepare("INSERT INTO product_chat_kind VALUES(?, 'branch')").run(result.conversation.id);
+      return { id: result.conversation.id, teamId };
     });
-    if (kickoff.messageId) runtime.enqueue(teamId, kickoff.id, kickoff.messageId);
     res.status(201).json(kickoff);
   });
   router.delete("/product/conversations/:id", (req, res) => {
@@ -1627,6 +1687,8 @@ export function productRoutes(runtime: TeamRuntime): Router {
           theme: z.enum(["light", "dark", "system"]).optional(),
           language: z.enum(["en", "zh-CN"]).optional(),
           contextWindowPreset: z.enum(contextWindowPresetIds).optional(),
+          sendKey: z.enum(["enter","mod-enter"]).optional(),
+          codeWrap: z.boolean().optional(),
           drafts: z
             .record(z.string().max(200), draftInput.nullable())
             .optional(),
@@ -1689,6 +1751,8 @@ export function productRoutes(runtime: TeamRuntime): Router {
         "theme",
         "language",
         "contextWindowPreset",
+        "sendKey",
+        "codeWrap",
         "skills",
         "plugins",
         "readDeliveries",

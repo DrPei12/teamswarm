@@ -707,6 +707,32 @@ test("global connections flow to new Teams while an override can opt out and rej
       inheritsDefaults: true,
     }, "PUT")).status, 200);
     assert.equal(service.runtime.catalog.capabilities.combinations(team.id)[0].config.model, "second");
+
+    const enabled = (await request(teamRoute)).body;
+    assert.equal((await request(overrideRoute, {
+      ...override, expectedVersion: enabled.version, expectedGlobalVersion: enabled.globalVersion,
+      inheritsDefaults: false,
+      connections: enabled.connections.map(c => ({ ...c, enabled: true })),
+    }, "PUT")).status, 200);
+    const global = (await request(route)).body;
+    assert.equal((await request(route, { ...change, expectedVersion: global.version,
+      connections: global.connections.map(c => ({ ...c, enabled: false })),
+    }, "PUT")).status, 200);
+    const suppressed = (await request(teamRoute)).body;
+    assert.equal(suppressed.connections[0].enabled, false);
+    assert.deepEqual(suppressed.globallyDisabledConnectionIds, [suppressed.connections[0].id]);
+    assert.equal(service.runtime.catalog.capabilities.combinations(team.id).length, 0);
+    assert.equal(service.runtime.catalog.capabilities.combinations(other.id).length, 0);
+    assert.equal((await request(overrideRoute, {
+      ...override, expectedVersion: suppressed.version, expectedGlobalVersion: suppressed.globalVersion,
+      connections: suppressed.connections,
+    }, "PUT")).status, 200);
+    const disabled = (await request(route)).body;
+    assert.equal((await request(route, { ...change, expectedVersion: disabled.version,
+      connections: disabled.connections.map(c => ({ ...c, enabled: true })),
+    }, "PUT")).status, 200);
+    assert.equal(service.runtime.catalog.capabilities.combinations(team.id)[0].config.model, "second");
+    assert.equal(service.runtime.catalog.capabilities.combinations(other.id)[0].config.model, "second");
   } finally {
     await fixture.close();
   }

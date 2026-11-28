@@ -230,12 +230,23 @@ try {
   const secondaryModel = picker.getByRole("button", {
     name: /qwen-plus.*secondary connection/,
   });
+  const enterProvider = (name) =>
+    picker.getByRole("button", { name: new RegExp(`^${name} \\d+$`) }).click();
+  const backToProviders = () =>
+    picker
+      .getByRole("button", { name: "Back to providers", exact: true })
+      .click();
   await modelMenu();
-  await primaryModel.waitFor();
+  await enterProvider("DeepSeek");
   await picker
     .getByRole("button", { name: /deepseek-chat.*primary connection/ })
     .waitFor();
+  await backToProviders();
+  await enterProvider("xAI");
   await picker.getByRole("button", { name: /grok fixture/ }).waitFor();
+  await backToProviders();
+  await enterProvider("Qwen");
+  await primaryModel.waitFor();
   const save = () =>
     page.waitForResponse(
       (r) =>
@@ -257,6 +268,7 @@ try {
   await page.keyboard.press("Escape");
   await page.reload();
   await modelMenu();
+  await enterProvider("Qwen");
   assert.equal(await secondaryModel.getAttribute("aria-pressed"), "true");
   assert.equal(await primaryModel.getAttribute("aria-pressed"), "false");
   await page.keyboard.press("Escape");
@@ -629,17 +641,21 @@ try {
   await page.keyboard.press("Escape");
   await teamCapabilities.waitFor({ state: "hidden" });
   await modelMenu();
+  await enterProvider("OpenAI");
   await picker.getByRole("button", { name: /codex fixture/ }).waitFor();
+  await backToProviders();
   assert.equal(
-    await picker.getByRole("button", { name: /claude-code fixture/ }).count(),
+    await picker.getByRole("button", { name: /^Anthropic \d+$/ }).count(),
     0,
   );
   assert.equal((await hostConfig()).harness, "pi");
   await page.reload();
   await modelMenu();
+  await enterProvider("OpenAI");
   await picker.getByRole("button", { name: /codex fixture/ }).waitFor();
+  await backToProviders();
   assert.equal(
-    await picker.getByRole("button", { name: /claude-code fixture/ }).count(),
+    await picker.getByRole("button", { name: /^Anthropic \d+$/ }).count(),
     0,
   );
   const legacyTeam = await request("/product/teams", {
@@ -694,10 +710,19 @@ try {
     true,
   );
   await modelMenu();
-  await picker.waitFor();
+  await enterProvider("OpenAI");
   await picker.getByRole("button", { name: /codex fixture/ }).waitFor();
+  await backToProviders();
+  await enterProvider("Anthropic");
   await picker.getByRole("button", { name: /claude-code fixture/ }).waitFor();
+  await backToProviders();
+  await enterProvider("xAI");
   await picker.getByRole("button", { name: /grok fixture/ }).waitFor();
+  await backToProviders();
+  await picker
+    .getByRole("textbox", { name: "Search models" })
+    .fill("qwen-plus");
+  await picker.getByText("No matching models", { exact: true }).waitFor();
   assert.equal(
     await picker.getByRole("button", { name: /qwen-plus/ }).count(),
     0,

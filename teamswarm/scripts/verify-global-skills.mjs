@@ -125,10 +125,19 @@ try {
   const button = (name) => page.getByRole("button", { name, exact: true });
   const open = async (global) => {
     if (global) {
-      await button("Workspace menu").click();
-      await page.getByRole("menuitem", { name: "Global capabilities" }).click();
-    } else await button("Team capabilities").click();
-    await page.getByRole("tab", { name: "Text skills" }).click();
+      await button("Application menu").click();
+      await page
+        .getByRole("menuitem", { name: "Settings", exact: true })
+        .click();
+      await page
+        .locator(".settings-nav-group")
+        .filter({ hasText: "Global capabilities" })
+        .getByRole("tab", { name: "Text skills", exact: true })
+        .click();
+    } else {
+      await button("Team capabilities").click();
+      await page.getByRole("tab", { name: "Text skills", exact: true }).click();
+    }
   };
   const close = async () => {
     await page.keyboard.press("Escape");

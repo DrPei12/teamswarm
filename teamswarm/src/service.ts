@@ -264,7 +264,7 @@ class ProductClient {
   private flushing?: Promise<void>;
   private historyPages = new Map<
     string,
-    Pick<Chat, "messages" | "historyBefore">
+    Pick<Chat, "messages" | "historyBefore" | "historyRevision">
   >();
   private loadingHistory = new Map<string, Promise<void>>();
   private withHistory(workspace: Workspace): Workspace {
@@ -273,6 +273,10 @@ class ProductClient {
       chats: workspace.chats.map((chat) => {
         const saved = this.historyPages.get(chat.id);
         if (!saved) return chat;
+        if (saved.historyRevision !== chat.historyRevision) {
+          this.historyPages.delete(chat.id);
+          return chat;
+        }
         const messages = [
           ...new Map(
             [...saved.messages.filter((m) => !m.pending), ...chat.messages].map(
@@ -283,6 +287,7 @@ class ProductClient {
         this.historyPages.set(chat.id, {
           messages,
           historyBefore: saved.historyBefore,
+          historyRevision: chat.historyRevision,
         });
         return { ...chat, messages, historyBefore: saved.historyBefore };
       }),
@@ -300,7 +305,12 @@ class ProductClient {
       const current = this.state.workspace;
       if (!current) return;
       const latest = current.chats.find((c) => c.id === chatId);
-      if (!latest) return;
+      if (
+        !latest ||
+        latest.historyRevision !== chat.historyRevision ||
+        page.historyRevision !== latest.historyRevision
+      )
+        return;
       const messages = [
         ...new Map(
           [...page.messages, ...latest.messages.filter((m) => !m.pending)].map(
@@ -311,6 +321,7 @@ class ProductClient {
       this.historyPages.set(chatId, {
         messages,
         historyBefore: page.historyBefore,
+        historyRevision: latest.historyRevision,
       });
       this.emit({ workspace: this.withHistory(current) });
     })();
@@ -1024,6 +1035,8 @@ class ProductClient {
     name?: string;
     language?: Workspace["language"];
     contextWindowPreset?: ContextWindowPreset;
+    sendKey?: Workspace["sendKey"];
+    codeWrap?: boolean;
   }) {
     if (!Object.keys(settings).length) return;
     await this.command("/product/preferences", settings, "PATCH");

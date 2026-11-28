@@ -419,7 +419,7 @@ export class HostContext {
   }
   private rotationDialogue(run: Run, work: Work): HandoffMessage[] {
     return this.store.db.prepare(`SELECT m.id,m.role,m.content FROM messages m JOIN messages boundary ON boundary.id=?
-      WHERE m.conversation_id=? AND m.rowid<=boundary.rowid AND (m.role='user' OR m.role='assistant' AND EXISTS (
+      WHERE m.conversation_id=? AND m.retired_by IS NULL AND m.rowid<=boundary.rowid AND (m.role='user' OR m.role='assistant' AND EXISTS (
         SELECT 1 FROM runtime_attempts a JOIN runtime_works w ON w.team_id=a.team_id AND w.id=json_extract(a.data,'$.workId')
         WHERE a.team_id=? AND a.id=substr(m.client_request_id,9) AND m.client_request_id LIKE 'runtime:%'
         AND json_extract(a.data,'$.memberId')=? AND json_extract(a.data,'$.outcome.status')='completed'
@@ -483,11 +483,11 @@ export class HostContext {
     if (!compaction) return;
     const from = JSON.parse(String(compaction.data)).sourceMessageId;
     if (typeof from !== "string") return;
-    const anchor = this.store.db.prepare("SELECT rowid AS seq FROM messages WHERE conversation_id=? AND id=? AND role='user'");
+    const anchor = this.store.db.prepare("SELECT rowid AS seq FROM messages WHERE conversation_id=? AND id=? AND retired_by IS NULL AND role='user'");
     const lower = anchor.get(run.conversationId, from), upper = anchor.get(run.conversationId, run.sourceMessageId);
     if (!lower || !upper || Number(lower.seq) >= Number(upper.seq)) return;
     const rows = this.store.db.prepare(`SELECT m.id,m.role,m.content FROM messages m
-      WHERE m.conversation_id=? AND m.rowid BETWEEN ? AND ? AND (m.role='user' OR m.role='assistant' AND EXISTS (
+      WHERE m.conversation_id=? AND m.retired_by IS NULL AND m.rowid BETWEEN ? AND ? AND (m.role='user' OR m.role='assistant' AND EXISTS (
         SELECT 1 FROM runtime_attempts a JOIN runtime_works w ON w.team_id=a.team_id AND w.id=json_extract(a.data,'$.workId')
         WHERE a.team_id=? AND a.id=substr(m.client_request_id,9)
           AND m.client_request_id LIKE 'runtime:%' AND json_extract(a.data,'$.memberId')=? AND json_extract(a.data,'$.outcome.status')='completed'
@@ -500,7 +500,7 @@ export class HostContext {
     }
     const preBoundaryLimit = 12;
     const earlier = this.store.db.prepare(`SELECT id,content FROM messages
-      WHERE conversation_id=? AND role='user' AND rowid<? ORDER BY rowid DESC LIMIT ?`)
+      WHERE conversation_id=? AND retired_by IS NULL AND role='user' AND rowid<? ORDER BY rowid DESC LIMIT ?`)
       .all(run.conversationId, Number(lower.seq), preBoundaryLimit + 1);
     const earlierUserMessages = earlier.slice(0, preBoundaryLimit).map(row => {
       const content = String(row.content);
@@ -796,7 +796,7 @@ export class HostContext {
     }) : [];
     const coordinationRequest = coordinating && incoming.sourceMessageId === run.sourceMessageId
       ? this.store.db.prepare(`SELECT id,role,substr(content,1,1600) AS content,length(content) AS characters FROM messages
-          WHERE id=? AND conversation_id=? AND role='user' AND delivery IS NOT 'example'`).get(run.sourceMessageId, run.conversationId)
+          WHERE id=? AND conversation_id=? AND retired_by IS NULL AND role='user' AND delivery IS NOT 'example'`).get(run.sourceMessageId, run.conversationId)
       : undefined;
     const originalRequest = coordinationRequest && (coordinationRequest.characters !== work.instructions.length || coordinationRequest.content !== work.instructions)
       ? { id: String(coordinationRequest.id), role: String(coordinationRequest.role), content: String(coordinationRequest.content),

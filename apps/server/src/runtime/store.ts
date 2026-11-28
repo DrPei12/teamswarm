@@ -1364,9 +1364,10 @@ export class RuntimeStore {
   }
   appendAssistant(run: Run, content: string, receiptId: string): void {
     if (!content.trim()) return;
+    const retired = this.db.prepare("SELECT retired_by FROM messages WHERE conversation_id=? AND id=?").get(run.conversationId,run.sourceMessageId)?.retired_by;
     this.db
       .prepare(
-        "INSERT OR IGNORE INTO messages(id, conversation_id, role, content, created_at, delivery, client_request_id) VALUES (?, ?, 'assistant', ?, ?, 'recorded', ?)",
+        "INSERT OR IGNORE INTO messages(id, conversation_id, role, content, created_at, delivery, client_request_id, retired_by) VALUES (?, ?, 'assistant', ?, ?, 'recorded', ?, ?)",
       )
       .run(
         randomUUID(),
@@ -1374,6 +1375,7 @@ export class RuntimeStore {
         content,
         timestamp(),
         `runtime:${receiptId}`,
+        retired ?? null,
       );
     this.db
       .prepare("UPDATE conversations SET updated_at = ? WHERE id = ?")

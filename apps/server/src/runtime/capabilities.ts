@@ -170,10 +170,11 @@ export class CapabilityStore {
         version: override?.version ?? global.version,
         globalVersion: global.version,
         inheritsDefaults,
+        globallyDisabledConnectionIds: global.connections.filter(c => !c.enabled).map(c => projectedId(c.id)),
         enabledHarnesses: inheritsDefaults ? global.enabledHarnesses : override!.enabledHarnesses,
         connections: global.connections.map(c => ({
           ...c, id: projectedId(c.id),
-          enabled: inheritsDefaults ? c.enabled : override!.enabled[c.id] ?? false,
+          enabled: c.enabled && (inheritsDefaults || override!.enabled[c.id] === true),
         })),
         preferences: { ...preferences, workerPolicy: preferences.workerPolicy ?? "request" },
       };
@@ -316,14 +317,18 @@ export class CapabilityStore {
       if (input.expectedVersion !== old.version || input.expectedGlobalVersion !== global.version)
         throw conflict("version_conflict", "Settings changed. Reload before saving.");
       this.validate(input);
-      const aliases = this.readOverride(teamId)?.aliases ?? {};
+      const previous = this.readOverride(teamId);
+      const aliases = previous?.aliases ?? {};
       const reserved = new Set(Object.values(aliases));
-      const sharedIds = new Map(global.connections.map(c => [aliases[c.id] ?? (reserved.has(c.id) ? "global-" + hash(c.id).slice(0, 32) : c.id), c.id]));
+      const shared = new Map(global.connections.map(c => [aliases[c.id] ?? (reserved.has(c.id) ? "global-" + hash(c.id).slice(0, 32) : c.id), c]));
       const enabled: Record<string, boolean> = Object.create(null);
       for (const c of input.connections) {
-        const id = sharedIds.get(c.id);
-        if (id) enabled[id] = c.enabled;
+        const globalConnection = shared.get(c.id);
+        if (globalConnection?.enabled) enabled[globalConnection.id] = c.enabled;
       }
+      // The global switch suppresses a connection, not a team's saved choice.
+      for (const c of global.connections) if (!c.enabled && previous?.enabled[c.id] !== undefined)
+        enabled[c.id] = previous.enabled[c.id];
       this.writeOverride(teamId, {
         version: old.version + 1, inheritsDefaults: input.inheritsDefaults,
         enabledHarnesses: input.enabledHarnesses, preferences: input.preferences, enabled, aliases,

@@ -103,6 +103,12 @@ Open **Results and reasoning**, open **Current results**, expand a file and use 
 
 ## Conversation context
 
+Hover over or focus a sent message to branch, rewind, edit or copy it. **Send** on a revised message keeps the same chat and gets a fresh reply. **Rewind** brings the selected message back to the composer without sending it. Earlier versions are available through the chat menu; project files and completed work stay unchanged.
+
+Use `/btw question` or the side-chat button to open a right-hand pane. Click **+** to open another tab. Hiding the pane preserves tabs and drafts locally; closing a tab removes that tab and frees its number. Each question is answered independently from the current conversation without changing its history. This requires an API connection or ChatGPT linked through TeamSwarm; side chats do not read files, run commands or use tools.
+
+Click the **TeamSwarm** button at the bottom of the left sidebar to open **Settings**, **Language**, **Team configuration**, the changelog and help. In Settings, use the navigation or search to find appearance, model and team settings, device resources and the send key.
+
 Settings → General → Context window offers Automatic, 128K, 256K, 512K and 1M. The selection applies to new Host and member turns in this workspace. The runtime limits the requested window by available model metadata and reserves space for compaction. The context ring shows the usable budget and the latest request's token count. When a previous turn used a different window, its figures and the next turn's budget are shown separately.
 
 ## Device resources and queued tasks
@@ -116,7 +122,7 @@ On Windows, Job Objects tie owned executors and their children to the service. O
 <a id="harnesses-and-models"></a>
 ## Harnesses and models
 
-Select the **Host model** in the composer or in **Host models** under advanced settings. Supported API connections and direct ChatGPT authorization run the Host inside the local service, without a separate CLI process. Models that require a CLI login still use the corresponding official harness. Background coordination has its own session, so review and dispatch updates enter the conversation as relevant facts and evidence rather than the full background transcript. An optional read-only probe can use a separate model and returns a finding with file references.
+In the composer or in **Host models** under advanced settings, choose a provider, then a model. You can also search across providers. In global **Models and connections**, clear **Enable** and save to remove that connection’s models from the picker. Supported API connections and direct ChatGPT authorization run the Host inside the local service, without a separate CLI process. Models that require a CLI login still use the corresponding official harness. Background coordination has its own session, so review and dispatch updates enter the conversation as relevant facts and evidence rather than the full background transcript. An optional read-only probe can use a separate model and returns a finding with file references.
 
 Workers still choose their harness and model independently. A harness runs the tools and execution loop; a Worker resource combines it with a model connection, permissions and supported reasoning settings.
 

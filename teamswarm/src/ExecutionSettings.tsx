@@ -179,15 +179,12 @@ function ExecutionSettingsContent(props: ExecutionSettingsProps) {
       }}
     />
   ) : (
-    <CapabilitySettings
-      {...props}
-      initialTab={configurationTab}
-      onAdvanced={() => setManual(true)}
-    />
+    <CapabilitySettings {...props} initialTab={configurationTab} />
   );
 }
-function ManualExecutionSettings({
+export function ManualExecutionSettings({
   open,
+  embedded = false,
   onClose,
   teamId,
   workspace,
@@ -198,6 +195,7 @@ function ManualExecutionSettings({
   teamId: string;
   workspace: Workspace;
   onConfigureModels: () => void;
+  embedded?: boolean;
 }) {
   const { t } = useI18n();
   const tabId = useId();
@@ -232,13 +230,8 @@ function ManualExecutionSettings({
       setError("");
     }
   }, [open, teamId]);
-  return (
-    <Modal
-      open={open}
-      onOpenChange={(value) => !value && onClose()}
-      title={t("Advanced settings")}
-      className="execution-modal"
-    >
+  const body = (
+    <>
       <div
         className="modal-tabs execution-modal-tabs"
         role="tablist"
@@ -443,6 +436,20 @@ function ManualExecutionSettings({
           )}
         </div>
       )}
+    </>
+  );
+  if (embedded)
+    return (
+      <section className="execution-modal embedded-settings">{body}</section>
+    );
+  return (
+    <Modal
+      open={open}
+      onOpenChange={(value) => !value && onClose()}
+      title={t("Advanced settings")}
+      className="execution-modal"
+    >
+      {body}
     </Modal>
   );
 }

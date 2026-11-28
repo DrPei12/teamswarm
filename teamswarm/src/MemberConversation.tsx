@@ -1001,6 +1001,9 @@ function ConversationThread({
                 if (
                   e.key === "Enter" &&
                   !e.shiftKey &&
+                  (workspace.sendKey !== "mod-enter" ||
+                    e.ctrlKey ||
+                    e.metaKey) &&
                   !isComposing(e.nativeEvent)
                 ) {
                   e.preventDefault();

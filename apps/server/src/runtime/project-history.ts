@@ -844,15 +844,15 @@ export class ProjectHistory {
     }
     run.contextNodeId = branch.headNodeId;
   }
-  forkConversation(teamId: string, parentId: string, name: string, messageId?: string, before = false) {
+  forkConversation(teamId: string, parentId: string, name: string, messageId?: string) {
     const parent = this.forConversation(teamId, parentId);
     const cutoff = messageId ? this.store.db.prepare(
       `SELECT *, rowid AS seq FROM messages WHERE id=? AND conversation_id=? AND ${conversationMessageSql}`,
     ).get(messageId, parentId) : undefined;
-    if (messageId && (!cutoff || cutoff.role !== (before ? "user" : "assistant"))) throw notFound();
-    const sourceRun = cutoff && before ? this.store.list<Run>("runs", teamId).find(run =>
+    if (messageId && (!cutoff || !["user", "assistant"].includes(String(cutoff.role)))) throw notFound();
+    const sourceRun = cutoff?.role === "user" ? this.store.list<Run>("runs", teamId).find(run =>
       run.conversationId === parentId && run.sourceMessageId === messageId) : undefined;
-    const attempt = cutoff && !before ? this.store.list<Attempt>("attempts", teamId)
+    const attempt = cutoff?.role === "assistant" ? this.store.list<Attempt>("attempts", teamId)
       .find(a => cutoff.client_request_id === "runtime:" + a.id) : undefined;
     let base = this.node(teamId, attempt?.contextNodeId ?? sourceRun?.contextNodeId ?? parent.headNodeId);
     // Imported messages do not carry an Attempt. Walk the parent lineage to the
@@ -877,7 +877,7 @@ export class ProjectHistory {
     this.store.db.prepare("INSERT INTO project_conversations VALUES(?,?,?)").run(conversation.id, teamId, branchId);
     const history = this.store.db.prepare(`
         SELECT * FROM messages WHERE conversation_id=? AND ${conversationMessageSql}
-        ${cutoff ? `AND (created_at < ? OR (created_at=? AND rowid ${before ? "<" : "<="} ?))` : ""}
+        ${cutoff ? `AND (created_at < ? OR (created_at=? AND rowid <= ?))` : ""}
         ORDER BY created_at,rowid`).all(parentId, ...(cutoff ? [String(cutoff.created_at), String(cutoff.created_at), Number(cutoff.seq)] : []));
     const add = this.store.db.prepare(
       "INSERT INTO messages(id,conversation_id,role,content,created_at,delivery) VALUES(?,?,?,?,?,?)",

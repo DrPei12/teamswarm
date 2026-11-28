@@ -9,7 +9,6 @@ import {
   Layers,
   LoaderCircle,
   Plus,
-  SlidersHorizontal,
   X,
 } from "lucide-react";
 import type {
@@ -45,7 +44,7 @@ const protocolNames = {
   "anthropic-messages": "Anthropic Messages",
 };
 type Installation = { installed: boolean; version: string | null };
-const capabilityTabs = [
+export const capabilityTabs = [
   ["harnesses", "Harness"],
   ["connections", "Models and connections"],
   ["mcp", "MCP tools"],
@@ -59,17 +58,19 @@ export function CapabilitySettings({
   onClose,
   teamId,
   workspace,
-  onAdvanced,
   initialTab = "harnesses",
   scope = "global",
+  embedded = false,
+  activeTab,
 }: {
   open: boolean;
   onClose: () => void;
   teamId: string;
   workspace: Workspace;
-  onAdvanced: () => void;
   initialTab?: Tab;
   scope?: "global" | "team";
+  embedded?: boolean;
+  activeTab?: Tab;
 }) {
   const { t } = useI18n();
   const teamScope = scope === "team";
@@ -81,7 +82,7 @@ export function CapabilitySettings({
   const harnesses = useHarnessCatalog((error) => setError(error.message));
   const [draft, setDraft] = useState<TeamCapabilities | null>(null),
     [saved, setSaved] = useState("");
-  const [tab, setTab] = useState<Tab>("harnesses"),
+  const [localTab, setTab] = useState<Tab>(initialTab),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const [editor, setEditor] = useState<ModelAccess | "new" | null>(null),
@@ -130,6 +131,7 @@ export function CapabilitySettings({
       live = false;
     };
   }, [open, revision, harnesses]);
+  const tab = activeTab ?? localTab;
   const separateCatalog = tab === "mcp" || tab === "skills";
   const dirty = !!draft && JSON.stringify(draft) !== saved;
   async function save() {
@@ -138,7 +140,15 @@ export function CapabilitySettings({
     setError("");
     setNotice("");
     try {
-      const { version, globalVersion, inheritsDefaults, ...body } = draft;
+      const {
+        version,
+        globalVersion,
+        inheritsDefaults,
+        enabledHarnesses,
+        connections,
+        preferences,
+      } = draft;
+      const body = { enabledHarnesses, connections, preferences };
       const next = await api<TeamCapabilities>(
         teamScope
           ? `/teams/${encodeURIComponent(teamId)}/capability-overrides`
@@ -174,19 +184,9 @@ export function CapabilitySettings({
         : [...draft.enabledHarnesses, id],
     });
   }
-  const current = workspace.executions?.[teamId]?.settings?.config;
-  return (
-    <Modal
-      open={open}
-      onOpenChange={(v) => !v && !busy && onClose()}
-      title={
-        teamScope
-          ? t("Team capabilities for {name}", { name: teamName })
-          : t("Global capabilities")
-      }
-      className="capability-modal"
-    >
-      {!editor && (
+  const body = (
+    <>
+      {!editor && !embedded && (
         <div
           className="cap-tabs"
           inert={busy}
@@ -252,21 +252,6 @@ export function CapabilitySettings({
         />
       ) : (
         <>
-          {teamScope && !separateCatalog && (
-            <label className="cap-preference-toggle cap-inherit">
-              <span>
-                <strong>{t("Inherit global defaults")}</strong>
-              </span>
-              <input
-                type="checkbox"
-                checked={draft.inheritsDefaults ?? true}
-                disabled={busy}
-                onChange={(event) =>
-                  setDraft({ ...draft, inheritsDefaults: event.target.checked })
-                }
-              />
-            </label>
-          )}
           <div
             className="cap-body"
             inert={
@@ -275,9 +260,9 @@ export function CapabilitySettings({
                 teamScope &&
                 (draft.inheritsDefaults ?? true))
             }
-            role="tabpanel"
-            id={`cap-panel-${tab}`}
-            aria-labelledby={`cap-tab-${tab}`}
+            role={embedded ? undefined : "tabpanel"}
+            id={embedded ? undefined : `cap-panel-${tab}`}
+            aria-labelledby={embedded ? undefined : `cap-tab-${tab}`}
           >
             {tab === "skills" && (
               <GlobalSkillSettings
@@ -416,10 +401,20 @@ export function CapabilitySettings({
                         </div>
                       )}
                       <div className="cap-connection-footer">
-                        <label className="cap-enable">
+                        <label
+                          className="cap-enable"
+                          title={
+                            draft.globallyDisabledConnectionIds?.includes(c.id)
+                              ? t("Disabled in global settings")
+                              : undefined
+                          }
+                        >
                           <input
                             type="checkbox"
                             checked={c.enabled}
+                            disabled={draft.globallyDisabledConnectionIds?.includes(
+                              c.id,
+                            )}
                             onChange={() =>
                               setDraft({
                                 ...draft,
@@ -431,11 +426,7 @@ export function CapabilitySettings({
                               })
                             }
                           />
-                          {t(
-                            teamScope
-                              ? "Allow team to use"
-                              : "Enable by default",
-                          )}
+                          {t(teamScope ? "Allow team to use" : "Enable")}
                         </label>
                       </div>
                     </article>
@@ -593,7 +584,9 @@ export function CapabilitySettings({
                   />
                 </label>
                 <label className="cap-freeform">
-                  <span>{t("Anything else Host should consider?")}</span>
+                  <span>
+                    {t("Anything else Host should consider?")} (Agent.md)
+                  </span>
                   <textarea
                     maxLength={3000}
                     rows={3}
@@ -612,38 +605,24 @@ export function CapabilitySettings({
                     )}
                   />
                 </label>
-                {teamScope && (
-                  <div className="cap-current">
-                    <SlidersHorizontal size={17} />
-                    <div>
-                      <strong>{t("Host starting configuration")}</strong>
-                      <p>
-                        {harnesses.find((h) => h.id === current?.harness)
-                          ?.name ?? current?.harness}{" "}
-                        {current?.model && ` · ${current.model}`}
-                      </p>
-                    </div>
-                    <button
-                      className="text-button"
-                      disabled={dirty}
-                      title={
-                        dirty
-                          ? t(
-                              "Save your changes before opening advanced settings.",
-                            )
-                          : undefined
-                      }
-                      onClick={onAdvanced}
-                    >
-                      {t("Advanced settings")} →
-                    </button>
-                  </div>
-                )}
               </>
             )}
           </div>
           {!separateCatalog && (
             <footer className="cap-footer">
+              {teamScope && (
+                <label className="cap-inherit">
+                  <input
+                    type="checkbox"
+                    checked={draft.inheritsDefaults ?? true}
+                    disabled={busy}
+                    onChange={(e) =>
+                      setDraft({ ...draft, inheritsDefaults: e.target.checked })
+                    }
+                  />
+                  {t("Inherit global defaults")}
+                </label>
+              )}
               <div aria-live="polite">
                 {error ? (
                   <span className="form-error">{t(error)}</span>
@@ -668,6 +647,24 @@ export function CapabilitySettings({
           )}
         </>
       )}
+    </>
+  );
+  if (embedded)
+    return (
+      <section className="capability-modal embedded-settings">{body}</section>
+    );
+  return (
+    <Modal
+      open={open}
+      onOpenChange={(v) => !v && !busy && onClose()}
+      title={
+        teamScope
+          ? t("Team capabilities for {name}", { name: teamName })
+          : t("Global capabilities")
+      }
+      className="capability-modal"
+    >
+      {body}
     </Modal>
   );
 }

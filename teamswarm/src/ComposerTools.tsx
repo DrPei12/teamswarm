@@ -545,7 +545,8 @@ export const ComposerInput = forwardRef<
   const choices = candidates.filter((c) =>
     `${c.label} ${c.detail}`.toLowerCase().includes(query),
   );
-  const open = !!fragment && !dismissed;
+  const open =
+    !!fragment && !dismissed && !/^\/btw(?:\s|$)/i.test(value.trimStart());
   const choiceKey = (choice: Choice) => `${choice.kind}:${choice.id}`;
   const selectedIndex = choices.findIndex(
     (choice) => choiceKey(choice) === selected,
@@ -720,7 +721,11 @@ export const ComposerInput = forwardRef<
               return;
             }
           }
-          if (e.key === "Enter" && !e.shiftKey) {
+          if (
+            e.key === "Enter" &&
+            !e.shiftKey &&
+            (workspace.sendKey !== "mod-enter" || e.ctrlKey || e.metaKey)
+          ) {
             e.preventDefault();
             onSend();
           }

@@ -23,11 +23,13 @@ export function ProjectRecords({
   onClose,
   onNavigate,
   onNavigateMember,
+  onDelivery,
 }: {
   workspace: Workspace;
   teamId: string;
   chat?: Chat;
   source?: Message;
+  onDelivery?: (id: string) => void;
   onClose: () => void;
   onNavigate: (chatId: string, messageId: string) => void;
   onNavigateMember: (
@@ -54,6 +56,10 @@ export function ProjectRecords({
   const insights = (workspace.insights ?? []).filter(
     (n) => n.teamId === teamId && n.branchId === branchId,
   );
+  const belongs = (entry: Workspace["deliveries"][number]) =>
+    entry.teamId === teamId && (!entry.branchId || entry.branchId === branchId);
+  const deliveries = workspace.deliveries.filter(belongs);
+  const progress = (workspace.updates ?? []).filter(belongs);
   const inputSource =
     source ??
     [...(chat?.messages ?? [])].reverse().find((m) => !m.pending && m.recordId);
@@ -128,6 +134,46 @@ export function ProjectRecords({
             </p>
             {!outputs.length && (
               <p>{t("Completed work will publish its files here.")}</p>
+            )}
+            {onDelivery && deliveries.length > 0 && (
+              <section aria-label={t("Deliveries")}>
+                <h3>{t("Deliveries")}</h3>
+                {deliveries.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className="delivery-row"
+                    onClick={() => onDelivery(item.id)}
+                  >
+                    <span>
+                      <strong>{item.title}</strong>
+                      {item.summary && item.summary !== item.title && (
+                        <small>{item.summary}</small>
+                      )}
+                    </span>
+                  </button>
+                ))}
+              </section>
+            )}
+            {onDelivery && progress.length > 0 && (
+              <details>
+                <summary>{t("Progress history")}</summary>
+                {progress.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className="delivery-row"
+                    onClick={() => onDelivery(item.id)}
+                  >
+                    <span>
+                      <strong>{item.title}</strong>
+                      {item.summary && item.summary !== item.title && (
+                        <small>{item.summary}</small>
+                      )}
+                    </span>
+                  </button>
+                ))}
+              </details>
             )}
             {outputs.map((output) => (
               <OutputRecord key={output.path} output={output} teamId={teamId} />

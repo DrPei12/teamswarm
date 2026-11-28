@@ -1,5 +1,11 @@
 import { RunningServices, useRunningServices } from "./RunningServices";
 import { WorkspaceSettings } from "./WorkspaceSettings";
+import { ApplicationMenu } from "./ApplicationMenu";
+import { SideQuestion } from "./SideQuestion";
+import {
+  ConversationRevisionHistory,
+  MessageEditor,
+} from "./ConversationRevision";
 import { useAppearance } from "./appearance";
 import { NewMemberDialog } from "./NewMemberDialog";
 import { ApprovalRequests } from "./ApprovalRequests";
@@ -29,14 +35,13 @@ import {
   PanelLeft,
   PanelRight,
   X,
-  Star,
   MoreHorizontal,
   Pencil,
+  RotateCcw,
   ArrowUpRight,
   ArrowDown,
   Hash,
   Search,
-  Keyboard,
   AlertCircle,
   LoaderCircle,
   GitBranch,
@@ -91,13 +96,20 @@ import {
   type Draft,
   type Chat,
   type Attachment,
-  type DefinitionKind,
   type Message,
   type Team,
 } from "./store";
 
 type Screen =
-  "settings" | "skill" | "shortcuts" | "search" | "member" | "plugins" | null;
+  | "settings"
+  | "skill"
+  | "shortcuts"
+  | "search"
+  | "member"
+  | "plugins"
+  | "about"
+  | "changelog"
+  | null;
 type Route = {
   teamId: string;
   chatId?: string;
@@ -158,6 +170,11 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     location.hash = `/team/${next.teamId}${target}`;
   };
   const [screen, setScreen] = useState<Screen>(null);
+  const [settingsPage, setSettingsPage] = useState("general");
+  const openSettings = (page = "general") => {
+    setSettingsPage(page);
+    setScreen("settings");
+  };
   const appearance = useAppearance();
   const [executionSettings, setExecutionSettings] = useState(false);
   const [settingsTeamId, setSettingsTeamId] = useState<string | null>(null);
@@ -201,15 +218,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   const servicesShown = useRef<string | null>(null);
   const [filesOpen, setFilesOpen] = useState(false);
   const [filesMounted, setFilesMounted] = useState(false);
-  const [insightSource, setInsightSource] = useState<Message>();
-  const [definitionSource, setDefinitionSource] = useState<Message | null>(
-    null,
-  );
-  const [definitionKind, setDefinitionKind] =
-    useState<DefinitionKind>("requirement");
   const [deliveryId, setDeliveryId] = useState<string | null>(null);
-  const [deliveryOpen, setDeliveryOpen] = useState(false);
-  const [progressHistoryOpen, setProgressHistoryOpen] = useState(false);
   const [updatesOpen, setUpdatesOpen] = useState(false);
   const [viewingDelivery, setViewingDelivery] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -217,8 +226,13 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   const [historyLoadError, setHistoryLoadError] = useState("");
   const [hostMenu, setHostMenu] = useState<string | null>(null);
   const [sideOpen, setSideOpen] = useState(false);
-  const [sideChatId, setSideChatId] = useState<string>();
-  const [sideDrafts, setSideDrafts] = useState<Record<string, string>>({});
+  const [sideInitial, setSideInitial] = useState<{ text: string } | null>(null);
+  const [rewind, setRewind] = useState<{
+    message: Message;
+    head: string;
+    request: string;
+  } | null>(null);
+  const [revisionHistory, setRevisionHistory] = useState(false);
   const [folderDialog, setFolderDialog] = useState(false);
   const [workspaceFolder, setWorkspaceFolder] = useState("");
   const [removeChat, setRemoveChat] = useState<Chat | null>(null);
@@ -226,6 +240,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     message: Message;
     text: string;
     request: string;
+    head: string;
   } | null>(null);
   const [rename, setRename] = useState<Chat | null>(null);
   const [teamMenu, setTeamMenu] = useState<string | null>(null);
@@ -311,11 +326,11 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   const chat = workspace.chats.find(
     (c) => c.id === route.chatId && c.teamId === team.id && !c.archived,
   );
-  const sideRoot = chat?.kind === "side" ? chat.parent?.chatId : chat?.id;
-  const sideChats = workspace.chats.filter(
-    (c) => c.kind === "side" && !c.archived && c.parent?.chatId === sideRoot,
-  );
-  const sideChat = sideChats.find((c) => c.id === sideChatId);
+  const closeSideQuestion = () => {
+    setSideOpen(false);
+    setSideInitial(null);
+    requestAnimationFrame(() => editor.current?.focus());
+  };
   const pendingUpdates = teamUpdates.filter(
     (d) =>
       d.chatId === chat?.id &&
@@ -420,39 +435,62 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
       setFolderDialog(true);
     }
   };
-  const forkChat = async (
-    parent: Chat,
-    kind: "branch" | "side" | "edit",
-    message?: Message,
-    text?: string,
-    request: string = crypto.randomUUID(),
-  ) => {
-    if (busy) return;
+  const forkChat = async (parent: Chat, message?: Message) => {
+    if (busy || (message && !message.recordId)) return;
     setBusy(true);
     try {
-      const title = (
-        text?.trim() ||
-        message?.text.trim() ||
-        (kind === "side" ? tr("Side chat") : tr("New branch chat"))
-      ).slice(0, 80);
       const created = await product.command<{ id: string; teamId: string }>(
         `/product/conversations/${encodeURIComponent(parent.id)}/fork`,
         {
           teamId: parent.teamId,
-          kind,
-          title,
-          clientRequestId: request,
+          kind: "branch",
+          title: (message?.text.trim() || tr("New branch chat")).slice(0, 80),
+          clientRequestId: crypto.randomUUID(),
           messageId: message?.recordId,
-          content: text,
+        },
+      );
+      setHostBranches((old) => ({ ...old, [parent.teamId]: true }));
+      navigate({ teamId: created.teamId, chatId: created.id });
+    } catch (error) {
+      setNotice((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const revise = async (
+    parent: Chat,
+    message: Message,
+    mode: "edit" | "rewind",
+    expectedHead: string,
+    request: string,
+    content?: string,
+  ) => {
+    if (busy || !message.recordId) return;
+    setBusy(true);
+    try {
+      const result = await product.command<{ draft?: string }>(
+        `/product/conversations/${encodeURIComponent(parent.id)}/revisions`,
+        {
+          teamId: parent.teamId,
+          anchor: message.recordId,
+          expectedHead,
+          mode,
+          clientRequestId: request,
+          content,
         },
       );
       setEditing(null);
-      if (kind === "side") {
-        setSideChatId(created.id);
-        setSideOpen(true);
-      } else {
-        setHostBranches((old) => ({ ...old, [parent.teamId]: true }));
-        navigate({ teamId: created.teamId, chatId: created.id });
+      setRewind(null);
+      if (result.draft !== undefined && parseRoute().chatId === parent.id) {
+        updateDraft(
+          {
+            text: result.draft,
+            files: message.files,
+            references: message.references,
+          },
+          parent.id,
+        );
+        requestAnimationFrame(() => editor.current?.focus());
       }
     } catch (error) {
       setNotice((error as Error).message);
@@ -487,6 +525,10 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
       return;
     routeTo(next);
     setEditing(null);
+    setRewind(null);
+    setRevisionHistory(false);
+    setSideOpen(false);
+    setSideInitial(null);
     setSidebar(false);
     setHistory(false);
     setScreen(null);
@@ -518,7 +560,9 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
   }, []);
   useEffect(() => {
     if (sidebar && narrow)
-      document.querySelector<HTMLButtonElement>(".workspace-switch")?.focus();
+      document
+        .querySelector<HTMLButtonElement>(".sidebar .new-conversation")
+        ?.focus();
   }, [sidebar, narrow]);
   useEffect(() => {
     if (screen === "search")
@@ -633,6 +677,26 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
     return () => window.removeEventListener("keydown", onKey);
   });
   const send = async () => {
+    const sideCommand = /^\/btw(?:\s+([\s\S]*))?$/i.exec(draft.text.trim());
+    if (sideCommand) {
+      if (!chat) {
+        setNotice(tr("Open a conversation before asking a side question."));
+        return;
+      }
+      if (draft.files.length) {
+        setNotice(tr("Side questions do not accept attachments."));
+        return;
+      }
+      if (sideCommand[1] && sideCommand[1].length > 4000) {
+        setNotice(tr("Keep side questions under 4,000 characters."));
+        return;
+      }
+      setFilesOpen(false);
+      setSideInitial({ text: sideCommand[1] ?? "" });
+      setSideOpen(true);
+      updateDraft({ text: "" });
+      return;
+    }
     if (sendLock.current || busy || (!draft.text.trim() && !draft.files.length))
       return;
     sendLock.current = true;
@@ -709,7 +773,6 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           }),
         );
       } else setDeliveryId(id);
-      setDeliveryOpen(false);
     } catch (error) {
       setNotice((error as Error).message);
     } finally {
@@ -855,44 +918,12 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           }}
         >
           <div className="workspace-bar">
-            <Menu
-              trigger={
-                <button
-                  className="workspace-switch"
-                  aria-label={tr("Workspace menu")}
-                >
-                  <span className="avatar">
-                    <SwarmMark />
-                  </span>
-                  <span>{workspace.name}</span>
-                  <ChevronDown size={12 * ICON_SCALE} />
-                </button>
-              }
-            >
-              <div className="menu-heading">{workspace.name}</div>
-              <MenuItem
-                icon={<Settings2 size={15 * ICON_SCALE} />}
-                onSelect={() => {
-                  setExecutionTab("connections");
-                  setExecutionSettings(true);
-                }}
-              >
-                {tr("Global capabilities")}
-              </MenuItem>
-              <MenuItem
-                icon={<Settings2 size={15 * ICON_SCALE} />}
-                onSelect={() => setScreen("settings")}
-              >
-                {tr("Settings")}
-              </MenuItem>
-              <Separator />
-              <MenuItem
-                icon={<Keyboard size={15 * ICON_SCALE} />}
-                onSelect={() => setScreen("shortcuts")}
-              >
-                {tr("Keyboard shortcuts")}
-              </MenuItem>
-            </Menu>
+            <div className="workspace-switch workspace-label">
+              <span className="avatar">
+                <SwarmMark />
+              </span>
+              <span>{workspace.name}</span>
+            </div>
           </div>
           <div className="sidebar-primary">
             <button
@@ -1099,8 +1130,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                                       const parent = workspace.chats.find(
                                         (c) => c.id === t.mainChatId,
                                       );
-                                      if (parent)
-                                        void forkChat(parent, "branch");
+                                      if (parent) void forkChat(parent);
                                     }}
                                   >
                                     {tr("New branch chat")}
@@ -1249,6 +1279,17 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
               </section>
             )}
           </nav>
+          <div className="sidebar-bottom">
+            <ApplicationMenu
+              language={workspace.language}
+              settings={() => openSettings()}
+              team={() => openSettings("team:harnesses")}
+              changelog={() => setScreen("changelog")}
+              about={() => setScreen("about")}
+              shortcuts={() => setScreen("shortcuts")}
+              onError={setNotice}
+            />
+          </div>
           {!narrow && !navCollapsed && (
             <div
               className="detail-resize-handle navigation-resize-handle"
@@ -1259,31 +1300,6 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
               {...navigationResize.handle}
             />
           )}
-          <div className="sidebar-bottom">
-            <SwarmMark />
-            <span>TeamSwarm</span>
-            <Menu
-              side="top"
-              trigger={
-                <IconButton label={tr("Help")} className="help-button">
-                  <Icon name="help" />
-                </IconButton>
-              }
-            >
-              <MenuItem
-                icon={<Keyboard size={15 * ICON_SCALE} />}
-                onSelect={() => setScreen("shortcuts")}
-              >
-                {tr("Keyboard shortcuts")}
-              </MenuItem>
-              <MenuItem
-                icon={<Settings2 size={15 * ICON_SCALE} />}
-                onSelect={() => setScreen("settings")}
-              >
-                {tr("Settings")}
-              </MenuItem>
-            </Menu>
-          </div>
         </aside>
         {sidebar && (
           <button
@@ -1380,152 +1396,16 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 >
                   <Settings2 size={15 * ICON_SCALE} />
                 </button>
-                <div className="delivery-area">
-                  <IconButton
-                    label={tr("Results and reasoning")}
-                    onClick={() => {
-                      setInsightSource(undefined);
-                      setRecordsOpen(true);
-                    }}
+                {view === "history" && !team.independent && (
+                  <button
+                    className="text-button"
+                    onClick={() => setRecordsOpen(true)}
                   >
-                    <BookmarkPlus size={16 * ICON_SCALE} />
-                  </IconButton>
-                  <Popover.Root
-                    open={deliveryOpen}
-                    onOpenChange={setDeliveryOpen}
-                  >
-                    <Popover.Trigger asChild>
-                      <button
-                        className="delivery-trigger"
-                        aria-label={tr("Deliveries")}
-                      >
-                        <Package size={16 * ICON_SCALE} />
-                        {teamDeliveries.some((d) => !d.read) && (
-                          <span className="unread-dot" />
-                        )}
-                      </button>
-                    </Popover.Trigger>
-                    <Popover.Portal>
-                      <Popover.Content
-                        className="deliveries-popover"
-                        align="end"
-                        sideOffset={10}
-                        aria-label={tr("Deliveries")}
-                      >
-                        <div className="popover-heading">
-                          {tr("Deliveries")}
-                          <span>{teamDeliveries.length}</span>
-                        </div>
-                        {teamDeliveries.length ? (
-                          teamDeliveries.map((d) => (
-                            <button
-                              className="delivery-row"
-                              aria-label={d.title}
-                              key={d.id}
-                              disabled={viewingDelivery}
-                              onClick={() => openDelivery(d.id)}
-                            >
-                              <span
-                                className={`delivery-read ${!d.read ? "unread" : ""}`}
-                              />
-                              <span>
-                                <strong>{d.title}</strong>
-                                <time
-                                  dateTime={new Date(d.createdAt).toISOString()}
-                                >
-                                  {new Date(d.createdAt).toLocaleString(
-                                    locale,
-                                    {
-                                      month: "short",
-                                      day: "numeric",
-                                      hour: "2-digit",
-                                      minute: "2-digit",
-                                    },
-                                  )}
-                                </time>
-                                <small>{d.summary}</small>
-                                {d.version > 1 && (
-                                  <small>
-                                    {tr("Version")} {d.version}
-                                  </small>
-                                )}
-                              </span>
-                              <ArrowUpRight size={13 * ICON_SCALE} />
-                            </button>
-                          ))
-                        ) : (
-                          <div className="menu-empty">
-                            {tr("No deliveries yet")}
-                          </div>
-                        )}
-                        {!!teamUpdates.length && (
-                          <>
-                            <button
-                              className="progress-history-toggle"
-                              aria-expanded={progressHistoryOpen}
-                              onClick={() =>
-                                setProgressHistoryOpen((value) => !value)
-                              }
-                            >
-                              {tr("Progress history")} · {teamUpdates.length}
-                              <ChevronDown size={14} />
-                            </button>
-                            <Disclosure open={progressHistoryOpen}>
-                              {[...teamUpdates].reverse().map((d) => (
-                                <button
-                                  className="delivery-row"
-                                  key={d.id}
-                                  onClick={() => {
-                                    setDeliveryId(d.id);
-                                    setDeliveryOpen(false);
-                                  }}
-                                >
-                                  <span>
-                                    <strong>{d.title}</strong>
-                                    <small>
-                                      {d.hostDelivery?.superseded
-                                        ? tr("Later result available")
-                                        : d.hostDelivery?.stale
-                                          ? tr("Earlier context")
-                                          : d.hostDelivery?.status === "pending"
-                                            ? tr("Not yet viewed")
-                                            : tr("Viewed")}
-                                    </small>
-                                  </span>
-                                  <ArrowUpRight size={13} />
-                                </button>
-                              ))}
-                            </Disclosure>
-                          </>
-                        )}
-                      </Popover.Content>
-                    </Popover.Portal>
-                  </Popover.Root>
-                </div>
+                    {tr("Project records")}
+                  </button>
+                )}
                 {chat && view === "host" && (
                   <div className="topbar-actions">
-                    <IconButton
-                      label={
-                        chat.starred
-                          ? tr("Remove from favorites")
-                          : tr("Add to favorites")
-                      }
-                      onClick={() =>
-                        update((old) => ({
-                          ...old,
-                          chats: old.chats.map((c) =>
-                            c.id === chat.id
-                              ? { ...c, starred: !c.starred }
-                              : c,
-                          ),
-                        }))
-                      }
-                    >
-                      <Star
-                        size={15 * ICON_SCALE}
-                        fill={chat.starred ? "currentColor" : "none"}
-                      />
-                    </IconButton>
                     <Menu
                       align="end"
                       trigger={
@@ -1540,6 +1420,11 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                       >
                         {tr("Rename")}
                       </MenuItem>
+                      {chat.hasRevisions && (
+                        <MenuItem onSelect={() => setRevisionHistory(true)}>
+                          {tr("Earlier conversation versions")}
+                        </MenuItem>
+                      )}
                       <Separator />
                       <MenuItem
                         icon={<Archive size={14 * ICON_SCALE} />}
@@ -1589,13 +1474,18 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                     )}
                   </IconButton>
                 )}
-                {chat && !team.independent && view === "host" && (
+                {chat && view === "host" && (
                   <IconButton
-                    label={tr("Side chats")}
+                    label={tr("Side question")}
                     aria-expanded={sideOpen}
                     onClick={() => {
+                      if (sideOpen) {
+                        closeSideQuestion();
+                        return;
+                      }
                       setFilesOpen(false);
-                      setSideOpen((value) => !value);
+                      setSideInitial(null);
+                      setSideOpen(true);
                     }}
                   >
                     <MessageSquare size={16} />
@@ -1853,18 +1743,19 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                                   {images.map((file) => fileButton(file))}
                                 </div>
                               )}
-                              {(m.text.trim() ||
-                                m.pending ||
-                                (!m.files.length && !m.execution)) && (
-                                <MessageContent
-                                  text={m.text}
-                                  pending={m.pending}
-                                  artifacts={(m.artifacts ?? []).map((a) => ({
-                                    ...a,
-                                    teamId: team.id,
-                                  }))}
-                                />
-                              )}
+                              {editing?.message.id !== m.id &&
+                                (m.text.trim() ||
+                                  m.pending ||
+                                  (!m.files.length && !m.execution)) && (
+                                  <MessageContent
+                                    text={m.text}
+                                    pending={m.pending}
+                                    artifacts={(m.artifacts ?? []).map((a) => ({
+                                      ...a,
+                                      teamId: team.id,
+                                    }))}
+                                  />
+                                )}
                               {workspace.definitions
                                 .filter(
                                   (d) =>
@@ -1893,128 +1784,110 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                                   {attachments.map((f) => fileButton(f))}
                                 </div>
                               )}
-                              <footer className="host-message-actions">
-                                <IconButton
-                                  label={tr("Copy message")}
-                                  onClick={() => void copyMessage(m)}
-                                >
-                                  <Copy size={14} />
-                                </IconButton>
-                                {m.role === "user" && m.recordId && (
+                              {editing?.message.id !== m.id && (
+                                <footer className="host-message-actions">
+                                  {m.role === "user" &&
+                                    m.recordId &&
+                                    chat.historyHead && (
+                                      <>
+                                        <IconButton
+                                          label={tr("Branch to new chat")}
+                                          onClick={() => void forkChat(chat, m)}
+                                        >
+                                          <GitBranch size={14} />
+                                        </IconButton>
+                                        <IconButton
+                                          label={tr("Rewind conversation")}
+                                          onClick={() =>
+                                            setRewind({
+                                              message: m,
+                                              head: chat.historyHead!,
+                                              request: crypto.randomUUID(),
+                                            })
+                                          }
+                                        >
+                                          <RotateCcw size={14} />
+                                        </IconButton>
+                                        <IconButton
+                                          label={tr("Edit message")}
+                                          onClick={() =>
+                                            setEditing({
+                                              message: m,
+                                              text: m.text,
+                                              head: chat.historyHead!,
+                                              request: crypto.randomUUID(),
+                                            })
+                                          }
+                                        >
+                                          <Pencil size={14} />
+                                        </IconButton>
+                                      </>
+                                    )}
                                   <IconButton
-                                    label={tr("Edit message")}
-                                    onClick={() =>
-                                      setEditing({
-                                        message: m,
-                                        text: m.text,
-                                        request: crypto.randomUUID(),
-                                      })
-                                    }
+                                    label={tr("Copy message")}
+                                    onClick={() => void copyMessage(m)}
                                   >
-                                    <Pencil size={14} />
+                                    <Copy size={14} />
                                   </IconButton>
-                                )}
-                                {m.role === "host" && (
-                                  <Menu
-                                    align="end"
-                                    trigger={
-                                      <IconButton
-                                        label={tr("Message actions")}
-                                        className="message-save"
-                                      >
-                                        <MoreHorizontal
-                                          size={16 * ICON_SCALE}
-                                        />
-                                      </IconButton>
-                                    }
-                                  >
-                                    <MenuItem
-                                      icon={<GitBranch size={14} />}
-                                      disabled={!m.recordId || !!m.pending}
-                                      onSelect={() =>
-                                        void forkChat(chat, "branch", m)
+                                  {m.role === "host" && (
+                                    <Menu
+                                      align="end"
+                                      trigger={
+                                        <IconButton
+                                          label={tr("Message actions")}
+                                          className="message-save"
+                                        >
+                                          <MoreHorizontal
+                                            size={16 * ICON_SCALE}
+                                          />
+                                        </IconButton>
                                       }
                                     >
-                                      {tr("Branch to new chat")}
-                                    </MenuItem>
-                                    <Separator />
-                                    <MenuItem
-                                      onSelect={() => {
-                                        setInsightSource(m);
-                                        setRecordsOpen(true);
-                                      }}
-                                    >
-                                      {tr("Save an idea or decision")}
-                                    </MenuItem>
-                                    {Object.entries(definitionLabels).map(
-                                      ([kind, label]) => (
-                                        <MenuItem
-                                          key={kind}
-                                          onSelect={() => {
-                                            setDefinitionKind(
-                                              kind as DefinitionKind,
-                                            );
-                                            setDefinitionSource(m);
-                                          }}
-                                        >
-                                          {tr(label)}
-                                        </MenuItem>
-                                      ),
-                                    )}
-                                  </Menu>
-                                )}
-                                <time
-                                  dateTime={new Date(m.createdAt).toISOString()}
-                                >
-                                  {new Date(m.createdAt).toLocaleTimeString(
-                                    locale,
-                                    { hour: "2-digit", minute: "2-digit" },
+                                      <MenuItem
+                                        icon={<GitBranch size={14} />}
+                                        disabled={!m.recordId || !!m.pending}
+                                        onSelect={() => void forkChat(chat, m)}
+                                      >
+                                        {tr("Branch to new chat")}
+                                      </MenuItem>
+                                    </Menu>
                                   )}
-                                </time>
-                              </footer>
+                                  <time
+                                    dateTime={new Date(
+                                      m.createdAt,
+                                    ).toISOString()}
+                                  >
+                                    {new Date(m.createdAt).toLocaleTimeString(
+                                      locale,
+                                      { hour: "2-digit", minute: "2-digit" },
+                                    )}
+                                  </time>
+                                </footer>
+                              )}
                               {editing?.message.id === m.id && (
-                                <form
-                                  className="host-message-edit"
-                                  onSubmit={(event) => {
-                                    event.preventDefault();
-                                    if (editing.text.trim())
-                                      void forkChat(
-                                        chat,
-                                        "edit",
-                                        m,
-                                        editing.text.trim(),
-                                        editing.request,
-                                      );
-                                  }}
-                                >
-                                  <textarea
-                                    aria-label={tr("Edit message")}
-                                    value={editing.text}
-                                    autoFocus
-                                    onChange={(event) =>
-                                      setEditing({
-                                        ...editing,
-                                        text: event.target.value,
-                                      })
-                                    }
-                                  />
-                                  <div className="form-footer">
-                                    <button
-                                      type="button"
-                                      className="secondary-button"
-                                      onClick={() => setEditing(null)}
-                                    >
-                                      {tr("Cancel")}
-                                    </button>
-                                    <button
-                                      type="submit"
-                                      className="primary-button"
-                                      disabled={busy || !editing.text.trim()}
-                                    >
-                                      {tr("Send revised message")}
-                                    </button>
-                                  </div>
-                                </form>
+                                <MessageEditor
+                                  value={editing.text}
+                                  original={m.text}
+                                  busy={busy}
+                                  onChange={(text) =>
+                                    setEditing({
+                                      ...editing,
+                                      text,
+                                      request: crypto.randomUUID(),
+                                    })
+                                  }
+                                  onCancel={() => setEditing(null)}
+                                  onSave={() =>
+                                    void revise(
+                                      chat,
+                                      m,
+                                      "edit",
+                                      editing.head,
+                                      editing.request,
+                                      editing.text.trim(),
+                                    )
+                                  }
+                                />
                               )}
                             </article>
                           );
@@ -2423,126 +2296,15 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
                 </DetailPanel>
               )}
             </main>
-            {sideOpen && chat && !team.independent && view === "host" && (
-              <aside className="host-side-chats" aria-label={tr("Side chats")}>
-                <header>
-                  <strong>{tr("Side chats")}</strong>
-                  <IconButton
-                    label={tr("New side chat")}
-                    onClick={() => {
-                      const parent = workspace.chats.find(
-                        (c) => c.id === sideRoot,
-                      );
-                      if (parent) void forkChat(parent, "side");
-                    }}
-                  >
-                    <Plus size={16} />
-                  </IconButton>
-                  <IconButton
-                    label={tr("Close")}
-                    onClick={() => setSideOpen(false)}
-                  >
-                    <X size={16} />
-                  </IconButton>
-                </header>
-                <div className="side-chat-list">
-                  {sideChats.map((item) => (
-                    <div className="host-branch-row" key={item.id}>
-                      <button
-                        className={`nav-row ${item.id === sideChatId ? "active" : ""}`}
-                        onClick={() => setSideChatId(item.id)}
-                      >
-                        {item.title}
-                      </button>
-                      <IconButton
-                        label={tr("Delete chat")}
-                        onClick={() => setRemoveChat(item)}
-                      >
-                        <Trash2 size={14} />
-                      </IconButton>
-                    </div>
-                  ))}
-                </div>
-                {sideChat && (
-                  <>
-                    <div className="side-chat-messages" aria-live="polite">
-                      {sideChat.historyBefore && (
-                        <button
-                          className="text-button"
-                          onClick={() =>
-                            void product
-                              .loadOlder(sideChat.id)
-                              .catch((error) => setNotice(error.message))
-                          }
-                        >
-                          {tr("Load earlier messages")}
-                        </button>
-                      )}
-                      {sideChat.messages.map((message) => (
-                        <article
-                          key={message.id}
-                          className={`side-chat-message ${message.role === "user" ? "from-user" : ""}`}
-                        >
-                          {message.execution &&
-                            message.execution.status !== "submitted" && (
-                              <ExecutionReceipt execution={message.execution} />
-                            )}
-                          <MessageContent
-                            text={message.text}
-                            pending={message.pending}
-                          />
-                        </article>
-                      ))}
-                    </div>
-                    <form
-                      className="side-chat-compose"
-                      onSubmit={async (event) => {
-                        event.preventDefault();
-                        const text = sideDrafts[sideChat.id]?.trim();
-                        if (!text || busy || sendLock.current) return;
-                        sendLock.current = true;
-                        setBusy(true);
-                        try {
-                          await product.send(team.id, sideChat.id, {
-                            ...emptyDraft,
-                            text,
-                          });
-                          setSideDrafts((old) => {
-                            const next = { ...old };
-                            if (next[sideChat.id]?.trim() === text)
-                              delete next[sideChat.id];
-                            return next;
-                          });
-                        } catch (error) {
-                          setNotice((error as Error).message);
-                        } finally {
-                          sendLock.current = false;
-                          setBusy(false);
-                        }
-                      }}
-                    >
-                      <textarea
-                        aria-label={tr("Side chat")}
-                        value={sideDrafts[sideChat.id] ?? ""}
-                        onChange={(event) => {
-                          const text = event.target.value;
-                          setSideDrafts((old) => ({
-                            ...old,
-                            [sideChat.id]: text,
-                          }));
-                        }}
-                      />
-                      <button
-                        type="submit"
-                        className="primary-button"
-                        disabled={busy || !sideDrafts[sideChat.id]?.trim()}
-                      >
-                        {tr("Send message")}
-                      </button>
-                    </form>
-                  </>
-                )}
-              </aside>
+            {chat && view === "host" && (
+              <SideQuestion
+                key={chat.id}
+                teamId={team.id}
+                chatId={chat.id}
+                initial={sideInitial}
+                open={sideOpen}
+                close={closeSideQuestion}
+              />
             )}
             {filesMounted &&
               !team.independent &&
@@ -2637,13 +2399,69 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           </footer>
         </div>
       </div>
+      {chat && revisionHistory && (
+        <ConversationRevisionHistory
+          key={chat.id}
+          chat={chat}
+          close={() => setRevisionHistory(false)}
+        />
+      )}
+      {chat && rewind && (
+        <Modal
+          open
+          onOpenChange={(open) => {
+            if (!open && !busy) setRewind(null);
+          }}
+          title={tr("Rewind conversation")}
+        >
+          <div className="form-body">
+            <p>
+              {tr(
+                "Keep the conversation before this message and return the selected message to the composer. Project files and completed work stay unchanged.",
+              )}
+            </p>
+          </div>
+          <div className="form-footer">
+            <button
+              className="secondary-button"
+              disabled={busy}
+              onClick={() => setRewind(null)}
+            >
+              {tr("Cancel")}
+            </button>
+            {(draft.text.trim() || draft.files.length > 0) && (
+              <p role="status">
+                {tr("Keep or clear your current draft before rewinding.")}
+              </p>
+            )}
+            <button
+              className="primary-button"
+              disabled={busy || !!draft.text.trim() || draft.files.length > 0}
+              onClick={() =>
+                void revise(
+                  chat,
+                  rewind.message,
+                  "rewind",
+                  rewind.head,
+                  rewind.request,
+                )
+              }
+            >
+              {tr("Rewind conversation")}
+            </button>
+          </div>
+        </Modal>
+      )}
       {recordsOpen && (
         <ProjectRecords
           workspace={workspace}
           teamId={team.id}
           chat={chat ?? workspace.chats.find((c) => c.id === team.lastChatId)}
-          source={insightSource}
           onClose={() => setRecordsOpen(false)}
+          onDelivery={(id) => {
+            setRecordsOpen(false);
+            void openDelivery(id);
+          }}
           onNavigate={(chatId, messageId) => {
             setRecordsOpen(false);
             navigate({ teamId: team.id, chatId, messageId });
@@ -2660,93 +2478,6 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           }}
         />
       )}
-      <Modal
-        open={!!definitionSource}
-        onOpenChange={(open) => !open && setDefinitionSource(null)}
-        title={tr(`Save ${definitionKind}`)}
-      >
-        {definitionSource && (
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (!chat || !definitionSource || busy) return;
-              const data = new FormData(e.currentTarget),
-                title = String(data.get("title")).trim(),
-                text = String(data.get("text")).trim();
-              if (!title || !text) return;
-              const branch = workspace.projectBranches?.find(
-                (b) => b.id === chat.branchId,
-              );
-              if (!branch) return;
-              setBusy(true);
-              try {
-                await product.command(`/product/teams/${team.id}/definitions`, {
-                  clientRequestId: crypto.randomUUID(),
-                  conversationId: chat.id,
-                  messageId: definitionSource.recordId ?? definitionSource.id,
-                  definition: {
-                    expectedHeadId: branch.headNodeId,
-                    title,
-                    reason: "",
-                    documents: [
-                      {
-                        key: `note-${crypto.randomUUID()}`,
-                        kind:
-                          definitionKind === "problem"
-                            ? "understanding"
-                            : definitionKind,
-                        title,
-                        content: text,
-                        dependencies: [],
-                      },
-                    ],
-                    removeKeys: [],
-                    affectedWorkIds: [],
-                  },
-                });
-                setDefinitionSource(null);
-              } catch (error) {
-                setNotice((error as Error).message);
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            <div className="form-body">
-              <label>
-                {tr("Title")}
-                <input
-                  name="title"
-                  defaultValue={definitionSource.text.slice(0, 60)}
-                  maxLength={100}
-                  required
-                />
-              </label>
-              <label>
-                {tr("Definition")}
-                <textarea
-                  name="text"
-                  defaultValue={definitionSource.text}
-                  rows={6}
-                  required
-                />
-              </label>
-            </div>
-            <div className="form-footer">
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={() => setDefinitionSource(null)}
-              >
-                {tr("Cancel")}
-              </button>
-              <button className="primary-button">
-                {tr("Save definition")}
-              </button>
-            </div>
-          </form>
-        )}
-      </Modal>
       <ExecutionSettings
         open={executionSettings}
         initialTab={executionTab}
@@ -2865,8 +2596,43 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           </div>
         </form>
       </Modal>
+      {(screen === "about" || screen === "changelog") && (
+        <Modal
+          open
+          onOpenChange={(open) => {
+            if (!open) setScreen(null);
+          }}
+          title={tr(screen === "about" ? "About TeamSwarm" : "View changelogs")}
+        >
+          <div className="form-body">
+            <p>
+              TeamSwarm
+              {workspace.service?.version
+                ? ` ${workspace.service.version}`
+                : ""}
+            </p>
+            {workspace.service?.build && (
+              <dl>
+                <dt>{tr("Build")}</dt>
+                <dd>
+                  <code>{workspace.service.build.commit.slice(0, 12)}</code>
+                </dd>
+              </dl>
+            )}
+            <a
+              href="https://github.com/DrPei12/teamswarm/releases"
+              target="_blank"
+              rel="noreferrer"
+            >
+              {tr("Published release notes")}
+            </a>
+          </div>
+        </Modal>
+      )}
       {screen === "settings" && (
         <WorkspaceSettings
+          initialPage={settingsPage}
+          teamId={team.id}
           workspace={workspace}
           nextWindow={workspace.executions?.[team.id]?.host?.nextContextWindow}
           appearance={appearance}
