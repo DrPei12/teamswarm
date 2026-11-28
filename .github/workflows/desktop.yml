@@ -37,13 +37,15 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          build_dir=$(mktemp -d "$RUNNER_TEMP/owned-process-check.XXXXXX")
-          supervisor="$build_dir/owned-process-darwin"
-          /usr/bin/xcrun --sdk macosx clang -std=c11 -O2 -Wall -Wextra -Werror \
-            -mmacosx-version-min=11.0 -arch "$(uname -m)" \
-            apps/server/src/runtime/harness/owned-process-darwin.c -o "$supervisor"
-          "$supervisor" sample "$$" > "$build_dir/sample.json"
-          node -e 'const result = require(process.argv[1]); if (result.supervision !== "native" || !result.processes.some(process => process.pid === Number(process.argv[2]))) throw Error("macOS supervisor could not sample its own runner process");' "$build_dir/sample.json" "$$"
+          node --import tsx --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { darwinSupervisor, sampleDarwinProcesses } from './apps/server/src/runtime/harness/darwin-supervisor.ts';
+          assert(await darwinSupervisor({ required: true }));
+          const sample = await sampleDarwinProcesses(process.pid);
+          assert.equal(sample.supervision, 'native');
+          assert.equal(sample.processCoverage, 'descendants');
+          assert(sample.processes.some(row => row.pid === process.pid && row.privateBytes > 0));
+          JS
       - run: npm run check
         env:
           NODE_OPTIONS: --test-reporter=tap

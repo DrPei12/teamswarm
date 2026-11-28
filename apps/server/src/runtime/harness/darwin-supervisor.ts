@@ -58,12 +58,18 @@ async function resolveSupervisor() {
   } finally { rmSync(staging, { recursive: true, force: true }); }
 }
 
-export async function darwinSupervisor() {
+export async function darwinSupervisor({ required = false }: { required?: boolean } = {}) {
   if (process.platform !== "darwin") return;
-  // Do not let a missing development toolchain prevent startup. Packaging compiles and verifies the helper separately.
-  let binary = await (prepared ??= resolveSupervisor().catch(() => undefined));
-  if (binary && !executable(binary)) binary = await (prepared = resolveSupervisor().catch(() => undefined));
-  return binary;
+  // Source startup can degrade on machines without a toolchain. Release checks
+  // must exercise the same loader without hiding the reason native mode failed.
+  try {
+    let binary = await (prepared ??= resolveSupervisor());
+    if (binary && !executable(binary)) binary = await (prepared = resolveSupervisor());
+    if (!binary && required) throw Error("The macOS compiler path could not be resolved.");
+    return binary;
+  } catch (error) {
+    if (required) throw error;
+  }
 }
 
 const fallback = String.raw`
